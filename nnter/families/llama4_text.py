@@ -76,7 +76,14 @@ def _not_a_block_feed_forward(envoy: "Envoy") -> str | None:
 
 
 class Layer(Layer):
-    """Llama 4's decoder block; returns a bare tensor, so the base holds."""
+    """Llama 4's decoder block; returns a bare tensor, so the base holds.
+
+    `Mlp.mlp_output` is an operation in this forward, read after the block
+    has started (its attention has returned), so the forward is instrumented
+    at build.
+    """
+
+    sourced = True
 
 
 class Attention(Attention):

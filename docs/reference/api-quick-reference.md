@@ -45,7 +45,7 @@ Reads within one trace follow the forward: the pattern is produced inside block 
 |---|---|
 | `StandardizedTransformer` | The model class: a `TransformersModel` renamed to the standard vocabulary and wrapped in the family's envoys. |
 | `Layer`, `Attention`, `Mlp`, `LinearAttention` | The base envoys a family subclasses; the hosts of the standard values. |
-| `Standard` | The envoy base of the four, with `values()` and `status()`. |
+| `Standard` | The envoy base of the four, with `values()`, `status()` and the `sourced` flag. |
 | `EProperty`, `DerivedEProperty` | The descriptors a value is made of: one keyed on a path from the host, one computed. |
 | `unavailable`, `branched`, `route_delta_rule` | A value a family lacks; an op picked by the forward's own branch; the DeltaNet kernel switch. |
 | `Unavailable`, `UnsupportedFamily` | The two exceptions nnter raises itself. |
@@ -208,6 +208,7 @@ The base of the four hosts.
 |---|---|---|
 | `values` | `classmethod values() -> dict[str, EProperty]` | This class's standard values by name, base classes first. |
 | `status` | `status() -> dict[str, str \| None]` | Each value here: `None` when available on this envoy, else the reason. |
+| `sourced` | `sourced: bool = False` (class attribute) | `True` on a subclass instruments the envoy's forward when it is built and again when real weights replace meta ones, for a value in that forward read after the call has started (Llama 4's `Layer`, whose `Mlp.mlp_output` follows `attention_output`). A path declares where a value is; this flag is what makes such a read serve rather than raise `OutOfOrderError`. |
 
 ## `nnter.families`
 
@@ -229,7 +230,7 @@ A family module declares `MODEL_TYPES: tuple[str, ...]`, `RENAME: dict[str, str]
 
 | Descriptor | Signature | What |
 |---|---|---|
-| `EProperty` | `EProperty(key=None, description=None, unavailable=None, select=None)` | nnsight's `eproperty` plus availability and a path for a key. `key` is a path from the host envoy, dotted segments ending in `output`, `input` or `inputs`: `"output"` is the host's own output; a leading `../` (repeatable) steps to the parent by native name; another segment is a child module (aliases included) or, after a `source` segment, an operation; `source` drills into the current module's or operation's forward, instrumenting it for this run (`"source.attention_interface_1.source.nn_functional_softmax_0.output"`, `"../post_attention_layernorm.output"`, `"embed_tokens.output"`, `"../source.hidden_states_view_0.output"`). A function of the envoy returning such a path is allowed (`branched`, Falcon's `by_alibi`). `None` means the attribute name. `select` picks an element: with `inputs` an int is a positional argument and a str a keyword, with `output` an int indexes the returned tuple; `input` is the call's first argument. A write with `select` (or on `input`) repacks the element and writes the whole value back. `unavailable` is a reason string, or a function of the envoy returning one or `None`, checked on every read and write; `reason(obj)` returns it. `path(obj)`, `inside_forward(obj=None)` and `reads_parent_forward()` describe the key. A path is walked before every read or write; a missing op raises nnsight's `SourceNotAvailable`. |
+| `EProperty` | `EProperty(key=None, description=None, unavailable=None, select=None)` | nnsight's `eproperty` plus availability and a path for a key. `key` is a path from the host envoy, dotted segments ending in `output`, `input` or `inputs`: `"output"` is the host's own output; a leading `../` (repeatable) steps to the parent by native name; another segment is a child module (aliases included) or, after a `source` segment, an operation; `source` drills into the current module's or operation's forward, instrumenting it for this run (`"source.attention_interface_1.source.nn_functional_softmax_0.output"`, `"../post_attention_layernorm.output"`, `"embed_tokens.output"`, `"../source.hidden_states_view_0.output"`). A function of the envoy returning such a path is allowed (`branched`, Falcon's `by_alibi`). `None` means the attribute name. `select` picks an element: with `inputs` an int is a positional argument and a str a keyword, with `output` an int indexes the returned tuple; `input` is the call's first argument. A write with `select` (or on `input`) repacks the element and writes the whole value back. `unavailable` is a reason string, or a function of the envoy returning one or `None`, checked on every read and write; `reason(obj)` returns it. `path(obj)` and `inside_forward(obj=None)` describe the key. A path is walked before every read or write; a missing op raises nnsight's `SourceNotAvailable`. |
 | `DerivedEProperty` | `DerivedEProperty(compute, description=None, unavailable=None)` | `compute(envoy)` runs at read time inside the trace over any served values; read-only (assignment raises `AttributeError`). Its layout is read off `compute`'s return annotation. |
 
 Every descriptor exposes `.layout` (the layout alias the defining function's return annotation names, or `None`), `.dims` (its axis names as a tuple), `.description`, `.reason(envoy)`.

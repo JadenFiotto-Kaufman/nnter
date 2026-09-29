@@ -217,7 +217,7 @@ numbers.
   range(seq): for _ in at_occurrence(first + t): states.append(op.output)`
   and stacks on axis 1; `state_after(t)` (`:313-319`) reads one; `set_state_after`
   (`:321-331`) writes one. `at_occurrence(i)` is `Iterations()[i:i+1]`
-  (`eproperty.py:362-366`): it pins the mediator to occurrence `i` for the
+  (`eproperty.py:353-357`): it pins the mediator to occurrence `i` for the
   body and restores the previous pin after (nnsight `iterator.py:121-144`).
   The first hit relaxes the mediator (`interleaver.py:478-483`), which is why
   `_call` must have parked at the call's start before the loop begins;

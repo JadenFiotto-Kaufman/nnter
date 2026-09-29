@@ -219,8 +219,9 @@ address can read a perfectly good tensor nothing downstream uses.
 - **First `.source` access on a module must come before that module's forward runs** in a
   trace, since it rewrites the forward. A value on the module's own `source.` path read as
   the first request on its module is fine; a bare `_ = envoy.source` outside the trace
-  instruments it up front, and `Standard` does that itself for a child's `../source.`
-  value, which is read after the parent's call has begun.
+  instruments it up front, and `sourced = True` on a `Standard` subclass does that at
+  build, for a value in its forward that is read after the call has begun (Llama 4's
+  `Layer`, whose `mlp_output` follows `attention_output`).
 - **Sourcing a module costs a little on every forward afterwards**, trace or not
   (nnsight docs/usage/source.md quotes about 6% for all of GPT-2's blocks); a family
   value instruments only the modules it is read on.

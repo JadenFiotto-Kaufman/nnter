@@ -169,7 +169,7 @@ norm's output: the *family* says so with an `EProperty` keyed
 `"../post_attention_layernorm.output"` on its `Attention`
 (`families/gemma2.py:30-36`), while the *component* only knows how to walk a
 path: `../` to the parent, a name to a child, `source` into a forward
-(`components/eproperty.py:170-189`). BLOOM's contribution is the first
+(`components/eproperty.py:161-180`). BLOOM's contribution is the first
 argument of `dropout_add`: the family names the op,
 `"source.dropout_add_0.input"` (`families/bloom.py:73-78`), the component
 drills to it and reads the call's first argument. A family that keeps transformers' shared
@@ -186,12 +186,14 @@ place a size is said.
 
 ### The base envoys
 
-`Standard` (`components/standard.py:24-63`) is the `Envoy` subclass every
+`Standard` (`components/standard.py:24-64`) is the `Envoy` subclass every
 component derives from: `values()` collects the `EProperty`s of a class,
-base classes first (`:51-59`), `status()` maps each to its reason on
-this instance (`:61-63`), and `_instrument_for_children` (`:43-49`, run at
-`__init__` and `_update`) instruments the envoy's own forward when a child's
-value reads inside it (a `../source.` key, Llama 4's `mlp_output`). `Layer`
+base classes first (`:52-60`), `status()` maps each to its reason on
+this instance (`:62-64`), and `sourced` (`:40`, `False` here) is the flag a
+family sets to `True` on an envoy whose forward holds a value read after
+the call has started; `__init__` and `_update` (`:42-50`) then instrument
+that forward at build and again when real weights replace meta ones
+(Llama 4's `Layer`, for its `Mlp.mlp_output`). `Layer`
 (`components/layer.py`) adds `returns_tuple` (`:45`), `skip_with` (`:47-56`)
 and `layer_output` (`:58-77`, `first_tensor` in, `rewrap` out). `Attention`
 (`components/attention.py:63-176`) adds the contribution and the six

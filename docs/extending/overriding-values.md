@@ -117,11 +117,28 @@ class Mlp(Mlp):
 ```
 
 An operation is only served on a call whose forward was instrumented before the call
-began, and this one is read after the block has started (after its attention). `Standard`
-handles it: an envoy whose children declare a `../source.` value instruments its own
-forward when it is built and again on `_update` (when real weights replace the meta ones a
-lazy load starts from), so the family's `Layer` is an empty subclass and the path is the
-whole declaration ([../developing/eproperty-internals.md](../developing/eproperty-internals.md#standard-instrumenting-a-forward-for-a-childs-value)).
+began, and this one is read after the block has started (after its attention), when the
+drill a read performs is too late. The path does not say so; the family does, on the envoy
+that owns the forward:
+
+```python
+# nnter/families/llama4_text.py
+class Layer(Layer):
+    """Llama 4's decoder block; returns a bare tensor, so the base holds.
+
+    `Mlp.mlp_output` is an operation in this forward, read after the block
+    has started (its attention has returned), so the forward is instrumented
+    at build.
+    """
+
+    sourced = True
+```
+
+`Standard.sourced` is `False` by default; `True` makes `__init__` and `_update` touch the
+envoy's `.source`, so the block's forward is instrumented when it is built and again when
+real weights replace the meta ones a lazy load starts from. Without the flag the first
+trace that reads `attention_output` then `mlp_output` ends with an `OutOfOrderError` on
+the view ([../developing/eproperty-internals.md](../developing/eproperty-internals.md#standard-the-sourced-flag)).
 
 ## A value at an operation inside the forward
 
@@ -429,9 +446,10 @@ the root's: what the width is, and which config key says so.
   the raw `AttributeError` through (`'GPT2MLP' object has no attribute 'config'`): an
   MLP module carries no `config`, so a per-checkpoint predicate on an `Mlp` reaches it
   another way.
-- **A `../source.` path needs the parent instrumented before the trace**, and `Standard`
-  does it for its children; a parent envoy that is not a `Standard` gives that value no
-  such care.
+- **A value read after its forward has started needs that forward instrumented before
+  the trace**, and only the envoy that owns the forward can say so: `sourced = True` on
+  its class (Llama 4's `Layer`). A `../source.` path on a child declares the location and
+  nothing about instrumentation; without the flag the read is an `OutOfOrderError`.
 - **A class attribute like `SINK` is for tooling**, not availability; `status()` reports
   only descriptors.
 - **A size override goes on the module, not on a class.** `StandardizedProperty` looks

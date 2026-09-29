@@ -155,15 +155,6 @@ class EProperty(eproperty):
         key = (self.path(obj) if obj is not None else self.key) or ""
         return self.locate is not None or "source" in key.lstrip("./").split(".")
 
-    def reads_parent_forward(self) -> bool:
-        """Whether the value is an operation inside the *parent* module's forward (a ``../source.`` key).
-
-        Such a module has to be instrumented before its call begins, since the
-        read can legitimately come after it started (a block's ``mlp_output``
-        read after its ``attention_output``); `Standard` does that at build.
-        """
-        return self.locate is None and (self.key or "").startswith("../source.")
-
     def _location(self, obj: Envoy) -> str:
         return self._resolve(obj, self.path(obj))
 

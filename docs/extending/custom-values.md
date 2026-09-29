@@ -151,9 +151,11 @@ model = StandardizedTransformer("openai-community/gpt2", envoys={GPT2Attention: 
 Subclass the family's class (`gpt2.Mlp`) rather than `nnter.Mlp` so the family's own
 overrides stay; subclass `nnter.components.Standard` for a module that has no standard
 values at all (a norm, an embedding). `Standard.values()` lists the descriptors by name,
-base classes first, and `Standard.status()` their reasons. A `Standard` also instruments
-its own forward at build when a child's value reads inside it (a `../source.` key), so a
-value at an operation of the parent's forward is a path and nothing more.
+base classes first, and `Standard.status()` their reasons. `Standard.sourced` (`False`
+by default) set to `True` on a subclass instruments that envoy's forward at build, for a
+value inside it that is read after the call has started (Llama 4's `Layer`, whose
+`Mlp.mlp_output` is read after `attention_output`); a path alone declares where a value
+is, not when its forward is instrumented.
 
 ## Layout: the return annotation
 
