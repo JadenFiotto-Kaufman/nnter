@@ -94,11 +94,10 @@ with model.trace("Hello world there"):
    listing the available ops (`source.py:1014-1033`). A module's own
    `.source` is different: `Envoy.source` instruments the forward once, for
    good, and works outside a trace (`envoy.py:645-663`).
-6. **The tree is navigable from any envoy.** Every envoy registers itself
-   with the interleaver by module id (`envoy.py:146`, `:398`;
-   `interleaver.envoys`, a weak dictionary, `interleaver.py:620-623`), and
-   `Envoy.get(path)` resolves a dotted path from an envoy, aliases included
-   (`envoy.py:954-975`). An envoy's `.input` is the call's first argument,
+6. **The tree is navigable downward from any envoy, and an envoy knows its
+   own path but not its parent.** `Envoy.get(path)` resolves a dotted path
+   from an envoy, aliases included (`envoy.py:954-975`); `.path` is the
+   native dotted name from the root (`model.model.layers.0.self_attn`). An envoy's `.input` is the call's first argument,
    `first_input` over the served `(args, kwargs)` pair, and assigning it is
    `replace_first_input` (`envoy.py:569-584`, `util.py:20-36`).
 
@@ -137,8 +136,8 @@ from the host envoy:
 `_resolve(obj, key)` (`:161-180`) turns a path into the served location, and
 runs before every read and write, because of fact 5: an operation under a
 call is per run, so nothing about the walk can be cached on the descriptor.
-It steps to the parent for every leading `../` (`_parent`, below), splits
-the rest on `.`, and walks every segment but the last: `source` is
+It strips every leading `../` (counting them), splits the rest on `.`, and,
+below the host, walks every segment but the last: `source` is
 `_drill(obj, node)`; a segment on an `Envoy` is `node.get(segment)` (fact 6,
 so an alias works); a segment on anything else (a `Source`, the object a
 drill returns) is `getattr`, which is how an operation is named. An
@@ -151,24 +150,29 @@ reads `model.transformer.h.0.attn.broken reads 'source.no_such_op_0.output',
 which this run does not have: 'model.transformer.h.0.attn.source' has no
 operation 'no_such_op_0'; available: is_cross_attention_0, ...`.
 
-The result is `f"{node.path}.{'input' if attribute in ('input', 'inputs') else 'output'}"`
-(`:180`): `input` and `inputs` are the same served location, the pair;
+The result is `f"{node.path}.{attribute}"` with `inputs` folded into `input`: `input` and `inputs` are the same served location, the pair;
 picking the first argument out of it is `_pick`'s job. So a value at any
 depth is served by `Mediator` at a location string, the same way a plain
 eproperty's is.
 
-### `_parent`: through the interleaver's envoy registry
+### Above the host: arithmetic on names
 
-An envoy carries its path but not its parent, so `_parent` (`:245-249`)
-finds it from the root: the root is the envoy in `interleaver.envoys` whose
-path is the first segment of the node's path (`model`), and
-`root.get(<the segments between>)` is the parent. The node's own path is
-native, so a `../` step is by native name; the child named after it goes
-through `get`, so a sibling may be named by alias.
-`"../post_attention_layernorm.output"` on `model.model.layers.0.self_attn`
-reaches `model.model.layers.0.post_attention_layernorm`; verified on tiny
-GPT-2, `EProperty("../ln_2.output")` on the attention equals
-`layers[0].ln_2.output`, and zeroing it in place moves the logits.
+An envoy carries its path but not its parent, so a path that starts with
+`../` is not walked through envoys at all: `_resolve` drops as many trailing
+segments from the host's own path as there are `../`, appends the rest of
+the key, and returns that string as the location. The parent's name is
+native, so a `../` step is by native name, and the segment after it is
+joined as written, so a sibling is named by its native name too
+(`"../post_attention_layernorm.output"` on `model.model.layers.0.self_attn`
+is `model.model.layers.0.post_attention_layernorm.output`). Nothing is
+drilled: a `source` segment above the host names an operation of the
+parent's own forward, which is served by its string because the family
+instrumented that forward at build (`sourced = True`, below); a second
+`source` on such a path, a call inside the parent's forward, would need the
+parent drilled, which only an envoy can do, and `_resolve` refuses it with
+a `ValueError` saying so. Verified on tiny GPT-2: `EProperty("../ln_2.output")`
+on the attention equals `layers[0].ln_2.output`, and zeroing it in place
+moves the logits.
 
 ### `_drill` and the relaxed mediator
 

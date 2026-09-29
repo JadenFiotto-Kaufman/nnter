@@ -40,14 +40,17 @@ class EProperty(eproperty):
     Args:
         key: Where the value lives, relative to the host envoy: dotted segments
             ending in ``output``, ``input`` or ``inputs``. ``"output"`` is the
-            host's own output. ``".."`` steps to the parent module (by native
-            name), another name to a child module (aliases included) or, under
-            a ``source`` segment, to an operation: ``"source"`` drills into the
-            current module's or operation's forward, instrumenting it for this
-            run, so ``"source.attention_interface_1.inputs"`` is the shared
-            attention call's arguments and
-            ``"../source.hidden_states_view_0.output"`` an operation in the
-            parent block. A function of the host returning such a path, for a
+            host's own output. A leading ``"../"`` (repeatable) steps to the
+            parent module by native name, another name to a child module
+            (aliases included) or, under a ``source`` segment, to an
+            operation: ``"source"`` drills into the current module's or
+            operation's forward, instrumenting it for this run, so
+            ``"source.attention_interface_1.inputs"`` is the shared attention
+            call's arguments. Above the host the location is the path's
+            string, so ``"../source.hidden_states_view_0.output"`` is an
+            operation of the parent block's own forward, which the family
+            instruments at build (`Standard.sourced`); a call inside that
+            forward cannot be drilled from a child. A function of the host returning such a path, for a
             forward that branches: it runs at read time, inside the trace, so it
             can read the forward's own branch variable (`branched`) or the
             config (a family's ``by_alibi``). ``None`` means the attribute's
@@ -160,10 +163,26 @@ class EProperty(eproperty):
 
     def _resolve(self, obj: Envoy, key: str) -> str:
         """The served location ``key`` names from ``obj``, walking (and drilling) the path."""
-        node: Any = obj
-        while key.startswith("../"):  # the parent, as many times as written
-            node, key = _parent(node), key[3:]
+        up = 0
+        while key.startswith("../"):
+            up, key = up + 1, key[3:]
         *walk, attribute = key.split(".")
+        attribute = "input" if attribute in ("input", "inputs") else "output"
+        if up:
+            # Above the host the path is arithmetic on names: an envoy knows its
+            # own path but not its parent, and the parent's forward, when the
+            # path goes into it, is instrumented already (`Standard.sourced`),
+            # so the location is served by its string. One level of ``source``
+            # is what that gives; a call inside the parent's forward would need
+            # the parent drilled, which only an envoy can do.
+            parts = obj.path.split(".")[:-up]
+            if walk.count("source") > 1:
+                raise ValueError(
+                    f"{obj.path}.{self.name}: {key!r} drills into a call inside the parent's forward; "
+                    "a path above the host reaches the parent's own operations only"
+                )
+            return ".".join([*parts, *walk, attribute])
+        node: Any = obj
         try:
             for segment in walk:
                 if segment == "source":
@@ -177,7 +196,7 @@ class EProperty(eproperty):
                 f"{obj.path}.{self.name} reads {key!r}, which this run does not have: "
                 f"{error}. The forward took a path this family's toolkit does not expect."
             ) from None
-        return f"{node.path}.{'input' if attribute in ('input', 'inputs') else 'output'}"
+        return f"{node.path}.{attribute}"
 
     # -- select -----------------------------------------------------------------
 
@@ -240,13 +259,6 @@ class EProperty(eproperty):
         if self.select is not None or attribute == "input":
             value = self._put(attribute, Mediator.value(location), value)
         Mediator.swap(location, value)
-
-
-def _parent(node: Envoy) -> Envoy:
-    """The envoy of the module that owns ``node``, found from the root by native path."""
-    parts = node.path.split(".")
-    root = next(envoy for envoy in node.interleaver.envoys.values() if envoy.path == parts[0])
-    return root.get(".".join(parts[1:-1])) if len(parts) > 2 else root
 
 
 def _drill(obj: Envoy, node: Any) -> Any:
