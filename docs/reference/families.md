@@ -3,7 +3,7 @@ title: Families
 one_liner: One row per shipped family: its model_type and module, public and pinned checkpoints, native names, which values it relocates and how, and what status() reports unavailable, verified by a status() sweep over every tiny checkpoint.
 tags: [reference, families, quirks, availability, status]
 related: [docs/usage/loading.md, docs/usage/vocabulary.md, docs/usage/residual-stream.md, docs/usage/availability.md, docs/usage/attention-interior.md, docs/usage/delta-net.md, docs/extending/adding-a-family.md, docs/extending/overriding-values.md, docs/developing/testing.md, docs/developing/transformers-compat.md, docs/reference/api-quick-reference.md, docs/reference/glossary.md]
-sources: [nnter/families/__init__.py, nnter/families/gpt2.py, nnter/families/llama.py, nnter/families/gpt_neox.py, nnter/families/gemma2.py, nnter/families/gemma3_text.py, nnter/families/olmo2.py, nnter/families/olmo3.py, nnter/families/gpt_oss.py, nnter/families/deepseek_v2.py, nnter/families/deepseek_v3.py, nnter/families/deepseek_v32.py, nnter/families/glm_moe_dsa.py, nnter/families/dbrx.py, nnter/families/opt.py, nnter/families/gptj.py, nnter/families/bloom.py, nnter/families/mpt.py, nnter/families/falcon.py, nnter/families/qwen3_next.py, nnter/families/qwen3_5_text.py, nnter/families/qwen3_5_moe_text.py, nnter/components/attention.py, nnter/components/linear_attention.py, tests/families/suite.py]
+sources: [nnter/families/__init__.py, nnter/families/gpt2.py, nnter/families/llama.py, nnter/families/gpt_neox.py, nnter/families/gemma2.py, nnter/families/gemma3_text.py, nnter/families/olmo2.py, nnter/families/olmo3.py, nnter/families/gpt_oss.py, nnter/families/deepseek_v2.py, nnter/families/deepseek_v3.py, nnter/families/glm4_moe.py, nnter/families/glm4_moe_lite.py, nnter/families/deepseek_v32.py, nnter/families/glm_moe_dsa.py, nnter/families/dbrx.py, nnter/families/opt.py, nnter/families/gptj.py, nnter/families/bloom.py, nnter/families/mpt.py, nnter/families/falcon.py, nnter/families/qwen3_next.py, nnter/families/qwen3_5_text.py, nnter/families/qwen3_5_moe_text.py, nnter/components/attention.py, nnter/components/linear_attention.py, tests/families/suite.py]
 ---
 
 # Families
@@ -40,6 +40,7 @@ One row per family, keyed on `model_type`. Public ids are checkpoints of that `m
 | `gpt_neox` | `nnter.families.gpt_neox` | `EleutherAI/pythia-70m-deduped`, `EleutherAI/gpt-neox-20b` | `hf-internal-testing/tiny-random-GPTNeoXForCausalLM` |
 | `mistral` | `nnter.families.mistral` | `mistralai/Mistral-7B-v0.1` | `hf-internal-testing/tiny-random-MistralForCausalLM` |
 | `mixtral` | `nnter.families.mixtral` | `mistralai/Mixtral-8x7B-v0.1` | `hf-internal-testing/tiny-random-MixtralForCausalLM` |
+| `minimax_m2` | `nnter.families.minimax_m2` | `MiniMaxAI/MiniMax-M2.5`, `MiniMaxAI/MiniMax-M2` (native class; the checkpoints' `auto_map` is not needed) | `hf-tiny-v2/tiny-random-MiniMaxM2ForCausalLM` |
 | `qwen2` | `nnter.families.qwen2` | `Qwen/Qwen2.5-7B`, `Qwen/Qwen2-7B` | `yujiepan/qwen2-tiny-random` |
 | `qwen2_moe` | `nnter.families.qwen2_moe` | `Qwen/Qwen1.5-MoE-A2.7B` | `hf-internal-testing/tiny-random-Qwen2MoeForCausalLM` |
 | `qwen3` | `nnter.families.qwen3` | `Qwen/Qwen3-8B` | `trl-internal-testing/tiny-Qwen3ForCausalLM` |
@@ -52,12 +53,15 @@ One row per family, keyed on `model_type`. Public ids are checkpoints of that `m
 | `deepseek_v3` | `nnter.families.deepseek_v3` | `deepseek-ai/DeepSeek-V3` | `hf-internal-testing/tiny-random-DeepseekV3ForCausalLM` |
 | `deepseek_v32` | `nnter.families.deepseek_v32` | `deepseek-ai/DeepSeek-V3.2`, `deepseek-ai/DeepSeek-V3.2-Exp` | `hf-tiny-v2/tiny-random-DeepseekV32ForCausalLM` (and a copy with `index_topk: 2` in its config) |
 | `glm_moe_dsa` | `nnter.families.glm_moe_dsa` | `zai-org/GLM-5` | `hf-tiny-v2/tiny-random-GlmMoeDsaForCausalLM` (and copies with `index_topk: 2`, and with block 1 `shared`) |
+| `glm4_moe` | `nnter.families.glm4_moe` | `zai-org/GLM-4.5-Air`, `zai-org/GLM-4.6` | `trl-internal-testing/tiny-Glm4MoeForCausalLM` |
+| `glm4_moe_lite` | `nnter.families.glm4_moe_lite` | `zai-org/GLM-4.7-Flash` | `hf-tiny-v2/tiny-random-Glm4MoeLiteForCausalLM` |
 | `dbrx` | `nnter.families.dbrx` | `databricks/dbrx-base` | `yujiepan/dbrx-tiny256-random` (load with `dtype=torch.float32`) |
 | `phi` | `nnter.families.phi` | `microsoft/phi-2`, `microsoft/phi-1_5` | `hf-internal-testing/tiny-random-PhiForCausalLM` |
 | `phi3` | `nnter.families.phi3` | `microsoft/Phi-3-mini-4k-instruct` | `trl-internal-testing/tiny-Phi3ForCausalLM` |
 | `olmo` | `nnter.families.olmo` | `allenai/OLMo-1B-hf` | `katuni4ka/tiny-random-olmo-hf` |
 | `olmo2` | `nnter.families.olmo2` | `allenai/OLMo-2-1124-7B` | `hf-tiny-v2/tiny-random-Olmo2ForCausalLM` |
 | `olmo3` | `nnter.families.olmo3` | the allenai OLMo-3 checkpoints (`model_type` `olmo3`) | `yujiepan/olmo-3-tiny-random`, with its config rewritten to the per-layer-type rope form by the test (`tests/families/test_olmo3.py`); not part of the sweep |
+| `exaone4` | `nnter.families.exaone4` | `LGAI-EXAONE/EXAONE-4.0-32B`, `LGAI-EXAONE/EXAONE-4.0-1.2B` | `hf-tiny-v2/tiny-random-Exaone4ForCausalLM` |
 | `smollm3` | `nnter.families.smollm3` | `HuggingFaceTB/SmolLM3-3B` | `yujiepan/smollm3-tiny-random` |
 | `stablelm` | `nnter.families.stablelm` | `stabilityai/stablelm-2-1_6b` | `stabilityai/tiny-random-stablelm-2` |
 | `gptj` | `nnter.families.gptj` | `EleutherAI/gpt-j-6b` | `hf-internal-testing/tiny-random-GPTJForCausalLM` |
@@ -85,6 +89,7 @@ The same rows again. "Native" is what `RENAME` maps onto the standard name, in t
 | `gpt_neox` | `gpt_neox.embed_in` / `gpt_neox.layers` / `gpt_neox.final_layer_norm`; `attention` / `mlp`; `input_layernorm`, `post_attention_layernorm` | no | none | none. Parallel block under `use_parallel_residual` (Pythia's default): both norms take the block input, so `post_attention_layernorm` does not follow the attention. |
 | `mistral` | as Llama | no | none | none |
 | `mixtral` | as Llama; the MLP is `MixtralSparseMoeBlock` | no | none | none. `mlp_output` is the routed hidden states. |
+| `minimax_m2` | as Llama; `q_norm` / `k_norm` inside the attention, each over the whole projection (`heads * head_dim`) before the head split; the MLP is `MiniMaxM2SparseMoeBlock` | no | none | none. Every block is a mixture of experts with a sigmoid router; `intermediate_size` is the experts' width. `head_dim` is the config's (128 on a 3072 residual with 48 heads). |
 | `qwen2` | as Llama | no | none | none |
 | `qwen2_moe` | as Llama; `Qwen2MoeSparseMoeBlock` (with a shared expert) | no | none | none |
 | `qwen3` | as Llama; `q_norm` / `k_norm` inside the attention | no | none | none. `head_dim` is the config's, not `hidden_size // num_heads`. |
@@ -97,12 +102,15 @@ The same rows again. "Native" is what `RENAME` maps onto the standard name, in t
 | `deepseek_v3` | as DeepSeek-V2 (`DeepseekV3MLP`, `DeepseekV3MoE`) | no | none | none. Latent attention as V2; `head_dim` and `qk_head_dim` are imported from `deepseek_v2`. |
 | `deepseek_v32` | as DeepSeek-V2 (`DeepseekV32MLP`, `DeepseekV32MoE`, per `mlp_layer_types`); `self_attn.indexer` (the DSA lightning indexer) keeps its native name | no | none | none. Latent attention as V2 (sizes from `deepseek_v2`), plus DeepSeek Sparse Attention: the indexer keeps `index_topk` keys per query and, under eager, the rest are masked to the dtype's minimum before the shared interface. `attention_scores` carry that mask; `attention_probabilities` is the dense `[batch, heads, query, key]` pattern, exactly zero outside each query's selected keys; a written pattern is used as written, selected or not. While the prompt is no longer than `index_topk` (2048) every causal key is selected and the pattern is dense causal. The selection is `self_attn.indexer.output` (`[batch, query, index_topk]` int32); no standard name. |
 | `glm_moe_dsa` | as DeepSeek-V3.2 (`GlmMoeDsaMLP`, `GlmMoeDsaMoE`) | yes | none | none. Sparse latent attention as DeepSeek-V3.2. `config.indexer_types` marks a block `full` (own `indexer`) or `shared` (no indexer; reuses the previous block's selection), so the selection travels between blocks: the attention returns `(attn_output, attn_weights, topk_indices)` and the block `(hidden_states, topk_indices)`. The selection is `self_attn.output[2]` on every block. `skip_layers` hands the next block no selection, which a `shared` block refuses (`ValueError`); skip up to a `full` block or to the end. |
+| `glm4_moe` | as Llama; `Glm4MoeMLP` (dense, the first `first_k_dense_replace` blocks) and `Glm4MoeMoE`, both keyed to `Mlp`; `q_norm` / `k_norm` inside the attention under `use_qk_norm` | no | none | none. `head_dim` is the config's (128 on GLM-4.5/4.6, not `hidden_size // num_heads`); rotary covers `partial_rotary_factor` of each head. `mlp_output` on a mixture block is the routed sum plus the shared expert (`mlp.shared_experts`, itself a `Glm4MoeMLP`). |
+| `glm4_moe_lite` | as Llama; `Glm4MoeLiteMLP` and `Glm4MoeLiteMoE` (per `mlp_layer_types`), both keyed to `Mlp` | no | none | none. Latent attention as DeepSeek-V2; `head_dim` and `qk_head_dim` are imported from `deepseek_v2`, since the config's `head_dim` is an alias of `qk_rope_head_dim`. Shared expert as `glm4_moe`. |
 | `dbrx` | `transformer.wte` / `transformer.blocks` / `transformer.norm_f`; `norm_attn_norm.attn` / `ffn`; `norm_attn_norm.norm_1` = `input_layernorm`, `norm_attn_norm.norm_2` = `post_attention_layernorm` | no | none | none. The residual is added in `norm_attn_norm`, outside the attention module, so the base holds. The FFN width is `ffn_config.ffn_hidden_size`, not `intermediate_size`. The pinned tiny checkpoint is fp16 with degenerate weights and needs `dtype=torch.float32`. |
 | `phi` | `model.embed_tokens` / `model.layers` / `model.final_layernorm`; `self_attn` / `mlp`; `input_layernorm` only | no | none | none. Parallel block: one norm feeds both sublayers; no `post_attention_layernorm` exists. |
 | `phi3` | as Llama; queries, keys and values are indexed out of one fused `qkv_proj` | no | none | none. |
 | `olmo` | as Llama | no | none | none |
 | `olmo2` | as Llama minus `input_layernorm`: `post_attention_layernorm` and `post_feedforward_layernorm` only | no | as Gemma-2 | none. Post-norms only: `self_attn.input` is the block input; there is no `input_layernorm` to alias. |
 | `olmo3` | as OLMo-2 | no | as Gemma-2 | none (per the suite; not in the sweep). Post-norms only; sliding and full attention layers mix. |
+| `exaone4` | as OLMo-2; `q_norm` / `k_norm` (per head) inside the attention | no | as Gemma-2 | none. Post-norms only, as OLMo-2. With a `sliding_window`, sliding-window layers apply the rotary and full-attention layers apply none (NoPE); the values are read at the interface on both. |
 | `smollm3` | as Llama | no | none | none. Some layers use sliding-window attention and some no positional embedding. |
 | `stablelm` | as Llama; `post_attention_layernorm` only without `use_parallel_residual`; `q_layernorm` / `k_layernorm` inside the attention | no | none | none. Parallel block under `use_parallel_residual` (StableLM-2): one `input_layernorm` feeds both sublayers. |
 | `gptj` | `transformer.wte` / `transformer.h` / `transformer.ln_f`; `attn` / `mlp`; `ln_1` = `input_layernorm` | yes | Interior on the module's own `_attn` call: queries / keys / values = `self__attn_0` arguments 0, 1, 2; `attention_scores` = `self__attn_0.source.nn_functional_softmax_0` input; `attention_probabilities` = `self__attn_0.source.self_attn_dropout_0`; `attention_head_outputs` = `self__attn_0` return 0, served through `seq_first` | none. Parallel block: `ln_1` feeds both sublayers. Interior needs eager (`needs_eager`). Keys and values are `num_heads` wide. `intermediate_size` is `n_inner`, `4 * hidden_size` when `None`. |
@@ -125,7 +133,7 @@ Two reasons apply to every family and are not repeated per row. Loaded without `
 
 ### Sandwich norms
 
-`gemma2`, `gemma3_text`, `olmo2`, `olmo3`: the residual stream receives a post-sublayer norm's output, not the module's, so `attention_output` is a `RelativeEProperty` at `../post_attention_layernorm.output` and `mlp_output` at `../post_feedforward_layernorm.output`. On these families `post_attention_layernorm` *follows* the attention. Gemma-2/3 also norm before each sublayer (`input_layernorm`, `pre_feedforward_layernorm`); OLMo-2/3 have only the post-norms, so `self_attn.input` is the block input and no `input_layernorm` exists.
+`gemma2`, `gemma3_text`, `olmo2`, `olmo3`, `exaone4`: the residual stream receives a post-sublayer norm's output, not the module's, so `attention_output` is a `RelativeEProperty` at `../post_attention_layernorm.output` and `mlp_output` at `../post_feedforward_layernorm.output`. On these families `post_attention_layernorm` *follows* the attention. Gemma-2/3 also norm before each sublayer (`input_layernorm`, `pre_feedforward_layernorm`); OLMo-2/3 and EXAONE-4 have only the post-norms, so `self_attn.input` is the block input and no `input_layernorm` exists.
 
 ### Residual added inside the module
 
@@ -141,7 +149,7 @@ Two reasons apply to every family and are not repeated per row. Loaded without `
 
 ### Latent attention
 
-`deepseek_v2`, `deepseek_v3`, `deepseek_v32`, `glm_moe_dsa`: queries and keys are `qk_head_dim = qk_nope_head_dim + qk_rope_head_dim` wide, values `v_head_dim` (what the family's `head_dim` returns), and the interface receives `num_heads` key/value heads whatever `num_key_value_heads` says (`KV_HEADS_EXPANDED` in the suite). The root publishes `qk_head_dim` for this; `attention_queries` is laid out `batch heads seq qk_head_dim` on every family for the same reason.
+`deepseek_v2`, `deepseek_v3`, `deepseek_v32`, `glm_moe_dsa`, `glm4_moe_lite`: queries and keys are `qk_head_dim = qk_nope_head_dim + qk_rope_head_dim` wide, values `v_head_dim` (what the family's `head_dim` returns), and the interface receives `num_heads` key/value heads whatever `num_key_value_heads` says (`KV_HEADS_EXPANDED` in the suite). The root publishes `qk_head_dim` for this; `attention_queries` is laid out `batch heads seq qk_head_dim` on every family for the same reason.
 
 ### Sparse attention
 
@@ -149,7 +157,7 @@ Two reasons apply to every family and are not repeated per row. Loaded without `
 
 ### Mixtures of experts
 
-`mixtral`, `qwen2_moe`, `qwen3_moe`, `gpt_oss`, `dbrx`, `deepseek_v2`, `deepseek_v3` (after the first `first_k_dense_replace` dense blocks), `deepseek_v32`, `glm_moe_dsa` (per `mlp_layer_types`), `qwen3_next`, `qwen3_5_moe_text`. `mlp_output` is the routed hidden states on all of them. `intermediate_size` is the dense MLP's width; the experts are `config.moe_intermediate_size` wide (`ffn_config.ffn_hidden_size` on DBRX). On an all-MoE family (Qwen3-MoE) `intermediate_size` names a width the model never uses; the suite reads `MLP_WIDTH_KEY = "moe_intermediate_size"` there.
+`mixtral`, `minimax_m2`, `qwen2_moe`, `qwen3_moe`, `gpt_oss`, `dbrx`, `deepseek_v2`, `deepseek_v3` and `glm4_moe` (after the first `first_k_dense_replace` dense blocks), `glm4_moe_lite` (dense where `mlp_layer_types` says `dense`), `deepseek_v32`, `glm_moe_dsa` (per `mlp_layer_types`), `qwen3_next`, `qwen3_5_moe_text`. `mlp_output` is the routed hidden states on all of them. On `glm4_moe` and `glm4_moe_lite` that includes the shared expert's output, which the mixture adds before it returns. `intermediate_size` is the dense MLP's width; the experts are `config.moe_intermediate_size` wide (`ffn_config.ffn_hidden_size` on DBRX; `intermediate_size` itself on MiniMax-M2, whose config has no dense width). On an all-MoE family (Qwen3-MoE) `intermediate_size` names a width the model never uses; the suite reads `MLP_WIDTH_KEY = "moe_intermediate_size"` there.
 
 ### Gated query
 
@@ -182,7 +190,7 @@ One norm's output feeds both sublayers and the block sums `x + attn + mlp`: `gpt
 
 `gemma2` softcaps its logits (`final_logit_softcapping`): `model.logits` is the capped output, `model.lm_head.output` the raw projection, and `project_on_vocab` applies the cap so a logit lens at the last block equals `logits`. `qwen3`, `qwen3_moe` and `gemma` set `head_dim` in the config to something other than `hidden_size // num_heads`; the root's plain rule reads the config's.
 
-Each root size is a `StandardizedProperty`: the plain rule over the config, unless the family module defines a function of the same name. The families that do: `falcon` (`num_kv_heads`: `config.num_kv_heads` on the 40B layout, 1 under `multi_query`, else `num_heads`; `intermediate_size`: `ffn_hidden_size`), `deepseek_v2`, `deepseek_v3`, `deepseek_v32` and `glm_moe_dsa` (`head_dim`: `v_head_dim`; `qk_head_dim`: `qk_nope_head_dim + qk_rope_head_dim`), `gpt2` and `gptj` (`intermediate_size`: `n_inner`, `4 * hidden_size` when `None`), `opt` (`ffn_dim`), `mpt` (`expansion_ratio * hidden_size`), `bloom` (`4 * hidden_size`). Every other family, and every other size on these, is the plain rule ([../usage/root-values.md](../usage/root-values.md#sizes)).
+Each root size is a `StandardizedProperty`: the plain rule over the config, unless the family module defines a function of the same name. The families that do: `falcon` (`num_kv_heads`: `config.num_kv_heads` on the 40B layout, 1 under `multi_query`, else `num_heads`; `intermediate_size`: `ffn_hidden_size`), `deepseek_v2`, `deepseek_v3`, `deepseek_v32`, `glm_moe_dsa` and `glm4_moe_lite` (`head_dim`: `v_head_dim`; `qk_head_dim`: `qk_nope_head_dim + qk_rope_head_dim`), `gpt2` and `gptj` (`intermediate_size`: `n_inner`, `4 * hidden_size` when `None`), `opt` (`ffn_dim`), `mpt` (`expansion_ratio * hidden_size`), `bloom` (`4 * hidden_size`). Every other family, and every other size on these, is the plain rule ([../usage/root-values.md](../usage/root-values.md#sizes)).
 
 ## Reproducing the sweep
 
