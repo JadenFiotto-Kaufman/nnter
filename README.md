@@ -16,9 +16,10 @@ with model.trace("The Eiffel Tower is in"):
 
 The same block runs unchanged on `meta-llama/Llama-3.1-8B`,
 `EleutherAI/pythia-70m-deduped`, and every other registered family: GPT-2,
-Llama, Llama 4 (text), GPT-NeoX, Mistral, Mixtral, Qwen2, Qwen2-MoE, Qwen3, Qwen3-MoE, Gemma,
-Gemma-2, Gemma-3 (text), GPT-OSS, DeepSeek-V2, DeepSeek-V3, DBRX, Phi, Phi-3,
-OLMo, OLMo-2, OLMo-3, SmolLM3, StableLM, GPT-J, BLOOM, MPT, Falcon (7B and 40B
+Llama, Llama 4 (text), GPT-NeoX, Mistral, Mixtral, MiniMax-M2, Qwen2, Qwen2-MoE, Qwen3, Qwen3-MoE, Gemma,
+Gemma-2, Gemma-3 (text), GPT-OSS, DeepSeek-V2, DeepSeek-V3, DeepSeek-V3.2, GLM-4.5/4.6,
+GLM-4.7-Flash, GLM-5, DBRX, Phi, Phi-3,
+OLMo, OLMo-2, OLMo-3, EXAONE 4.0, SmolLM3, StableLM, GPT-J, BLOOM, MPT, Falcon (7B and 40B
 layouts), OPT, and the gated DeltaNet hybrids Qwen3-Next, Qwen3.5 and
 Qwen3.5-MoE (text), on transformers 5.17. The vocabulary is Llama's block names, with the containers
 lifted out of the inner `.model`:
@@ -392,7 +393,7 @@ the reverse order segfaults at import; a plain `import transformers` first is fi
 HF_HUB_OFFLINE=1 pytest
 ```
 
-One file per family under `tests/families/` (31 families, 32 checkpoints), each subclassing `FamilySuite`
+One file per family under `tests/families/` (33 families, 34 checkpoints), each subclassing `FamilySuite`
 (`tests/families/suite.py`) with its pinned tiny checkpoint, native paths and
 quirks, plus the tests that are specific to it. The suite is every end-to-end
 statement a family must satisfy: aliases reach the native modules; every
