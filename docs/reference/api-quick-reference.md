@@ -98,18 +98,22 @@ Every row is an `EProperty` on the root, listed in `repr(model)` with its descri
 
 ### Sizes, outside a trace
 
-Plain properties read off the config, with the fallbacks older configs need.
+Each is a `StandardizedProperty`: it reads the config by the plain rule unless the model's family module defines a function of the same name (`def intermediate_size(model)` in `gpt2.py`), which then answers. What each family reads is in [../usage/root-values.md](../usage/root-values.md#sizes).
 
-| Property | Rule |
-|---|---|
-| `num_layers` | `len(model.layers)` |
-| `hidden_size` | `config.hidden_size` |
-| `vocab_size` | `config.vocab_size` |
-| `num_heads` | `config.num_attention_heads` |
-| `num_kv_heads` | `config.num_key_value_heads`; else `config.num_kv_heads` under Falcon's `new_decoder_architecture`; else `1` under `multi_query`; else `num_heads`. |
-| `head_dim` | `config.v_head_dim` (multi-head latent attention), else `config.head_dim` when the config says (Qwen3, Gemma), else `hidden_size // num_heads`. |
-| `qk_head_dim` | `qk_nope_head_dim + qk_rope_head_dim` under latent attention, else `head_dim`. |
-| `intermediate_size` | `config.n_inner` (or `4 * hidden_size` when `None`) on a GPT-2-style config, else `config.intermediate_size`, else `config.ffn_dim` (OPT), else `hidden_size * expansion_ratio` (MPT; `4` on BLOOM and Falcon). A mixture of experts' experts are `config.moe_intermediate_size` wide instead. |
+| Property | Plain rule | Family spellings |
+|---|---|---|
+| `num_layers` | `len(model.layers)` | |
+| `hidden_size` | `config.hidden_size` | |
+| `vocab_size` | `config.vocab_size` | |
+| `num_heads` | `config.num_attention_heads` | |
+| `num_kv_heads` | `config.num_key_value_heads`, else `num_heads`. | Falcon: `config.num_kv_heads` under `new_decoder_architecture`, `1` under `multi_query`, else `num_heads`. |
+| `head_dim` | `config.head_dim` when the config says (Qwen3, Gemma), else `hidden_size // num_heads`. | DeepSeek-V2/V3: `config.v_head_dim`. |
+| `qk_head_dim` | `head_dim`. | DeepSeek-V2/V3: `qk_nope_head_dim + qk_rope_head_dim`. |
+| `intermediate_size` | `config.intermediate_size`. A mixture of experts' experts are `config.moe_intermediate_size` wide instead. | GPT-2, GPT-J: `config.n_inner`, `4 * hidden_size` when `None`; Falcon: `config.ffn_hidden_size`; OPT: `config.ffn_dim`; MPT: `expansion_ratio * hidden_size`; BLOOM: `4 * hidden_size`. |
+
+| Name | Signature | What |
+|---|---|---|
+| `StandardizedProperty` | `nnter.standardized.StandardizedProperty(fget)` | The descriptor each size is. `__get__` calls `getattr(model.family, <name>)(model)` when the family defines it, else `fget(model)`; on the class it returns itself (`StandardizedTransformer.head_dim`). `__set__` raises `AttributeError("<name> is read off the config; a family defines `def <name>(model)` to say it otherwise")`. Not an `EProperty`: no location, nothing served inside a trace, no entry in the repr or `status()`. |
 
 ### Other attributes
 
@@ -210,14 +214,14 @@ The base of the four hosts.
 | Name | Signature | What |
 |---|---|---|
 | `lookup` | `lookup(model_type: str) -> ModuleType` | The family for `model_type`: a registered one, else `nnter.families.<model_type>`, imported on first use. Raises `UnsupportedFamily` when there is neither. |
-| `register` | `register(family: ModuleType) -> ModuleType` | Add a family (any module or object with `MODEL_TYPES`, `RENAME`, `ENVOYS`) under its model types; consulted before the shipped modules, so it also overrides a shipped family. Returns `family`. |
+| `register` | `register(family: ModuleType) -> ModuleType` | Add a family (any module or object with `MODEL_TYPES`, `RENAME`, `ENVOYS`, and a function per root size it spells its own way) under its model types; consulted before the shipped modules, so it also overrides a shipped family. Returns `family`. |
 | `known` | `known() -> list[str]` | The shipped families' model types: the module names in the package (31). |
 | `all_families` | `all_families() -> list[ModuleType]` | Every shipped family, imported. For tooling and tests. |
 | `REGISTRY` | `dict[str, ModuleType]` | `model_type -> family` for what `register` added. |
 | `UnsupportedFamily` | `ValueError` subclass | No module of that name and nothing registered. |
 | `nnter.families.<model_type>` | module attribute | The family module, imported on first access (`nnter.families.qwen3_5_text`). |
 
-A family module declares `MODEL_TYPES: tuple[str, ...]`, `RENAME: dict[str, str]`, `Layer`, `Attention`, `Mlp` (and `LinearAttention` on a hybrid) subclassing `nnter.components`'s, and `ENVOYS: dict[type, type]` keying them on its transformers module types.
+A family module declares `MODEL_TYPES: tuple[str, ...]`, `RENAME: dict[str, str]`, `Layer`, `Attention`, `Mlp` (and `LinearAttention` on a hybrid) subclassing `nnter.components`'s, and `ENVOYS: dict[type, type]` keying them on its transformers module types. It may also define a module-level function named after any root size, `def <size>(model) -> int`, which the root's `StandardizedProperty` calls in place of its plain rule (`falcon.num_kv_heads`, `deepseek_v2.head_dim`, `gpt2.intermediate_size`).
 
 ## `nnter.components`
 

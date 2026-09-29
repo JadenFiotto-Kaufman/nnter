@@ -121,7 +121,7 @@ the function applied to the envoy.
 
 **An `EProperty` is not cloudpicklable by value.** `pickle.dumps(nnter.Layer.layer_output)`
 is `TypeError: cannot pickle 'EProperty' object`. A family that travels to
-NDIF travels by reference (`standardized.py:405-414`); do not
+NDIF travels by reference (`standardized.py:407-416`); do not
 `nnsight.register(nnter)` by value.
 
 **`envoys=` matches type before path, never alias.** `_resolve_envoy_class`

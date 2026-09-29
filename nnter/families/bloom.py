@@ -10,12 +10,17 @@ the pattern is its dropout's output and needs no eager load.
 The embedding norm has no standard name.
 """
 
+from typing import TYPE_CHECKING
+
 import torch
 from jaxtyping import Float
 from torch import Tensor
 from transformers.models.bloom.modeling_bloom import BloomAttention, BloomBlock, BloomMLP
 
 from ..components import Attention, Layer, Mlp, SourceEProperty
+
+if TYPE_CHECKING:
+    from ..standardized import StandardizedTransformer
 
 MODEL_TYPES = ("bloom",)
 
@@ -98,3 +103,10 @@ class Mlp(Mlp):
 
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.
 ENVOYS = {BloomBlock: Layer, BloomAttention: Attention, BloomMLP: Mlp}
+
+
+# -- sizes: BLOOM's config does not say ---------------------------------------------
+
+def intermediate_size(model: "StandardizedTransformer") -> int:
+    """The MLP is four times the hidden size wide; the config has no key for it."""
+    return 4 * model.hidden_size

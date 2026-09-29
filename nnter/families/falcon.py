@@ -16,12 +16,17 @@ heads. The 40B layout (``ln_attn`` / ``ln_mlp``, ``new_decoder_architecture``)
 runs the same forward with its key/value heads already broadcast.
 """
 
+from typing import TYPE_CHECKING
+
 import torch
 from jaxtyping import Float
 from torch import Tensor
 from transformers.models.falcon.modeling_falcon import FalconAttention, FalconDecoderLayer, FalconMLP
 
 from ..components import Attention, EProperty, Layer, Mlp, SourceEProperty, first_tensor, needs_eager, rewrap, seq_first
+
+if TYPE_CHECKING:
+    from ..standardized import StandardizedTransformer
 
 MODEL_TYPES = ("falcon",)
 
@@ -145,3 +150,18 @@ class Mlp(Mlp):
 
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.
 ENVOYS = {FalconDecoderLayer: Layer, FalconAttention: Attention, FalconMLP: Mlp}
+
+
+# -- sizes: what Falcon's config calls them --------------------------------------
+
+def num_kv_heads(model: "StandardizedTransformer") -> int:
+    """``num_kv_heads`` on the 40B layout (``new_decoder_architecture``); 1 under ``multi_query``; else every head."""
+    config = model.config
+    if config.new_decoder_architecture:
+        return config.num_kv_heads
+    return 1 if config.multi_query else model.num_heads
+
+
+def intermediate_size(model: "StandardizedTransformer") -> int:
+    """The MLP width is ``ffn_hidden_size``."""
+    return model.config.ffn_hidden_size

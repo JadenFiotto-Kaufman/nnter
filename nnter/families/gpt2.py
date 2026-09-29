@@ -11,9 +11,14 @@ A checkpoint with ``reorder_and_upcast_attn`` set takes GPT-2's own
 ``attention_probabilities`` is unavailable there.
 """
 
+from typing import TYPE_CHECKING
+
 from transformers.models.gpt2.modeling_gpt2 import GPT2Attention, GPT2Block, GPT2MLP
 
 from ..components import Attention, Layer, Mlp
+
+if TYPE_CHECKING:
+    from ..standardized import StandardizedTransformer
 
 MODEL_TYPES = ("gpt2",)
 
@@ -50,3 +55,10 @@ class Mlp(Mlp):
 
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.
 ENVOYS = {GPT2Block: Layer, GPT2Attention: Attention, GPT2MLP: Mlp}
+
+
+# -- sizes: what GPT-2's config calls them ------------------------------------------
+
+def intermediate_size(model: "StandardizedTransformer") -> int:
+    """The MLP width is ``n_inner``, ``None`` meaning four times the hidden size; the config's ``intermediate_size`` is never read by the model."""
+    return model.config.n_inner or 4 * model.hidden_size

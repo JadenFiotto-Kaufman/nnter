@@ -37,7 +37,7 @@ everywhere. Everything nnsight does (`trace`, `generate`, `.save()`, `tracer.ite
 - [docs/patterns/attention-patterns.md](docs/patterns/attention-patterns.md) — head metrics and pattern edits
 
 ### "Logits, embeddings, next-token probabilities, the input, the sizes"
-- [docs/usage/root-values.md](docs/usage/root-values.md) — `logits`, `token_embeddings`, `next_token_probs`, `input_ids`, `attention_mask`, `input_size`, `num_layers`, `head_dim`, ...
+- [docs/usage/root-values.md](docs/usage/root-values.md) — `logits`, `token_embeddings`, `next_token_probs`, `input_ids`, `attention_mask`, `input_size`, `num_layers`, `head_dim`, ... (each size a `StandardizedProperty`: the plain rule, or the family's spelling)
 
 ### "Does this checkpoint have that value?"
 - [docs/usage/availability.md](docs/usage/availability.md) — `model.status()` before the trace; `nnter.Unavailable` at the read; the reasons you will see
@@ -65,7 +65,7 @@ everywhere. Everything nnsight does (`trace`, `generate`, `.save()`, `tracer.ite
 - [docs/usage/remote.md](docs/usage/remote.md) — `remote=True`; nnter installed server-side, never shipped by value
 
 ### "Add a family, override a value, add my own value"
-- [docs/extending/adding-a-family.md](docs/extending/adding-a-family.md) — one module named after `model_type`, one test file
+- [docs/extending/adding-a-family.md](docs/extending/adding-a-family.md) — one module named after `model_type`, one test file; `def <size>(model)` in the module where the config spells a root size its own way
 - [docs/extending/overriding-values.md](docs/extending/overriding-values.md) — `RelativeEProperty`, `SourceEProperty`, `unavailable(...)`, `off_interface`, transforms
 - [docs/extending/custom-values.md](docs/extending/custom-values.md) — a new `EProperty` through `envoys=`
 - [docs/extending/finding-source-ops.md](docs/extending/finding-source-ops.md) — `print(envoy.source)` and how ops are named

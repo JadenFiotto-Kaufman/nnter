@@ -1,9 +1,9 @@
 ---
 title: Adding a Family
-one_liner: Write one module named after `config.model_type` with `MODEL_TYPES`, `RENAME`, three envoy subclasses and `ENVOYS`, plus one test file subclassing `FamilySuite`.
+one_liner: Write one module named after `config.model_type` with `MODEL_TYPES`, `RENAME`, three envoy subclasses and `ENVOYS`, a `def <size>(model)` for any root size the config spells its own way, plus one test file subclassing `FamilySuite`.
 tags: [extending, families, rename, envoys, tests]
 related: [docs/extending/overriding-values.md, docs/extending/custom-values.md, docs/extending/finding-source-ops.md, docs/extending/registering.md]
-sources: [nnter/families/__init__.py, nnter/families/llama.py, nnter/families/gpt2.py, nnter/components/__init__.py, nnter/components/layer.py, nnter/standardized.py, tests/families/suite.py, tests/families/test_llama.py, tests/families/test_gpt2.py]
+sources: [nnter/families/__init__.py, nnter/families/llama.py, nnter/families/gpt2.py, nnter/families/falcon.py, nnter/components/__init__.py, nnter/components/layer.py, nnter/standardized.py, tests/families/suite.py, tests/families/test_llama.py, tests/families/test_gpt2.py]
 ---
 
 # Adding a Family
@@ -118,7 +118,10 @@ ENVOYS = {GPT2Block: Layer, GPT2Attention: Attention, GPT2MLP: Mlp}
    only what the family's forward spells differently
    ([overriding-values.md](overriding-values.md)).
 5. Key them in `ENVOYS` on the transformers module classes.
-6. Add `tests/families/test_<model_type>.py` and run it.
+6. Define `def <size>(model)` for any root size the config spells its own way
+   (`intermediate_size` on a config with `n_inner` or `ffn_dim`); leave the rest to the
+   root ([Sizes](#sizes) below).
+7. Add `tests/families/test_<model_type>.py` and run it.
 
 ### `RENAME`
 
@@ -188,6 +191,44 @@ Qwen3-Next's dense `Qwen3NextMLP` and sparse `Qwen3NextSparseMoeBlock`). `envoys
 matches by type or by native path suffix, never by alias, and nnsight tries type keys
 before path keys.
 
+### Sizes
+
+The root's sizes (`num_layers`, `hidden_size`, `vocab_size`, `num_heads`, `num_kv_heads`,
+`head_dim`, `qk_head_dim`, `intermediate_size`) are each a `StandardizedProperty` on
+`StandardizedTransformer` that reads the config by the plain Llama-style rule:
+`num_kv_heads` is `config.num_key_value_heads` or `num_heads`, `head_dim` is
+`config.head_dim` or `hidden_size // num_heads`, `qk_head_dim` is `head_dim`,
+`intermediate_size` is `config.intermediate_size`. Where the family's config spells one
+of them differently, define a module-level function of the same name taking the model;
+the descriptor calls it instead of the rule, and every size the family does not define
+keeps the root's. Falcon's:
+
+```python
+# nnter/families/falcon.py
+
+def num_kv_heads(model: "StandardizedTransformer") -> int:
+    """``num_kv_heads`` on the 40B layout (``new_decoder_architecture``); 1 under ``multi_query``; else every head."""
+    config = model.config
+    if config.new_decoder_architecture:
+        return config.num_kv_heads
+    return 1 if config.multi_query else model.num_heads
+
+
+def intermediate_size(model: "StandardizedTransformer") -> int:
+    """The MLP width is ``ffn_hidden_size``."""
+    return model.config.ffn_hidden_size
+```
+
+The function may read other sizes off the model (`model.num_heads`, `model.hidden_size`),
+which resolve the same way. The shipped ones: Falcon (`num_kv_heads`, `intermediate_size`),
+DeepSeek-V2 (`head_dim` = `v_head_dim`, `qk_head_dim` = `qk_nope_head_dim +
+qk_rope_head_dim`; DeepSeek-V3 imports both from `deepseek_v2`), GPT-2 and GPT-J
+(`intermediate_size` = `n_inner`, `4 * hidden_size` when `None`), OPT (`ffn_dim`), MPT
+(`expansion_ratio * hidden_size`), BLOOM (`4 * hidden_size`). The suite's
+`test_sizes_match_the_model` checks each size against the weights, so a wrong spelling
+fails there; `MLP_WIDTH_KEY` is for a family whose `intermediate_size` is right but
+unused by the model (an all-MoE family's experts).
+
 ## A complete template
 
 ```python
@@ -230,6 +271,12 @@ class Mlp(Mlp):
 
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.
 ENVOYS = {<X>DecoderLayer: Layer, <X>Attention: Attention, <X>MLP: Mlp}
+
+
+# -- sizes: only where the config spells one its own way -------------------------
+# def intermediate_size(model: "StandardizedTransformer") -> int:
+#     """The MLP width is ``<key>``."""
+#     return model.config.<key>
 ```
 
 ## The test file

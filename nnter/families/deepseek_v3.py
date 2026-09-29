@@ -8,6 +8,7 @@ added in the block, attention through the shared eager forward. Multi-head laten
 from transformers.models.deepseek_v3.modeling_deepseek_v3 import DeepseekV3Attention, DeepseekV3DecoderLayer, DeepseekV3MLP, DeepseekV3MoE
 
 from ..components import Attention, Layer, Mlp
+from .deepseek_v2 import head_dim, qk_head_dim  # noqa: F401  the same latent attention: the same sizes
 
 MODEL_TYPES = ("deepseek_v3",)
 

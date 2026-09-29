@@ -1,9 +1,9 @@
 ---
 title: Overriding Values
-one_liner: How a family redefines a standard value when the base does not hold — `RelativeEProperty`, `SourceEProperty` with `attribute`/`select`, `unavailable` markers and predicates, `off_interface`, `seq_first`, a clone with a transform, `postprocess` for writes.
+one_liner: How a family redefines a standard value when the base does not hold — `RelativeEProperty`, `SourceEProperty` with `attribute`/`select`, `unavailable` markers and predicates, `off_interface`, `seq_first`, a clone with a transform, `postprocess` for writes; and a root size, which is a plain function in the family module, not a descriptor.
 tags: [extending, families, eproperty, source, availability]
 related: [docs/extending/adding-a-family.md, docs/extending/custom-values.md, docs/extending/finding-source-ops.md]
-sources: [nnter/components/eproperty.py, nnter/components/attention.py, nnter/components/layer.py, nnter/components/mlp.py, nnter/components/standard.py, nnter/families/gemma2.py, nnter/families/olmo2.py, nnter/families/bloom.py, nnter/families/mpt.py, nnter/families/gptj.py, nnter/families/falcon.py, nnter/families/gpt2.py, nnter/families/gpt_oss.py]
+sources: [nnter/components/eproperty.py, nnter/components/attention.py, nnter/components/layer.py, nnter/components/mlp.py, nnter/components/standard.py, nnter/families/gemma2.py, nnter/families/olmo2.py, nnter/families/bloom.py, nnter/families/mpt.py, nnter/families/gptj.py, nnter/families/falcon.py, nnter/families/gpt2.py, nnter/families/gpt_oss.py, nnter/families/deepseek_v2.py, nnter/families/deepseek_v3.py, nnter/standardized.py]
 ---
 
 # Overriding Values
@@ -323,6 +323,38 @@ A family that redefines a value on `key="output"` (Falcon's `Mlp` above) keeps b
 halves. A value redefined as a `RelativeEProperty` or `SourceEProperty` at a location
 that serves a bare tensor needs neither.
 
+## A size: a function in the family module
+
+The root's sizes are not value descriptors. Each is a `StandardizedProperty` on
+`StandardizedTransformer` (`num_layers`, `hidden_size`, `vocab_size`, `num_heads`,
+`num_kv_heads`, `head_dim`, `qk_head_dim`, `intermediate_size`): no location, nothing
+served inside a trace, no `status()` entry, only a plain rule over the config, and
+read-only (an assignment raises `AttributeError` pointing at `def <name>(model)`). A family
+whose config spells a size its own way overrides it with a module-level function of the
+same name taking the model, which the descriptor calls instead of its rule. DeepSeek-V2's
+latent attention gives values and queries different widths, and the config's own
+`head_dim` key is the latent width that no served value has:
+
+```python
+# nnter/families/deepseek_v2.py
+
+def head_dim(model: "StandardizedTransformer") -> int:
+    """Width of one head's values and outputs: ``v_head_dim`` (the config's ``head_dim`` is the latent width, which no served value has)."""
+    return model.config.v_head_dim
+
+
+def qk_head_dim(model: "StandardizedTransformer") -> int:
+    """Width of one head's queries and keys: the non-rotary part plus the rotary part."""
+    return model.config.qk_nope_head_dim + model.config.qk_rope_head_dim
+```
+
+DeepSeek-V3 has the same attention and imports both (`from .deepseek_v2 import head_dim,
+qk_head_dim`). The other shipped overrides are `intermediate_size` on GPT-2, GPT-J, OPT,
+MPT, BLOOM and Falcon, and `num_kv_heads` on Falcon; the full list with what each reads
+is in [../usage/root-values.md](../usage/root-values.md#sizes), and the recipe in
+[adding-a-family.md](adding-a-family.md#sizes). Keep the docstring in the same voice as
+the root's: what the width is, and which config key says so.
+
 ## Gotchas
 
 - **Keep the name.** An override under another name adds a value instead of replacing one;
@@ -348,6 +380,9 @@ that serves a bare tensor needs neither.
   without one, and `preprocess`/`postprocess` are the only callbacks.
 - **A class attribute like `SINK` is for tooling**, not availability; `status()` reports
   only descriptors.
+- **A size override goes on the module, not on a class.** `StandardizedProperty` looks
+  for `model.family.<name>`; a `head_dim` on the family's `Attention` class is an
+  ordinary attribute the root never reads.
 
 ## Related
 

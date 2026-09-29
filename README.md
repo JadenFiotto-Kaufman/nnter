@@ -61,7 +61,10 @@ the checkpoint's config, looks up `config.model_type` in
 `rename=`. A `rename=` of your own is merged on top.
 
 Each family is one module under `nnter/families/` declaring `MODEL_TYPES`,
-`RENAME`, its `Layer`, `Attention` and `Mlp` subclasses and `ENVOYS`. To add one,
+`RENAME`, its `Layer`, `Attention` and `Mlp` subclasses and `ENVOYS`, plus a
+`def <size>(model)` for any root size its config spells its own way (Falcon's
+`num_kv_heads`, GPT-2's `intermediate_size` from `n_inner`); the root's
+`StandardizedProperty` calls it in place of the plain rule. To add one,
 name the module after the model type (`gemma3_text.py` covers `gemma3_text`),
 and that is the registry: a family's module is imported the first time a
 checkpoint of that type is loaded, so `import nnter` imports no transformers
@@ -95,7 +98,7 @@ The root answers for the whole model too:
 | `model.logits`             | the model's final logits, softcapping applied (Gemma-2); `lm_head.output` is the raw projection |
 | `model.token_embeddings`   | the embedding module's output, before positional embeddings or embedding norms |
 | `model.next_token_probs`   | `logits[:, -1].softmax(-1)`, derived from the output; read-only, assign `logits` instead |
-| `model.num_layers`, `num_heads`, `num_kv_heads`, `head_dim`, `hidden_size`, `intermediate_size`, `vocab_size` | sizes from the config, with the fallbacks older configs need (`head_dim` is the config's on Qwen3 and Gemma, not `hidden // heads`) |
+| `model.num_layers`, `num_heads`, `num_kv_heads`, `head_dim`, `qk_head_dim`, `hidden_size`, `intermediate_size`, `vocab_size` | sizes from the config: a plain rule at the root (`head_dim` is the config's where it says, as on Qwen3 and Gemma, else `hidden // heads`), and the family's own spelling where its config differs (Falcon's `num_kv_heads`, DeepSeek's `v_head_dim`, GPT-2's `n_inner`) |
 
 The two contributions are defined by the identity
 `layers[i].input + attention_output + mlp_output == layers[i].layer_output`,

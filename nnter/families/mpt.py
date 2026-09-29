@@ -8,12 +8,17 @@ arithmetic whatever ``attn_implementation`` says, so the pattern is its
 dropout's output and needs no eager load.
 """
 
+from typing import TYPE_CHECKING
+
 import torch
 from jaxtyping import Float
 from torch import Tensor
 from transformers.models.mpt.modeling_mpt import MptAttention, MptBlock, MptMLP
 
 from ..components import Attention, Layer, Mlp, SourceEProperty, seq_first
+
+if TYPE_CHECKING:
+    from ..standardized import StandardizedTransformer
 
 MODEL_TYPES = ("mpt",)
 
@@ -87,3 +92,10 @@ class Mlp(Mlp):
 
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.
 ENVOYS = {MptBlock: Layer, MptAttention: Attention, MptMLP: Mlp}
+
+
+# -- sizes: what MPT's config calls them --------------------------------------------
+
+def intermediate_size(model: "StandardizedTransformer") -> int:
+    """The MLP width is ``expansion_ratio`` times the hidden size."""
+    return int(model.config.expansion_ratio * model.hidden_size)

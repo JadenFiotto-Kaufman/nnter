@@ -156,6 +156,10 @@ An alias from Llama's vocabulary that every family answers to: `embed_tokens`, `
 
 An `EProperty` on a `Layer`, `Attention`, `Mlp` or `LinearAttention` envoy or on the root, meaning the same thing on every family: `layer_output`, `attention_output`, `mlp_output`, `attention_probabilities`, `logits`, `states`, and the rest of [api-quick-reference.md](api-quick-reference.md). Listed in the repr, reported by `status()`, checked by the suite. See [../usage/root-values.md](../usage/root-values.md).
 
+## `StandardizedProperty`
+
+The descriptor each root size is (`num_layers`, `hidden_size`, `vocab_size`, `num_heads`, `num_kv_heads`, `head_dim`, `qk_head_dim`, `intermediate_size`): outside a trace, a plain rule over the config, unless the model's family module defines a function of the same name, which then answers (`falcon.num_kv_heads`, `deepseek_v2.head_dim`, `gpt2.intermediate_size`). Read-only: assigning one raises `AttributeError`. Not an eproperty: no location, nothing in the repr or `status()`. See [../usage/root-values.md](../usage/root-values.md#sizes).
+
 ## `status()`
 
 `model.status()` (every value, `None` or `{layer: reason}`), `model.status(layer=i)` (one block, flat) and `envoy.status()` (one envoy): what this checkpoint has, computed from the tree and the config without running anything. See [../usage/availability.md](../usage/availability.md).

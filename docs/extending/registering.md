@@ -1,6 +1,6 @@
 ---
 title: Registering a Family
-one_liner: `nnter.families.register(module)` adds a family from outside the package or overrides a shipped one, process-wide; `rename=`/`envoys=` at load are the per-model alternative.
+one_liner: `nnter.families.register(module)` adds a family from outside the package or overrides a shipped one, process-wide, names, envoy classes and size functions included; `rename=`/`envoys=` at load are the per-model alternative.
 tags: [extending, families, registry, lookup]
 related: [docs/extending/adding-a-family.md, docs/extending/custom-values.md, docs/extending/overriding-values.md]
 sources: [nnter/families/__init__.py, nnter/standardized.py, tests/test_registry.py]
@@ -40,6 +40,7 @@ variant = types.SimpleNamespace(
     RENAME={**gpt2.RENAME, "mlp": ["mlp", "ffn"]},
     ENVOYS={**gpt2.ENVOYS, GPT2Attention: Attention},
     Layer=gpt2.Layer, Attention=Attention, Mlp=gpt2.Mlp,   # optional: status() walks the tree
+    intermediate_size=gpt2.intermediate_size,               # GPT-2's size spelling (n_inner), or the root's plain rule answers
 )
 families.register(variant)
 
@@ -67,7 +68,18 @@ block value (`tests/test_registry.py::test_register_needs_only_names_and_envoys_
 `StandardizedTransformer.status()` walks the envoy tree the `ENVOYS` build, so the
 `self_attn.*` / `mlp.*` / `linear_attn.*` names are whatever the blocks' `Standard`
 children carry; the family's `Attention`, `Mlp` and `LinearAttention` attributes are not
-read. Two things do read more of the family later:
+read.
+
+The root's sizes read the family too: each is a `StandardizedProperty` that calls
+`getattr(model.family, <name>)` with the model when it exists, else its plain rule over the
+config. So a registered family may carry a function named after any root size, and the
+same `SimpleNamespace` with `hidden_size=lambda model: 999` makes `model.hidden_size` 999
+while `model.num_heads` keeps the root's `config.num_attention_heads`
+(`tests/test_registry.py::test_family_defines_a_size_instead_of_the_root`). What a
+shipped family spells its own way is listed in
+[../usage/root-values.md](../usage/root-values.md#sizes).
+
+Two things do read more of the family later:
 
 - `nnter.route_delta_rule(model.family, ...)` finds a hybrid's mixer module through
   `family.ENVOYS`.
@@ -76,7 +88,12 @@ read. Two things do read more of the family later:
   `FamilySuite` carries the classes.
 
 A shipped family's module has all of these, so a variant built by spreading a shipped
-family's dicts and reusing its classes, as above, is complete.
+family's dicts, reusing its classes and carrying its size functions, as above, is
+complete. The size functions are the part a spread of `RENAME` and `ENVOYS` leaves
+behind: on `hf-internal-testing/tiny-random-gpt2` a variant without
+`intermediate_size=gpt2.intermediate_size` answers `model.intermediate_size` with the
+config's unused `intermediate_size` key (37) instead of `n_inner`'s `4 * hidden_size`
+(128).
 
 ## The lookup order
 
@@ -105,7 +122,7 @@ The list is `sorted(set(known()) | set(REGISTRY))`, so a registered type appears
 | | `register(family)` | `rename=` / `envoys=` on a load |
 | --- | --- | --- |
 | scope | every load of those model types in this process | that one model |
-| what changes | the whole family: names and envoy classes, for every load | extra aliases merged over the family's `RENAME`; extra envoy classes merged over its `ENVOYS`; a key given wins |
+| what changes | the whole family: names, envoy classes and size functions, for every load | extra aliases merged over the family's `RENAME`; extra envoy classes merged over its `ENVOYS`; a key given wins |
 | `model.family` | the registered object | the shipped module |
 | `model.status()` | the values on the tree the registered `ENVOYS` build | the values on the tree, including any a class passed through `envoys=` adds |
 | undo | `del families.REGISTRY[model_type]` | load again without it |
@@ -131,6 +148,11 @@ before path keys, so displacing a family's type-keyed envoy takes a type key of 
   tree and reads none of them; the `UnsupportedFamily` message names the three attributes
   the load path reads, and they are enough. The suite (`FamilySuite`) does read the classes.
 - **`known()` and `all_families()` are the shipped modules only.**
+- **Carry a shipped family's size functions into a variant.** `RENAME` and `ENVOYS` are
+  dicts to spread; `num_kv_heads`, `head_dim`, `qk_head_dim` and `intermediate_size` are
+  module functions the root looks up on `model.family` by name, so a variant of Falcon,
+  DeepSeek, GPT-2, GPT-J, OPT, MPT or BLOOM passes them on
+  (`intermediate_size=gpt2.intermediate_size`) or the root's plain rule answers.
 - **A registered family's classes must be importable by name where the trace runs.** A
   remote trace carries the envoy tree's classes by reference; a class defined in a
   script's `__main__` or a `SimpleNamespace` built inline is not importable on a server.

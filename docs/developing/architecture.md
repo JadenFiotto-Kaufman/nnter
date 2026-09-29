@@ -15,8 +15,8 @@ A **family** (`nnter/families/<model_type>.py`) knows the checkpoint's *names*
 and *which operation* in its forward each value lives at. A **component**
 (`nnter/components/`) knows *what a value means* and how to read and write
 it through nnsight. `StandardizedTransformer` (`nnter/standardized.py`) knows
-the *root*: the whole-model values, the methods over the values, the sizes,
-and the load path that wires the other two into nnsight's `rename=` and
+the *root*: the whole-model values, the methods over the values, the sizes
+(their plain rule; a family supplies its own spelling), and the load path that wires the other two into nnsight's `rename=` and
 `envoys=`. This page is the map; the other developing pages go one level
 down into each box.
 
@@ -57,7 +57,7 @@ rest of this page says which.
 ```
  checkpoint / nn.Module
         │
-        ▼  StandardizedTransformer.__init__                    nnter/standardized.py:74-101
+        ▼  StandardizedTransformer.__init__                    nnter/standardized.py:103-130
  ┌──────────────────────────────────────────────────────────────────────────────┐
  │ config = _read_config(repo_id, kwargs)            AutoConfig, before any build │
  │ family = families.lookup(config.model_type)        REGISTRY, else import module │
@@ -85,35 +85,38 @@ rest of this page says which.
    EProperty.__get__ ── _check(unavailable) ── nnsight eproperty over "{path}.{key}"   (boundary values)
    SourceEProperty.__get__ ── _check ── _drill(obj.source ...) ── op.output / op.inputs (values inside a forward)
    RelativeEProperty ── _location("../post_attention_layernorm.output")                  (a sibling's value)
+        │
+        ▼  outside a trace, a size read
+   StandardizedProperty.__get__ ── family.<name>(model) if the family module defines it, else the plain rule over config
 ```
 
 ## Data flow through `__init__`
 
-`StandardizedTransformer.__init__` (`nnter/standardized.py:74-101`) runs in
+`StandardizedTransformer.__init__` (`nnter/standardized.py:103-130`) runs in
 this order, and the order matters:
 
-1. **Config first.** `_read_config` (`standardized.py:418-434`) returns a
+1. **Config first.** `_read_config` (`standardized.py:421-436`) returns a
    ready module's own `config`, or `AutoConfig.from_pretrained(repo_id,
    revision=, trust_remote_code=)`. It runs before nnsight builds anything, so
    a config transformers cannot parse fails here with transformers' own error,
    and so the family is known before the meta build.
 2. **Family lookup.** `families.lookup(getattr(config, "text_config",
-   config).model_type)` (`standardized.py:88`). A multimodal config nests the
+   config).model_type)` (`standardized.py:117`). A multimodal config nests the
    language model's config as `text_config`; the text-generation task builds
    that model, so its `model_type` is the one that decides.
 3. **Merge and hand to nnsight.** `rename={**self.family.RENAME, **(rename
    or {})}` and `envoys={**self._base_envoys(...), **self.family.ENVOYS,
-   **(envoys or {})}` (`standardized.py:92-97`). Later keys win: a user's
+   **(envoys or {})}` (`standardized.py:121-126`). Later keys win: a user's
    entry replaces the family's on the same key
    (`tests/test_registry.py:61-77`). `_base_envoys`
-   (`standardized.py:103-113`) starts from nnsight's tensor-parallel envoys
+   (`standardized.py:132-141`) starts from nnsight's tensor-parallel envoys
    when the load shards, because `TransformersModel` only *defaults*
    `envoys` to `tp_envoys()` (nnsight `modeling/transformers.py:339-343`;
    `modeling/tp/envoys.py:117`, `:131`): passing any map of our own would
    otherwise drop them on a sharded load.
-4. **`task` defaults to `"text-generation"`** (`standardized.py:83`), and
+4. **`task` defaults to `"text-generation"`** (`standardized.py:112`), and
    `tokenizer_kwargs` become attributes on the loaded tokenizer
-   (`standardized.py:100-101`).
+   (`standardized.py:129-130`).
 
 ## What nnsight does with the two maps
 
@@ -156,9 +159,9 @@ eproperty that carries a `description` (`envoy.py:1066-1095`), which is how
 
 | layer | owns | must not know |
 |---|---|---|
-| `nnter/families/<model_type>.py` | `MODEL_TYPES`; `RENAME` (native name → standard name); `Layer`/`Attention`/`Mlp`/`LinearAttention` subclasses that point a value at *this family's* op or sibling; `ENVOYS` keyed on transformers types | what a value means, how nnsight serves it |
+| `nnter/families/<model_type>.py` | `MODEL_TYPES`; `RENAME` (native name → standard name); `Layer`/`Attention`/`Mlp`/`LinearAttention` subclasses that point a value at *this family's* op or sibling; `ENVOYS` keyed on transformers types; a module-level `def <size>(model)` for each root size *this family's* config spells its own way (`falcon.py`: `num_kv_heads`, `intermediate_size`; `deepseek_v2.py`: `head_dim`, `qk_head_dim`) | what a value means, how nnsight serves it; the plain rule for a size |
 | `nnter/components/` | what each standard value **means** (`layer_output` is the residual stream leaving the block, `attention_output` the contribution, `attention_probabilities` the post-dropout pattern); how to read/write it (`EProperty`, `SourceEProperty`, `RelativeEProperty`, `DerivedEProperty`); availability (`unavailable=`, `status`); the default op on transformers' shared interface (`INTERFACE`, `attention.py:26`) | any one family's module names or classes |
-| `nnter/standardized.py` | the root values (`logits`, `token_embeddings`, `next_token_probs`, `input_ids`, `attention_mask`, `input_size`); the methods (`skip_layers`, `steer`, `project_on_vocab`, `get_topk_closest_tokens`); the sizes (`num_layers` … `intermediate_size`, `standardized.py:336-401`); `status()` over the tree (`:225-289`: `_hosts` unions each block's `Standard` children under their standard names, a mounted alias such as DBRX's `norm_attn_norm.attn` included, so a value installed through `envoys=` is listed and a module no block has is not); the remote key (`:405-414`) | op names inside a forward |
+| `nnter/standardized.py` | the root values (`logits`, `token_embeddings`, `next_token_probs`, `input_ids`, `attention_mask`, `input_size`); the methods (`skip_layers`, `steer`, `project_on_vocab`, `get_topk_closest_tokens`); the sizes (`num_layers` … `intermediate_size`, `standardized.py:365-403`), each a `StandardizedProperty` (`:19-43`) holding the plain rule over the config and yielding on read to a same-named function in `model.family`; `status()` over the tree (`:254-318`: `_hosts` unions each block's `Standard` children under their standard names, a mounted alias such as DBRX's `norm_attn_norm.attn` included, so a value installed through `envoys=` is listed and a module no block has is not); the remote key (`:407-416`) | op names inside a forward; any one family's config keys |
 
 Two examples of the boundary. Gemma-2's contribution is the post-attention
 norm's output: the *family* says so with a `RelativeEProperty` on its
@@ -169,7 +172,15 @@ argument of `dropout_add`: the family names the op
 (`families/bloom.py:77-83`), the component `SourceEProperty` knows how to
 drill to it and read `.input`. A family that keeps transformers' shared
 path overrides nothing (`families/llama.py:22-31`: three empty subclasses)
-and its module is three dict entries plus the type keys.
+and its module is three dict entries plus the type keys. The sizes draw the
+same line: the *root* holds the plain rule (`num_kv_heads` is
+`config.num_key_value_heads` or `num_heads`, `standardized.py:385-388`), and
+Falcon, whose config says `num_kv_heads`, `multi_query` or neither, says so
+in a function of that name in its own module (`families/falcon.py`, the
+`sizes` section at its end); `StandardizedProperty.__get__` (`:36-40`)
+looks it up on `model.family` and calls it, or falls back to the rule;
+`__set__` (`:42-43`) refuses an assignment, so the family module is the only
+place a size is said.
 
 ### The base envoys
 
@@ -218,7 +229,7 @@ checkpoint of that type is looked up, and never earlier.
 
 | concern | file |
 |---|---|
-| load path, root values, methods, sizes, `status()` | `nnter/standardized.py` |
+| load path, root values, methods, sizes and `StandardizedProperty`, `status()` | `nnter/standardized.py` |
 | registry, `lookup`, `register`, `UnsupportedFamily` | `nnter/families/__init__.py` |
 | one family | `nnter/families/<model_type>.py` |
 | descriptors | `nnter/components/eproperty.py` ([eproperty-internals.md](eproperty-internals.md)) |
@@ -233,10 +244,10 @@ checkpoint of that type is looked up, and never earlier.
   can only be displaced by a type key (nnsight `envoy.py:364-369`).
 - The family is chosen from `config.model_type` *before* the model is built,
   so an already-loaded `nn.Module` is looked up by its own `config`
-  (`standardized.py:426-427`; `tests/test_registry.py:54-58`).
+  (`standardized.py:428-429`; `tests/test_registry.py:54-58`).
 - Passing `envoys=` of your own to a plain `TransformersModel` drops
   nnsight's tensor-parallel envoys; `StandardizedTransformer` starts from
-  them (`standardized.py:103-113`), so do the same in a subclass.
+  them (`standardized.py:132-141`), so do the same in a subclass.
 - Reads inside one trace follow forward order, and a value inside a block
   (`attention_probabilities`) fires before the block's `layer_output`; the
   canonical example reads them in that order. Read out of order and the
@@ -244,6 +255,10 @@ checkpoint of that type is looked up, and never earlier.
 - `import nnter` before any `transformers.models...modeling_*` import in a
   script; the reverse order segfaults on this stack
   ([transformers-compat.md](transformers-compat.md)).
+- A size override is a function on the family *module*, looked up by name on
+  `model.family` at read time; a family object passed to `register()` carries
+  it as an attribute (`tests/test_registry.py:121-131`), and a variant that
+  spreads a shipped family's dicts leaves the shipped functions behind.
 
 ## Related
 

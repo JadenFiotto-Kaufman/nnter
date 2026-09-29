@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from types import ModuleType
-from typing import Any, Sequence
+import functools
+from typing import Any, Callable, Sequence
 
 import torch
 from jaxtyping import Float, Int
@@ -13,6 +14,33 @@ from torch import Tensor
 
 from . import families
 from .components import EProperty, Layer, RelativeEProperty, Standard
+
+
+class StandardizedProperty:
+    """A read-only value of the model that a family may define instead.
+
+    Wraps the standard implementation. On read, a function of the same name
+    in the model's family module wins (``def num_kv_heads(model): ...`` in
+    ``falcon.py``), so a family whose config spells a size its own way keeps
+    that knowledge beside its names and values, and the implementation here
+    stays the plain case.
+    """
+
+    def __init__(self, fget: Callable[[Any], Any]) -> None:
+        self.fget = fget
+        functools.update_wrapper(self, fget)
+
+    def __set_name__(self, owner: type, name: str) -> None:
+        self.name = name
+
+    def __get__(self, obj: Any, owner: type | None = None) -> Any:
+        if obj is None:
+            return self
+        override = getattr(obj.family, self.name, None)
+        return override(obj) if override is not None else self.fget(obj)
+
+    def __set__(self, obj: Any, value: Any) -> None:
+        raise AttributeError(f"{self.name} is read off the config; a family defines `def {self.name}(model)` to say it otherwise")
 
 
 class StandardizedTransformer(TransformersModel):
@@ -54,7 +82,8 @@ class StandardizedTransformer(TransformersModel):
     (the embedding's output) and ``next_token_probs``; and outside one: the
     sizes ``num_layers``, ``num_heads``, ``num_kv_heads``, ``head_dim``,
     ``qk_head_dim``, ``hidden_size``, ``intermediate_size`` and ``vocab_size``,
-    read off the config with the fallbacks older configs need.
+    read off the config, each a `StandardizedProperty` the family can define
+    instead.
 
     Attributes:
         family: The toolkit module the checkpoint resolved to.
@@ -334,71 +363,44 @@ class StandardizedTransformer(TransformersModel):
         return self._add_prefix_false_tokenizer
 
     # -- sizes (from the config) ----------------------------------------------
+    # Each is the plain case; a family whose config says it otherwise defines
+    # a function of the same name (see `StandardizedProperty`).
 
-    @property
+    @StandardizedProperty
     def num_layers(self) -> int:
         return len(self.layers)
 
-    @property
+    @StandardizedProperty
     def hidden_size(self) -> int:
         return self.config.hidden_size
 
-    @property
+    @StandardizedProperty
     def vocab_size(self) -> int:
         return self.config.vocab_size
 
-    @property
+    @StandardizedProperty
     def num_heads(self) -> int:
         return self.config.num_attention_heads
 
-    @property
+    @StandardizedProperty
     def num_kv_heads(self) -> int:
-        """Key/value heads: fewer than ``num_heads`` under grouped-query attention."""
-        config = self.config
-        heads = getattr(config, "num_key_value_heads", None)
-        if heads is not None:
-            return heads
-        if getattr(config, "new_decoder_architecture", False):  # Falcon's 40B layout
-            return config.num_kv_heads
-        return 1 if getattr(config, "multi_query", False) else self.num_heads
+        """Key/value heads: ``num_key_value_heads`` under grouped-query attention, else `num_heads`."""
+        return getattr(self.config, "num_key_value_heads", None) or self.num_heads
 
-    @property
+    @StandardizedProperty
     def head_dim(self) -> int:
-        """Width of one attention head's values and outputs.
+        """Width of one attention head: the config's ``head_dim`` when it says (Qwen3, Gemma), else ``hidden_size // num_heads``."""
+        return getattr(self.config, "head_dim", None) or self.hidden_size // self.num_heads
 
-        ``v_head_dim`` on multi-head latent attention (DeepSeek), else the
-        config's ``head_dim`` when it says (Qwen3, Gemma), else
-        ``hidden_size // num_heads``.
-        """
-        config = self.config
-        return getattr(config, "v_head_dim", None) or getattr(config, "head_dim", None) or self.hidden_size // self.num_heads
-
-    @property
+    @StandardizedProperty
     def qk_head_dim(self) -> int:
-        """Width of one head's queries and keys: `head_dim`, except under multi-head latent attention, where it is ``qk_nope_head_dim + qk_rope_head_dim``."""
-        config = self.config
-        if getattr(config, "qk_nope_head_dim", None) is not None:
-            return config.qk_nope_head_dim + config.qk_rope_head_dim
+        """Width of one head's queries and keys: `head_dim`, unless the family separates them (DeepSeek's latent attention)."""
         return self.head_dim
 
-    @property
+    @StandardizedProperty
     def intermediate_size(self) -> int:
-        """Width of the MLP's hidden layer.
-
-        The dense MLP's width; a mixture of experts' experts are
-        ``config.moe_intermediate_size`` wide instead. A GPT-2-style config
-        says it as ``n_inner`` (``None`` meaning 4 times the hidden size) and
-        may carry an ``intermediate_size`` the model never reads, so
-        ``n_inner`` is consulted first. Otherwise the config's
-        ``intermediate_size`` (``ffn_dim`` on OPT), else ``expansion_ratio``
-        (MPT) or 4 times the hidden size (BLOOM, Falcon).
-        """
-        if hasattr(self.config, "n_inner"):
-            return self.config.n_inner or 4 * self.hidden_size
-        size = getattr(self.config, "intermediate_size", None) or getattr(self.config, "ffn_dim", None)
-        if size is not None:
-            return size
-        return int(self.hidden_size * getattr(self.config, "expansion_ratio", 4))
+        """Width of the dense MLP's hidden layer, ``config.intermediate_size``; a mixture of experts' experts are ``moe_intermediate_size`` wide."""
+        return self.config.intermediate_size
 
     # -- remote ------------------------------------------------------------------
 

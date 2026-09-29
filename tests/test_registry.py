@@ -116,3 +116,23 @@ def test_custom_value_through_envoys_is_in_status():
     assert model.status()["self_attn.heads"] is None
     assert model.status(layer=0)["self_attn.heads"] is None
     assert "self_attn.heads" not in StandardizedTransformer(GPT2).status()
+
+
+def test_family_defines_a_size_instead_of_the_root():
+    """A function named like a `StandardizedProperty` in the family module wins over the root's implementation."""
+    custom = types.SimpleNamespace(MODEL_TYPES=("gpt2",), RENAME=gpt2.RENAME, ENVOYS=gpt2.ENVOYS, hidden_size=lambda model: 999)
+    try:
+        families.register(custom)
+        model = StandardizedTransformer(GPT2)
+    finally:
+        del families.REGISTRY["gpt2"]
+    assert model.hidden_size == 999
+    assert model.num_heads == model.config.num_attention_heads  # the rest keep the root's
+    assert StandardizedTransformer(GPT2).hidden_size == StandardizedTransformer(GPT2).config.hidden_size
+
+
+def test_sizes_are_read_only():
+    model = StandardizedTransformer(GPT2)
+    with pytest.raises(AttributeError, match="def hidden_size"):
+        model.hidden_size = 5
+

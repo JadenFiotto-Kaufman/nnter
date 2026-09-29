@@ -2,8 +2,8 @@
 title: Root values and sizes
 one_liner: "The model answers for the whole run — `logits`, `token_embeddings`, `next_token_probs`, `input_ids`, `attention_mask`, `input_size` — and for its sizes from the config."
 tags: [usage, logits, token_embeddings, next_token_probs, input_ids, sizes, config]
-related: [docs/usage/residual-stream.md, docs/usage/methods.md, docs/usage/layouts.md, docs/usage/availability.md]
-sources: [nnter/standardized.py, nnter/components/eproperty.py]
+related: [docs/usage/residual-stream.md, docs/usage/methods.md, docs/usage/layouts.md, docs/usage/availability.md, docs/extending/adding-a-family.md]
+sources: [nnter/standardized.py, nnter/components/eproperty.py, nnter/families/falcon.py, nnter/families/deepseek_v2.py, nnter/families/gpt2.py]
 ---
 
 # Root values and sizes
@@ -14,7 +14,8 @@ Inside a trace the root envoy carries the values that belong to the whole model 
 than to one block: the final logits, the embeddings entering block 0, the next-token
 distribution, and the ids and mask the model was called with. Outside a trace it answers
 for the sizes an experiment needs (`num_layers`, `hidden_size`, `num_heads`, ...), read off
-the config with the fallbacks older configs need. Both are the same on every family.
+the config by one plain rule, or by the family's own spelling where its config differs.
+Both are the same on every family.
 
 ## Canonical pattern
 
@@ -127,24 +128,56 @@ The three print with the model:
 
 ## Sizes
 
-Plain properties, readable before any trace and without `dispatch`:
+Each size is a `StandardizedProperty` on the root, read-only, readable before any trace and
+without `dispatch`. It reads the config by the plain rule below unless the model's family module
+defines a function of the same name (`def num_kv_heads(model): ...` in `falcon.py`), in
+which case that function answers. The plain rule is what a Llama-style config needs; a
+family whose config spells a size its own way keeps that spelling beside its names and
+values, and anything the family does not define falls to the plain rule.
 
-| size | what it reads |
+| size | the plain rule |
 | --- | --- |
 | `num_layers` | `len(model.layers)` |
 | `hidden_size` | `config.hidden_size` |
 | `vocab_size` | `config.vocab_size` |
 | `num_heads` | `config.num_attention_heads` |
-| `num_kv_heads` | `config.num_key_value_heads`; else `config.num_kv_heads` on Falcon's 40B layout (`new_decoder_architecture`); else `1` under `multi_query`, else `num_heads` |
-| `head_dim` | `config.v_head_dim` under multi-head latent attention (DeepSeek); else `config.head_dim` when the config says (Qwen3, Gemma); else `hidden_size // num_heads` |
-| `qk_head_dim` | `qk_nope_head_dim + qk_rope_head_dim` under latent attention; else `head_dim` |
-| `intermediate_size` | `config.n_inner` on a GPT-2-style config (`None` meaning `4 * hidden_size`; its `intermediate_size` is never read by the model); else `config.intermediate_size` or `config.ffn_dim` (OPT); else `hidden_size * expansion_ratio` (MPT) or `4 * hidden_size` (BLOOM, Falcon) |
+| `num_kv_heads` | `config.num_key_value_heads`, else `num_heads` |
+| `head_dim` | `config.head_dim` when the config says (Qwen3, Gemma), else `hidden_size // num_heads` |
+| `qk_head_dim` | `head_dim` |
+| `intermediate_size` | `config.intermediate_size` |
 
-`head_dim` is the config's on Qwen3 and Gemma, not `hidden // heads`: a Qwen3 checkpoint
-with `hidden_size=8`, `num_heads=4` and `head_dim=128` has 128-wide heads. On DeepSeek-V3
-`head_dim` (values, 128) and `qk_head_dim` (queries and keys, 192) differ; see
-[layouts](layouts.md). A mixture of experts' experts are `config.moe_intermediate_size`
-wide, not `intermediate_size`.
+The families whose configs say it otherwise:
+
+| family | defines | what it reads |
+| --- | --- | --- |
+| `falcon` | `num_kv_heads` | `config.num_kv_heads` on the 40B layout (`new_decoder_architecture`); `1` under `multi_query`; else `num_heads` |
+| `falcon` | `intermediate_size` | `config.ffn_hidden_size` |
+| `deepseek_v2`, `deepseek_v3` | `head_dim` | `config.v_head_dim`, the width of one head's values and outputs. The config's own `head_dim` key is the latent width, which no served value has. |
+| `deepseek_v2`, `deepseek_v3` | `qk_head_dim` | `config.qk_nope_head_dim + config.qk_rope_head_dim` |
+| `gpt2`, `gptj` | `intermediate_size` | `config.n_inner`, `None` meaning `4 * hidden_size`. GPT-2's config also carries an `intermediate_size` key the model never reads. |
+| `opt` | `intermediate_size` | `config.ffn_dim` |
+| `mpt` | `intermediate_size` | `config.expansion_ratio * hidden_size` |
+| `bloom` | `intermediate_size` | `4 * hidden_size`; the config has no key for it |
+
+On the tiny checkpoints:
+
+```python
+StandardizedTransformer("hf-internal-testing/tiny-random-gpt2").intermediate_size      # 128: n_inner is None, so 4 * hidden_size (config.intermediate_size says 37)
+StandardizedTransformer("Rocketknight1/tiny-random-falcon-7b").num_kv_heads           # 1: multi_query
+StandardizedTransformer("Rocketknight1/tiny-random-falcon-40b").num_kv_heads          # 8: config.num_kv_heads, with num_heads 128
+StandardizedTransformer("hf-internal-testing/tiny-random-OPTForCausalLM").intermediate_size   # 4: config.ffn_dim
+model = StandardizedTransformer("hf-internal-testing/tiny-random-DeepseekV3ForCausalLM")
+model.head_dim, model.qk_head_dim                                                      # (128, 192): v_head_dim, and nope + rope
+```
+
+`head_dim` is the config's on Qwen3 and Gemma, not `hidden // heads`, by the plain rule:
+a Qwen3 checkpoint with `hidden_size=8`, `num_heads=4` and `head_dim=128` has 128-wide
+heads. On DeepSeek-V3 `head_dim` (values, 128) and `qk_head_dim` (queries and keys, 192)
+differ; see [layouts](layouts.md). A mixture of experts' experts are
+`config.moe_intermediate_size` wide, not `intermediate_size`.
+
+A family of your own, shipped or passed to `nnter.families.register()`, defines a size the
+same way: [adding-a-family](../extending/adding-a-family.md#sizes).
 
 ## Gotchas
 
@@ -158,6 +191,12 @@ wide, not `intermediate_size`.
   the new ids have another length.
 - **`intermediate_size` is the dense MLP's width.** For an all-MoE family read
   `config.moe_intermediate_size`.
+- **A size is read-only.** `model.hidden_size = 5` raises `AttributeError: hidden_size is
+  read off the config; a family defines `def hidden_size(model)` to say it otherwise`. The
+  family module is the one place a size is said.
+- **A variant registered by spreading a shipped family's dicts drops its size functions.**
+  Carry them over (`intermediate_size=gpt2.intermediate_size`), or the root's plain rule
+  answers: see [registering](../extending/registering.md).
 
 ## Related
 

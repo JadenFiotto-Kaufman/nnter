@@ -7,12 +7,17 @@ arithmetic in ``_attn`` rather than the shared eager forward, so the pattern
 and the rest of the interior are read around that method call.
 """
 
+from typing import TYPE_CHECKING
+
 import torch
 from jaxtyping import Float
 from torch import Tensor
 from transformers.models.gptj.modeling_gptj import GPTJAttention, GPTJBlock, GPTJMLP
 
 from ..components import Attention, Layer, Mlp, SourceEProperty, needs_eager, seq_first
+
+if TYPE_CHECKING:
+    from ..standardized import StandardizedTransformer
 
 MODEL_TYPES = ("gptj",)
 
@@ -79,3 +84,10 @@ class Mlp(Mlp):
 
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.
 ENVOYS = {GPTJBlock: Layer, GPTJAttention: Attention, GPTJMLP: Mlp}
+
+
+# -- sizes: what GPT-J's config calls them ------------------------------------------
+
+def intermediate_size(model: "StandardizedTransformer") -> int:
+    """The MLP width is ``n_inner``, ``None`` meaning four times the hidden size."""
+    return model.config.n_inner or 4 * model.hidden_size

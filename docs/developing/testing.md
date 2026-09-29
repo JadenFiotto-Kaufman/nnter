@@ -23,7 +23,7 @@ cd ~/wd/nnter
 export HF_HUB_OFFLINE=1
 pytest                                   # 1200 passed in ~71 s (75 s wall) on CPU
 pytest tests/families/test_gpt2.py -q    # one family: 36 passed in 2.9 s (7.1 s wall)
-pytest tests/test_registry.py -q         # 9 passed in 8.0 s (12.4 s wall; one test spawns a subprocess)
+pytest tests/test_registry.py -q         # 13 passed in 7.6 s (one test spawns a subprocess)
 pytest "tests/families/test_gpt2.py::TestGPT2::test_contribution_identity" -q -x   # one test, stop on first failure
 ```
 
@@ -224,7 +224,7 @@ split and add the DeltaNet tests
 
 ## The root tests
 
-`tests/test_registry.py` (11 tests): every module under `nnter/families/` is
+`tests/test_registry.py` (13 tests): every module under `nnter/families/` is
 named after its single `MODEL_TYPES` entry and there are at least 31
 (`:15-20`); `import nnter` pulls in no `transformers.models.*.modeling_*`
 module and `lookup("gpt2")` imports only that family, checked in a
@@ -238,7 +238,11 @@ default load keeps the checkpoint's attention and `status()` names `eager`
 answers `status()` with every block value (`:95-103`); a value on an
 `Attention` subclass passed through `envoys=` is listed by `status()` and
 `status(layer=0)` as `self_attn.<name>`, and a load without it does not list
-it (`:106-118`).
+it (`:106-118`); a family registered with `hidden_size=lambda model: 999`
+answers `model.hidden_size` with 999 while `num_heads` keeps the root's rule,
+and a plain load reads `config.hidden_size` (`:121-131`); assigning a size
+(`model.hidden_size = 5`) raises `AttributeError` naming `def hidden_size`
+(`:134-137`).
 
 `tests/test_base.py` (2 tests): the base `Layer` on a plain
 `TransformersModel` over GPT-J unwraps and rewraps a tuple block output

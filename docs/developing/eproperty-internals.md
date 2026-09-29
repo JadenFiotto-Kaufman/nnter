@@ -201,7 +201,7 @@ parent by string surgery on `obj.path` when the path starts with `../`
 becomes `model.layers.0.post_attention_layernorm.output`, by **native**
 name since it is a path string), or resolves the path from the envoy with
 `obj.get(path).path`, which follows aliases (`"embed_tokens.output"` on the
-root reaches `transformer.wte` on GPT-2, `standardized.py:132-140`). Reading
+root reaches `transformer.wte` on GPT-2, `standardized.py:161-169`). Reading
 and writing then go through `eproperty.__get__` / `__set__` unchanged, so
 `transform` *is* available on this descriptor.
 
@@ -252,6 +252,18 @@ three are used.
 | a sibling's value (Gemma-2 `attention_output`) | `RelativeEProperty("../norm.output")` | the sibling's `.output` | as `EProperty` |
 | computed (`states`) | `DerivedEProperty(compute)` | none | refused |
 | declared missing | `unavailable("reason")` | none | refused with the reason |
+
+One thing on the root is none of these. A size (`num_layers`, `hidden_size`,
+`vocab_size`, `num_heads`, `num_kv_heads`, `head_dim`, `qk_head_dim`,
+`intermediate_size`) is a `StandardizedProperty` (`nnter/standardized.py:19-43`),
+a bare descriptor with no `eproperty` underneath: no location, nothing served
+during a trace, no `description`, `layout` or `status()` entry.
+Its `__get__` (`:36-40`) does one lookup, `getattr(obj.family, name)`, and calls
+that function with the model when the family module defines it, else the
+wrapped plain rule (`:365-403`); its `__set__` (`:42-43`) raises
+`AttributeError("<name> is read off the config; a family defines `def <name>(model)`
+to say it otherwise")`, so an assignment cannot shadow it. It is what lets `falcon.py` say
+`num_kv_heads` and `deepseek_v2.py` say `head_dim` without a subclass of the root.
 
 ## Gotchas
 

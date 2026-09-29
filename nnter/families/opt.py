@@ -9,9 +9,14 @@ and `StandardizedTransformer.status` says so. The block's own
 single-component alias would also bind on the decoder's final norm.
 """
 
+from typing import TYPE_CHECKING
+
 from transformers.models.opt.modeling_opt import OPTAttention, OPTDecoderLayer
 
 from ..components import Attention, Layer, Mlp
+
+if TYPE_CHECKING:
+    from ..standardized import StandardizedTransformer
 
 MODEL_TYPES = ("opt",)
 
@@ -37,3 +42,10 @@ class Mlp(Mlp):
 
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``. No MLP module to key.
 ENVOYS = {OPTDecoderLayer: Layer, OPTAttention: Attention}
+
+
+# -- sizes: what OPT's config calls them --------------------------------------------
+
+def intermediate_size(model: "StandardizedTransformer") -> int:
+    """The width of the block's ``fc1``/``fc2`` path is ``ffn_dim``."""
+    return model.config.ffn_dim
