@@ -5,10 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 import torch
-from jaxtyping import Float
-from torch import Tensor
 
 from .eproperty import EProperty
+from .layer import Residual
 from .standard import Standard, first_tensor, rewrap
 
 
@@ -16,7 +15,7 @@ class Mlp(Standard):
     """A feed-forward module. Its contribution is ``mlp_output``."""
 
     @EProperty(key="output", description="What the MLP adds to the residual stream")
-    def mlp_output(self, value: Any) -> Float[Tensor, "batch seq hidden"]:
+    def mlp_output(self, value: Any) -> Residual:
         """The MLP sublayer's contribution to the residual stream.
 
         A tensor even when the module returns a tuple (a mixture of experts

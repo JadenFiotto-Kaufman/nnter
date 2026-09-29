@@ -10,7 +10,7 @@ sources: [nnter/__init__.py, nnter/standardized.py, nnter/components/__init__.py
 
 ## What this is for
 
-One page with every name nnter exports, its signature as the source declares it, and for every standard value its layout, whether it can be assigned, and what decides its availability. `model` is a `StandardizedTransformer`. Everything nnsight's `TransformersModel` offers (`trace`, `generate`, `session`, `edit`, `tracer.iter`, `.save()`, `remote=`) is inherited unchanged and is documented in nnsight `docs/reference/api-quick-reference.md`; this page covers only what nnter adds. Signatures are taken from the source; the value rows are what `Standard.values()` reports on each host class.
+One page with every name nnter exports, its signature as the source declares it, and for every standard value its layout (by name; the axes are in the [layouts table](#layouts)), whether it can be assigned, and what decides its availability. `model` is a `StandardizedTransformer`. Everything nnsight's `TransformersModel` offers (`trace`, `generate`, `session`, `edit`, `tracer.iter`, `.save()`, `remote=`) is inherited unchanged and is documented in nnsight `docs/reference/api-quick-reference.md`; this page covers only what nnter adds. Signatures are taken from the source; the value rows are what `Standard.values()` reports on each host class.
 
 ## Canonical pattern
 
@@ -74,13 +74,13 @@ The constructor reads the checkpoint's config first (`AutoConfig`; a multimodal 
 
 Every row is an `EProperty` on the root, listed in `repr(model)` with its description and reported by `status()`.
 
-| Value | Layout (`.dims`) | Assignable | Description (as the repr shows it) |
+| Value | Layout | Assignable | Description (as the repr shows it) |
 |---|---|---|---|
-| `model.logits` | `batch seq vocab` | yes: replaces `output.logits` | The model's final logits, softcapping applied (Gemma-2); `model.lm_head.output` is the raw projection. |
-| `model.token_embeddings` | `batch seq hidden` | yes | The token embeddings entering the first block: `embed_tokens.output`, before positional embeddings and embedding norms. A `RelativeEProperty`. |
-| `model.next_token_probs` | `batch vocab` | no (`AttributeError`: assign `logits`) | `logits[:, -1].softmax(-1)`; the last position is every row's last token only under left padding. |
-| `model.input_ids` | `batch seq` | yes: the model runs on the ids you set | The token ids the model was called with. |
-| `model.attention_mask` | `batch seq` | yes | The attention mask the model was called with; zeros are padding. |
+| `model.logits` | `Logits` | yes: replaces `output.logits` | The model's final logits, softcapping applied (Gemma-2); `model.lm_head.output` is the raw projection. |
+| `model.token_embeddings` | `Residual` | yes | The token embeddings entering the first block: `embed_tokens.output`, before positional embeddings and embedding norms. A `RelativeEProperty`. |
+| `model.next_token_probs` | `NextTokenProbs` | no (`AttributeError`: assign `logits`) | `logits[:, -1].softmax(-1)`; the last position is every row's last token only under left padding. |
+| `model.input_ids` | `Tokens` | yes: the model runs on the ids you set | The token ids the model was called with. |
+| `model.attention_mask` | `Tokens` | yes | The attention mask the model was called with; zeros are padding. |
 | `model.input_size` | none (a `torch.Size`) | no (`AttributeError`: assign `input_ids`) | `[batch, seq]` of the current call. |
 
 `input_ids`, `attention_mask` and `input_size` are served at the model's input, the first location of a run: read them before any block's value in the same trace.
@@ -133,7 +133,7 @@ The decoder block. `Layer.returns_tuple` (class attribute, default `False`) says
 
 | Value | Layout | Assignable | Description |
 |---|---|---|---|
-| `layer_output` | `batch seq hidden` | yes; in-place edits reach the model | The residual stream leaving the block, a tensor even when the block returns a tuple; assigning to a tuple block keeps the other elements. An `EProperty` over `.output`. |
+| `layer_output` | `Residual` | yes; in-place edits reach the model | The residual stream leaving the block, a tensor even when the block returns a tuple; assigning to a tuple block keeps the other elements. An `EProperty` over `.output`. |
 
 | Method | Signature | What |
 |---|---|---|
@@ -145,15 +145,15 @@ A softmax-attention module. The base class reads everything but `attention_outpu
 
 | Value | Layout | Base location | Assignable | Availability |
 |---|---|---|---|---|
-| `attention_output` | `batch seq hidden` | the module's `.output`, first tensor | yes; in place reaches the model | always |
-| `attention_queries` | `batch heads seq qk_head_dim` | argument 1 of `attention_interface_1`, after RoPE | assign; in place except on GPT-2 (split views) and MPT (`chunk`) | `interface_reason` |
-| `attention_keys` | `batch kv_heads seq qk_head_dim` | argument 2, before `repeat_kv` | as above | `interface_reason` |
-| `attention_values` | `batch kv_heads seq head_dim` | argument 3, before `repeat_kv` | as above | `interface_reason` |
-| `attention_scores` | `batch heads query key` | the input of `nn_functional_softmax_0` inside the interface: scaled and masked | yes; in place reaches the model | `interface_reason` |
-| `attention_probabilities` | `batch heads query key` | the output of `nn_functional_dropout_0` inside the interface: after the softmax, in the model dtype, a sink column dropped | yes; in place reaches the model | `interface_reason` |
-| `attention_head_outputs` | `batch seq heads head_dim` | return 0 of `attention_interface_1`, before the output projection | yes; in place reaches the model | `interface_reason` |
+| `attention_output` | `Residual` | the module's `.output`, first tensor | yes; in place reaches the model | always |
+| `attention_queries` | `Queries` | argument 1 of `attention_interface_1`, after RoPE | assign; in place except on GPT-2 (split views) and MPT (`chunk`) | `interface_reason` |
+| `attention_keys` | `Keys` | argument 2, before `repeat_kv` | as above | `interface_reason` |
+| `attention_values` | `Values` | argument 3, before `repeat_kv` | as above | `interface_reason` |
+| `attention_scores` | `Pattern` | the input of `nn_functional_softmax_0` inside the interface: scaled and masked | yes; in place reaches the model | `interface_reason` |
+| `attention_probabilities` | `Pattern` | the output of `nn_functional_dropout_0` inside the interface: after the softmax, in the model dtype, a sink column dropped | yes; in place reaches the model | `interface_reason` |
+| `attention_head_outputs` | `HeadOutputs` | return 0 of `attention_interface_1`, before the output projection | yes; in place reaches the model | `interface_reason` |
 
-The layouts are what each descriptor's `.dims` reports. `qk_head_dim` differs from `head_dim` only under multi-head latent attention (DeepSeek: 192 against 128 on the pinned V3 checkpoint).
+Each layout is the alias `.layout` returns (`Attention.attention_keys.layout is Keys`), its axes in the [layouts table](#layouts) and in `.dims`. `qk_head_dim` differs from `head_dim` only under multi-head latent attention (DeepSeek: 192 against 128 on the pinned V3 checkpoint).
 
 `interface_reason(envoy)` calls `envoy.off_interface()`, and the base `off_interface()` is `needs_eager`: `"read inside the eager attention forward, but this model runs 'sdpa'; load with attn_implementation='eager'"`. A family overrides `off_interface` to add its own reason (GPT-2's `reorder_and_upcast_attn`).
 
@@ -166,7 +166,7 @@ The layouts are what each descriptor's `.dims` reports. `qk_head_dim` differs fr
 
 | Value | Layout | Base location | Assignable | Availability |
 |---|---|---|---|---|
-| `mlp_output` | `batch seq hidden` | the module's `.output`, first tensor (a mixture of experts returns router scores beside it) | yes; in place reaches the model (Falcon: through a transform, on a copy) | always where the block has an MLP module; OPT has none, so `status()` lists no `mlp.*` key |
+| `mlp_output` | `Residual` | the module's `.output`, first tensor (a mixture of experts returns router scores beside it) | yes; in place reaches the model (Falcon: through a transform, on a copy) | always where the block has an MLP module; OPT has none, so `status()` lists no `mlp.*` key |
 
 ## `LinearAttention`
 
@@ -181,24 +181,24 @@ A hybrid's gated DeltaNet mixer (`layers[i].linear_attn`). Everything but `atten
 
 | Value | Layout | Location | Assignable | Availability |
 |---|---|---|---|---|
-| `attention_output` | `batch seq hidden` | the module's `.output`, first tensor | yes | always |
-| `attention_queries` | `batch seq heads key_dim` | `KERNEL` argument 0 | yes | `needs_torch_kernels` |
-| `attention_keys` | `batch seq heads key_dim` | `KERNEL` argument 1 | yes | `needs_torch_kernels` |
-| `attention_values` | `batch seq heads value_dim` | `KERNEL` argument 2 | yes | `needs_torch_kernels` |
-| `decays` | `batch seq heads` | `KERNEL` keyword `g`; float32, non-positive | yes | `needs_torch_kernels` |
-| `betas` | `batch seq heads` | `KERNEL` keyword `beta`; in `(0, 1)` | yes | `needs_torch_kernels` |
-| `state_input` | `batch heads key_dim value_dim`, or `None` on a fresh prompt | `KERNEL` keyword `initial_state`, read as a clone of the cache's buffer | yes | `needs_torch_kernels` |
-| `attention_head_outputs` | `batch seq heads value_dim` | `KERNEL` return 0, before the gated norm and `out_proj` | yes | `needs_torch_kernels` |
-| `state_output` | `batch heads key_dim value_dim` | `KERNEL` return 1 | yes | `needs_torch_kernels` |
-| `state` | `batch heads key_dim value_dim` | `STATE_OP` inside the token-by-token kernel: one occurrence per token, walked with `tracer.iter` | yes: the following tokens continue from the write | `needs_recurrent_routing` |
-| `states` | `batch seq heads key_dim value_dim` | every occurrence of `STATE_OP` in this call, stacked; a `DerivedEProperty` | no (`AttributeError`; use `set_state_after`) | `needs_recurrent_routing` |
+| `attention_output` | `Residual` | the module's `.output`, first tensor | yes | always |
+| `attention_queries` | `LinearQK` | `KERNEL` argument 0 | yes | `needs_torch_kernels` |
+| `attention_keys` | `LinearQK` | `KERNEL` argument 1 | yes | `needs_torch_kernels` |
+| `attention_values` | `LinearV` | `KERNEL` argument 2 | yes | `needs_torch_kernels` |
+| `decays` | `Gates` | `KERNEL` keyword `g`; float32, non-positive | yes | `needs_torch_kernels` |
+| `betas` | `Gates` | `KERNEL` keyword `beta`; in `(0, 1)` | yes | `needs_torch_kernels` |
+| `state_input` | `State`, or `None` on a fresh prompt | `KERNEL` keyword `initial_state`, read as a clone of the cache's buffer | yes | `needs_torch_kernels` |
+| `attention_head_outputs` | `LinearV` | `KERNEL` return 0, before the gated norm and `out_proj` | yes | `needs_torch_kernels` |
+| `state_output` | `State` | `KERNEL` return 1 | yes | `needs_torch_kernels` |
+| `state` | `State` | `STATE_OP` inside the token-by-token kernel: one occurrence per token, walked with `tracer.iter` | yes: the following tokens continue from the write | `needs_recurrent_routing` |
+| `states` | `States` | every occurrence of `STATE_OP` in this call, stacked; a `DerivedEProperty` | no (`AttributeError`; use `set_state_after`) | `needs_recurrent_routing` |
 
 | Method | Signature | What |
 |---|---|---|
 | `state_after` | `state_after(t: int) -> Tensor` | The state after token `t` of this call, counted from the call's own first token. |
 | `set_state_after` | `set_state_after(t: int, value: Tensor) -> None` | Assign `state` at token `t`; positions after `t` continue from `value`. Reads follow the forward: read earlier positions before the write, later ones after, and `states` only before it. |
 
-`heads` on this host is the module's `num_v_heads`, `key_dim` its `head_k_dim` and `value_dim` its `head_v_dim`. On a decode step the sequence axis is 1.
+`heads` on these layouts is the module's `num_v_heads`, `key_dim` its `head_k_dim` and `value_dim` its `head_v_dim`. On a decode step the sequence axis is 1.
 
 ## `Standard`
 
@@ -234,7 +234,30 @@ A family module declares `MODEL_TYPES: tuple[str, ...]`, `RENAME: dict[str, str]
 | `RelativeEProperty` | `RelativeEProperty(key, description=None, unavailable=None)` | A value produced by another module named relative to this envoy: `key` is `"<path>.<attribute>"`, resolved through aliases (`"embed_tokens.output"` on the root); a leading `../` steps to the parent by native name (`"../post_attention_layernorm.output"`). |
 | `DerivedEProperty` | `DerivedEProperty(compute, description=None, unavailable=None)` | `compute(envoy)` runs at read time inside the trace over any served values; read-only (assignment raises `AttributeError`). Its layout is read off `compute`'s return annotation. |
 
-Every descriptor exposes `.layout` (the `jaxtyping` type from the defining function's return annotation, or `None`), `.dims` (its axis names as a tuple), `.description`, `.reason(envoy)`.
+Every descriptor exposes `.layout` (the layout alias the defining function's return annotation names, or `None`), `.dims` (its axis names as a tuple), `.description`, `.reason(envoy)`.
+
+### Layouts
+
+The fourteen `jaxtyping` types every standard value is annotated with, each defined in the file of the envoy that serves it. `nnter.components` re-exports the eleven envoy-level names; the root's three are importable from `nnter.standardized` only. `value.layout` is the alias itself (`Attention.attention_probabilities.layout is Pattern`), `value.dims` its axes split; a redefinition in a family and a value of your own annotate with the same name (`-> Residual`). `isinstance(tensor, Pattern)` checks rank and dtype.
+
+| Name | Axes | Defined in | Carried by |
+|---|---|---|---|
+| `Residual` | `batch seq hidden` | `components/layer.py` | `layer_output`, `attention_output`, `mlp_output`, `token_embeddings` |
+| `Logits` | `batch seq vocab` | `standardized.py` | `logits` |
+| `NextTokenProbs` | `batch vocab` | `standardized.py` | `next_token_probs` |
+| `Tokens` | `batch seq` (`Int`) | `standardized.py` | `input_ids`, `attention_mask` |
+| `Queries` | `batch heads seq qk_head_dim` | `components/attention.py` | `attention_queries` |
+| `Keys` | `batch kv_heads seq qk_head_dim` | `components/attention.py` | `attention_keys` |
+| `Values` | `batch kv_heads seq head_dim` | `components/attention.py` | `attention_values` |
+| `Pattern` | `batch heads query key` | `components/attention.py` | `attention_scores`, `attention_probabilities` |
+| `HeadOutputs` | `batch seq heads head_dim` | `components/attention.py` | `attention_head_outputs` |
+| `LinearQK` | `batch seq heads key_dim` | `components/linear_attention.py` | `linear_attn.attention_queries`, `linear_attn.attention_keys` |
+| `LinearV` | `batch seq heads value_dim` | `components/linear_attention.py` | `linear_attn.attention_values`, `linear_attn.attention_head_outputs` |
+| `Gates` | `batch seq heads` | `components/linear_attention.py` | `decays`, `betas` |
+| `State` | `batch heads key_dim value_dim` | `components/linear_attention.py` | `state_input`, `state_output`, `state` |
+| `States` | `batch seq heads key_dim value_dim` | `components/linear_attention.py` | `states` |
+
+The axis names are the same on every layout (`batch` axis 0 everywhere, `seq` the token axis, `heads` the query heads, `kv_heads` the key/value heads, `head_dim` the width of values and head outputs, `qk_head_dim` that of queries and keys, `query`/`key` a pattern's two token axes, `key_dim`/`value_dim` a DeltaNet state's two sides); the comments above each alias state them, and [../usage/layouts.md](../usage/layouts.md) is the page.
 
 ### Availability predicates and constants
 

@@ -90,7 +90,7 @@ The number of key/value heads, `num_kv_heads`, fewer than `num_heads` under grou
 
 ## Layout, dims
 
-The shape a value has on every family, as a `jaxtyping` annotation on the descriptor: `value.layout` is the type (`Float[Tensor, "batch seq hidden"]`, usable with `isinstance`), `value.dims` the axis names as a tuple. Layouts differ between values, not between families. See [../usage/layouts.md](../usage/layouts.md).
+The shape a value has on every family, as a `jaxtyping` annotation on the descriptor: one of fourteen named aliases, each defined beside the envoy that serves it (`Residual = Float[Tensor, "batch seq hidden"]` in `components/layer.py`, `Pattern` and `Keys` in `components/attention.py`, `State` in `components/linear_attention.py`, `Logits` in `standardized.py`, ...); `nnter.components` re-exports the eleven envoy-level names. `value.layout` is that alias itself (`Attention.attention_keys.layout is Keys`, usable with `isinstance`), `value.dims` the axis names as a tuple. A family's redefinition and a custom value annotate with the same name. Layouts differ between values, not between families. See [../usage/layouts.md](../usage/layouts.md).
 
 ## MLA (multi-head latent attention)
 

@@ -10,12 +10,11 @@ dropout's output and needs no eager load.
 
 from typing import TYPE_CHECKING
 
-import torch
-from jaxtyping import Float
-from torch import Tensor
 from transformers.models.mpt.modeling_mpt import MptAttention, MptBlock, MptMLP
 
-from ..components import Attention, Layer, Mlp, SourceEProperty, seq_first
+from ..components import (
+    Attention, HeadOutputs, Keys, Layer, Mlp, Pattern, Queries, Residual, SourceEProperty, Values, seq_first,
+)
 
 if TYPE_CHECKING:
     from ..standardized import StandardizedTransformer
@@ -48,23 +47,23 @@ class Attention(Attention):
     # heads first.
 
     @SourceEProperty("query_states_0", description=Attention.attention_queries.description)
-    def attention_queries(self, value) -> Float[Tensor, "batch heads seq qk_head_dim"]:
+    def attention_queries(self, value) -> Queries:
         return value
 
     @SourceEProperty("key_states_0", description=Attention.attention_keys.description)
-    def attention_keys(self, value) -> Float[Tensor, "batch kv_heads seq qk_head_dim"]:
+    def attention_keys(self, value) -> Keys:
         return value
 
     @SourceEProperty("value_states_0", description=Attention.attention_values.description)
-    def attention_values(self, value) -> Float[Tensor, "batch kv_heads seq head_dim"]:
+    def attention_values(self, value) -> Values:
         return value
 
     @SourceEProperty("nn_functional_softmax_0", attribute="input", description=Attention.attention_scores.description)
-    def attention_scores(self, value) -> Float[Tensor, "batch heads query key"]:
+    def attention_scores(self, value) -> Pattern:
         return value
 
     @SourceEProperty("torch_matmul_1", description=Attention.attention_head_outputs.description)
-    def attention_head_outputs(self, value) -> Float[Tensor, "batch seq heads head_dim"]:
+    def attention_head_outputs(self, value) -> HeadOutputs:
         return seq_first(value)
 
     @attention_head_outputs.postprocess
@@ -75,7 +74,7 @@ class Attention(Attention):
         "nn_functional_dropout_0",
         description="The attention pattern the values are mixed with, [batch, heads, query, key]",
     )
-    def attention_probabilities(self, value) -> Float[Tensor, "batch heads query key"]:
+    def attention_probabilities(self, value) -> Pattern:
         return value
 
 
@@ -86,7 +85,7 @@ class Mlp(Mlp):
         "F_dropout_0",
         description="What the MLP adds to the residual stream: the tensor before the residual is added inside",
     )
-    def mlp_output(self, value) -> Float[Tensor, "batch seq hidden"]:
+    def mlp_output(self, value) -> Residual:
         return value
 
 

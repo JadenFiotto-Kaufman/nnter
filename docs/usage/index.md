@@ -31,7 +31,7 @@ model = StandardizedTransformer("openai-community/gpt2", dispatch=True, attn_imp
 - [attention-interior](attention-interior.md) — `attention_queries` / `keys` / `values` / `scores` / `probabilities` / `head_outputs` inside the eager attention forward, with each family's caveats.
 - [root-values](root-values.md) — `logits`, `token_embeddings`, `next_token_probs`, `input_ids`, `attention_mask`, `input_size`, and the sizes.
 - [delta-net](delta-net.md) — the hybrids' `linear_attn`: `decays`, `betas`, `state_input`/`state_output`, and the per-token `state`/`states` behind `route_delta_rule`.
-- [layouts](layouts.md) — one axis layout per value on every family, as a `jaxtyping` type (`value.dims`, `value.layout`).
+- [layouts](layouts.md) — one axis layout per value on every family, a named `jaxtyping` type from `nnter.components` (`Residual`, `Pattern`, ...; `value.dims`, `value.layout`).
 - [availability](availability.md) — `model.status()`, `nnter.Unavailable`, and the reasons a checkpoint lacks a value.
 
 ## Doing things with them

@@ -1,29 +1,37 @@
 ---
 title: Layouts
-one_liner: "Every standard value has one axis layout on every family, declared as a `jaxtyping` type you can read (`value.dims`) and check (`isinstance(t, value.layout)`)."
-tags: [usage, layouts, shapes, jaxtyping, dims, heads, kv_heads]
-related: [docs/usage/root-values.md, docs/usage/residual-stream.md, docs/usage/availability.md]
-sources: [nnter/components/eproperty.py, nnter/components/attention.py, nnter/components/linear_attention.py, nnter/components/layer.py, nnter/standardized.py]
+one_liner: "Every standard value has one axis layout on every family, one of fourteen named `jaxtyping` types defined beside the envoy that serves them (`Residual`, `Pattern`, `Keys`, ... from `nnter.components`) you can read (`value.dims`), check (`isinstance(t, value.layout)`) and annotate your own values with."
+tags: [usage, layouts, shapes, jaxtyping, dims, heads, kv_heads, Residual, Pattern]
+related: [docs/usage/root-values.md, docs/usage/residual-stream.md, docs/usage/availability.md, docs/extending/custom-values.md]
+sources: [nnter/components/eproperty.py, nnter/components/layer.py, nnter/components/attention.py, nnter/components/linear_attention.py, nnter/standardized.py, nnter/components/__init__.py]
 ---
 
 # Layouts
 
 ## What this is for
 
-A value's shape is part of what it means. Each standard value is annotated with a
-`jaxtyping` type such as `Float[Tensor, "batch seq hidden"]`; `value.layout` returns that
-type and `value.dims` names its axes. Layouts differ between values, not between families:
-`attention_probabilities` is `[batch, heads, query, key]` on GPT-2, Llama and BLOOM alike,
-and the per-family suite checks every value's axes against the model's sizes.
+A value's shape is part of what it means. Each standard value is annotated with one of
+fourteen named layouts, each defined in the file of the envoy that serves it (`Residual` in `nnter/components/layer.py`; `Queries`, `Keys`, `Values`, `Pattern`, `HeadOutputs` in `nnter/components/attention.py`; `LinearQK`, `LinearV`, `Gates`, `State`, `States` in `nnter/components/linear_attention.py`; `Logits`, `NextTokenProbs`, `Tokens` beside the root values in `nnter/standardized.py`); `nnter.components`
+re-exports the eleven envoy-level names, and the root's three come from `nnter.standardized`.
+They are `jaxtyping` types such as `Residual = Float[Tensor, "batch seq hidden"]` and
+`Pattern = Float[Tensor, "batch heads query key"]`. `value.layout` returns that alias itself
+and `value.dims` names its axes. Layouts differ between values, not between families:
+`attention_probabilities` is a `Pattern`, `[batch, heads, query, key]`, on GPT-2, Llama and
+BLOOM alike, and the per-family suite checks every value's axes against the model's sizes.
 
 ## Canonical pattern
 
 ```python
 import torch
 from nnter import Attention, Layer, StandardizedTransformer
+from nnter.components import Queries, Residual
+from nnter.standardized import Logits
 
 Attention.attention_queries.dims        # ('batch', 'heads', 'seq', 'qk_head_dim')
 Attention.attention_queries.layout      # jaxtyping.Float[Tensor, 'batch heads seq qk_head_dim']
+Attention.attention_queries.layout is Queries   # True: the alias itself, not a copy of it
+Layer.layer_output.layout is Residual   # True
+StandardizedTransformer.logits.layout is Logits   # True
 Layer.layer_output.dims                 # ('batch', 'seq', 'hidden')
 StandardizedTransformer.logits.dims     # ('batch', 'seq', 'vocab')
 
@@ -33,6 +41,7 @@ with model.trace("The Eiffel Tower is in"):
     q = model.layers[0].self_attn.attention_queries.save()
 
 isinstance(q, Attention.attention_queries.layout)          # True: rank 4, floating dtype
+isinstance(q, Queries)                                     # the same check, by name
 isinstance(q[0], Attention.attention_queries.layout)       # False: rank 3
 isinstance(q.long(), Attention.attention_queries.layout)   # False: not a float
 q.shape                                                    # (1, num_heads, seq, head_dim)
@@ -40,30 +49,69 @@ q.shape                                                    # (1, num_heads, seq,
 
 Read the layout off the class (`Attention.attention_queries`) or off the instance's type
 (`type(model.layers[0].self_attn).attention_queries`); the family's subclass inherits the
-annotation unless it redefines the value, and a redefinition carries the same one.
+annotation unless it redefines the value, and a redefinition is annotated with the same
+name (`nnter.families.falcon.Attention.attention_keys.layout is Keys`), so it cannot drift
+from the base.
 
 ## The layouts
 
-| value | layout |
-| --- | --- |
-| `layer_output`, `attention_output`, `mlp_output`, `token_embeddings`, `self_attn.input`, `mlp.input` | `batch seq hidden` |
-| `logits` | `batch seq vocab` |
-| `next_token_probs` | `batch vocab` |
-| `input_ids`, `attention_mask` | `batch seq` (`Int`) |
-| `attention_queries` | `batch heads seq qk_head_dim` |
-| `attention_keys` | `batch kv_heads seq qk_head_dim` |
-| `attention_values` | `batch kv_heads seq head_dim` |
-| `attention_scores`, `attention_probabilities` | `batch heads query key` |
-| `attention_head_outputs` | `batch seq heads head_dim` |
-| `linear_attn.attention_queries`, `attention_keys` | `batch seq heads key_dim` |
-| `linear_attn.attention_values`, `attention_head_outputs` | `batch seq heads value_dim` |
-| `linear_attn.decays`, `betas` | `batch seq heads` |
-| `state_input`, `state_output`, `state` | `batch heads key_dim value_dim` |
-| `states` | `batch seq heads key_dim value_dim` |
+The fourteen names, their axes, and the values that carry each:
+
+| layout | axes | values |
+| --- | --- | --- |
+| `Residual` | `batch seq hidden` | `layer_output`, `attention_output`, `mlp_output`, `token_embeddings` (and the plain `self_attn.input`, `mlp.input`) |
+| `Logits` | `batch seq vocab` | `logits` |
+| `NextTokenProbs` | `batch vocab` | `next_token_probs` |
+| `Tokens` | `batch seq` (`Int`) | `input_ids`, `attention_mask` |
+| `Queries` | `batch heads seq qk_head_dim` | `attention_queries` |
+| `Keys` | `batch kv_heads seq qk_head_dim` | `attention_keys` |
+| `Values` | `batch kv_heads seq head_dim` | `attention_values` |
+| `Pattern` | `batch heads query key` | `attention_scores`, `attention_probabilities` |
+| `HeadOutputs` | `batch seq heads head_dim` | `attention_head_outputs` |
+| `LinearQK` | `batch seq heads key_dim` | `linear_attn.attention_queries`, `attention_keys` |
+| `LinearV` | `batch seq heads value_dim` | `linear_attn.attention_values`, `attention_head_outputs` |
+| `Gates` | `batch seq heads` | `linear_attn.decays`, `betas` |
+| `State` | `batch heads key_dim value_dim` | `state_input`, `state_output`, `state` |
+| `States` | `batch seq heads key_dim value_dim` | `states` |
+
+An axis name means the same thing on every layout: `batch` is axis 0 everywhere, `seq`
+the token axis, `heads` the query heads and `kv_heads` the key/value heads, `head_dim`
+the width of a head's values and outputs and `qk_head_dim` that of its queries and keys
+(the same number outside latent attention), `query` and `key` the two token axes of a
+pattern, and on a gated DeltaNet mixer `key_dim` / `value_dim` the state's two sides. The
+comments above each alias in its defining file state the same.
 
 `isinstance` checks rank and dtype only; the axis *names* are documentation plus what the
 suite asserts against `model.num_heads`, `model.num_kv_heads`, `model.head_dim`,
 `model.qk_head_dim`, `model.hidden_size` and `model.vocab_size` ([root-values](root-values.md)).
+
+## Annotating with a name
+
+A value you define is annotated with the name, so its layout is the same object as the
+base's and reads back through `.layout` and `.dims` like any standard value:
+
+```python
+from nnter import SourceEProperty
+from nnter.components import Pattern, interface_reason
+from nnter.families import gpt2
+
+
+class Attention(gpt2.Attention):
+    @SourceEProperty("attention_interface_1.source.nn_functional_softmax_0", description="The softmax output before the dropout, [batch, heads, query, key]", unavailable=interface_reason)
+    def attention_softmax(self, value) -> Pattern:
+        return value
+
+
+Attention.attention_softmax.layout is Pattern                          # True
+Attention.attention_softmax.layout is Attention.attention_probabilities.layout   # True
+```
+
+A family that redefines a standard value writes the base's name (`-> Keys`, `-> Residual`),
+never an inline string, which is what keeps a redefinition from drifting; a value of your
+own takes the name where one fits, and an inline `Float[Tensor, "..."]` with the same axis
+names where none does (a per-row entropy, `batch heads query`). See
+[custom-values](../extending/custom-values.md) and
+[overriding-values](../extending/overriding-values.md).
 
 ## Where the sequence axis is
 
@@ -155,6 +203,8 @@ On the tiny checkpoint the root says `num_heads=8`, `num_kv_heads=4`, and the mi
 - **`kv_heads` is `num_kv_heads` except where the family expands first** (Falcon 40B layout,
   DeepSeek), where it is `num_heads`.
 - **A `.layout` is `None` for a value with no tensor annotation**; `dims` is then `None` too.
+- **The names live in `nnter.components`, not `nnter`**: `from nnter.components import Residual`;
+  the root's three (`Logits`, `NextTokenProbs`, `Tokens`) only in `nnter.standardized`.
 - **Read one interior value per trace when in doubt.** The five interior values bind at
   different points of the forward on the off-interface families (Falcon: values before
   queries and keys).
@@ -162,5 +212,6 @@ On the tiny checkpoint the root says `num_heads=8`, `num_kv_heads=4`, and the mi
 ## Related
 
 - [root-values](root-values.md): the sizes each axis is checked against.
-- [residual-stream](residual-stream.md): the `batch seq hidden` values.
+- [residual-stream](residual-stream.md): the `Residual` (`batch seq hidden`) values.
 - [availability](availability.md): a value has a layout whether or not this checkpoint has it.
+- [custom-values](../extending/custom-values.md): annotating a value of your own with a name.

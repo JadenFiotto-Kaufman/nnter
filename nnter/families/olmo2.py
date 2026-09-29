@@ -7,12 +7,9 @@ block adds is the post-norm's output, not the module's, so the contributions
 point at the sibling norms. OLMo 2 has only the post-norms: no ``input_layernorm`` exists to alias.
 """
 
-import torch
-from jaxtyping import Float
-from torch import Tensor
 from transformers.models.olmo2.modeling_olmo2 import Olmo2Attention, Olmo2DecoderLayer, Olmo2MLP
 
-from ..components import Attention, Layer, Mlp, RelativeEProperty
+from ..components import Attention, Layer, Mlp, RelativeEProperty, Residual
 
 MODEL_TYPES = ("olmo2",)
 
@@ -34,7 +31,7 @@ class Attention(Attention):
         "../post_attention_layernorm.output",
         description="What the attention adds to the residual stream: the post-attention norm's output",
     )
-    def attention_output(self, value) -> Float[Tensor, "batch seq hidden"]:
+    def attention_output(self, value) -> Residual:
         return value
 
 
@@ -45,7 +42,7 @@ class Mlp(Mlp):
         "../post_feedforward_layernorm.output",
         description="What the MLP adds to the residual stream: the post-feedforward norm's output",
     )
-    def mlp_output(self, value) -> Float[Tensor, "batch seq hidden"]:
+    def mlp_output(self, value) -> Residual:
         return value
 
 

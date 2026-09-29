@@ -13,7 +13,13 @@ from nnsight.modeling.transformers import TransformersModel
 from torch import Tensor
 
 from . import families
-from .components import EProperty, Layer, RelativeEProperty, Standard
+from .components import EProperty, Layer, RelativeEProperty, Residual, Standard
+
+#: The layouts of the root's values: the logits, the next-token distribution at the last position, and one
+#: integer per token (``input_ids``, ``attention_mask``).
+Logits = Float[Tensor, "batch seq vocab"]
+NextTokenProbs = Float[Tensor, "batch vocab"]
+Tokens = Int[Tensor, "batch seq"]
 
 
 class StandardizedProperty:
@@ -143,7 +149,7 @@ class StandardizedTransformer(TransformersModel):
     # -- whole-model values (inside a trace) ---------------------------------
 
     @EProperty(key="output", description="The model's final logits, [batch, seq, vocab], softcapping applied")
-    def logits(self, value: Any) -> Float[Tensor, "batch seq vocab"]:
+    def logits(self, value: Any) -> Logits:
         """The logits the model returns, ``[batch, seq, vocab]``.
 
         Read off the model's output, so a family that softcaps after
@@ -159,7 +165,7 @@ class StandardizedTransformer(TransformersModel):
         return output
 
     @RelativeEProperty("embed_tokens.output", description="The token embeddings entering the first block, [batch, seq, hidden]")
-    def token_embeddings(self, value: torch.Tensor) -> Float[Tensor, "batch seq hidden"]:
+    def token_embeddings(self, value: torch.Tensor) -> Residual:
         """The embedding module's output, ``[batch, seq, hidden]``.
 
         Positional embeddings and embedding norms (GPT-2's ``wpe``, BLOOM's
@@ -169,7 +175,7 @@ class StandardizedTransformer(TransformersModel):
         return value
 
     @EProperty(key="output", description="The next-token distribution at the last position, [batch, vocab]; derived, read-only")
-    def next_token_probs(self, value: Any) -> Float[Tensor, "batch vocab"]:
+    def next_token_probs(self, value: Any) -> NextTokenProbs:
         """The next-token distribution at the last position, ``[batch, vocab]``.
 
         ``logits[:, -1].softmax(-1)``, derived from the model's output; the
@@ -320,7 +326,7 @@ class StandardizedTransformer(TransformersModel):
     # -- the input (inside a trace) ----------------------------------------------
 
     @EProperty(key="input", description="The token ids the model was called with, [batch, seq]")
-    def input_ids(self, value: Any) -> Int[Tensor, "batch seq"]:
+    def input_ids(self, value: Any) -> Tokens:
         """The token ids the model was called with, ``[batch, seq]``. Assign to run the model on other ids."""
         return value[1]["input_ids"]
 
@@ -330,7 +336,7 @@ class StandardizedTransformer(TransformersModel):
         return args, {**kwargs, "input_ids": value}
 
     @EProperty(key="input", description="The attention mask the model was called with, [batch, seq]; zeros are padding")
-    def attention_mask(self, value: Any) -> Int[Tensor, "batch seq"]:
+    def attention_mask(self, value: Any) -> Tokens:
         """The attention mask the model was called with, ``[batch, seq]``; zeros are padding. Assignable."""
         return value[1]["attention_mask"]
 

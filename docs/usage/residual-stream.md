@@ -18,6 +18,9 @@ Three standard values give every decoder block the same three tensors:
 | `model.layers[i].self_attn.attention_output` | what the attention sublayer adds to the residual stream |
 | `model.layers[i].mlp.mlp_output` | what the MLP sublayer adds to the residual stream |
 
+All three are `[batch, seq, hidden]`, the `Residual` layout (`Layer.layer_output.layout is
+nnter.components.Residual`; see [layouts](layouts.md)).
+
 `attention_output` and `mlp_output` are *contributions*, defined by one identity that
 holds on a sequential block and a parallel block alike:
 

@@ -352,8 +352,9 @@ family's own norms' outputs; the standardized model equals a raw `TransformersMo
 boundary writes move the logits; the pattern has the right shape, dtype, row sums and
 causal mask; a written pattern moves the logits; every `SourceEProperty` resolves on every
 attention block; the interior's shapes, causal writes and in-place edits; `skip_layers`,
-`steer`, `project_on_vocab`; every value's tensor matches its `Float[Tensor, "..."]`
-annotation; the input accessors; the root values; the sizes; the repr.
+`steer`, `project_on_vocab`; every value's tensor matches its layout annotation (the
+name the base carries, imported from `..components`: `Residual`, `Pattern`, ...); the
+input accessors; the root values; the sizes; the repr.
 
 Run it:
 

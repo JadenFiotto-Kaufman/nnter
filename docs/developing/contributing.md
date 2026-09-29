@@ -3,7 +3,7 @@ title: Contributing
 one_liner: House style for nnter code and docs, the workflow for a change, and the open items nnter deliberately lacks or has not finished, distilled from GAPS.md.
 tags: [developing, contributing, style, workflow, roadmap]
 related: [docs/developing/testing.md, docs/developing/architecture.md, docs/developing/transformers-compat.md, docs/developing/gotchas.md, docs/extending/index.md]
-sources: [GAPS.md, README.md, nnter/families/llama.py, nnter/families/gemma2.py, nnter/components/eproperty.py, tests/families/suite.py, nnsight STYLE.md]
+sources: [GAPS.md, README.md, nnter/families/llama.py, nnter/families/gemma2.py, nnter/components/eproperty.py, nnter/components/layer.py, nnter/components/attention.py, nnter/components/linear_attention.py, nnter/standardized.py, tests/families/suite.py, nnsight STYLE.md]
 ---
 
 # Contributing
@@ -102,10 +102,19 @@ the ones that matter most here:
 - **Families import their modeling module only inside the family module**,
   at the top of it, never from `nnter/components` or `nnter/standardized.py`,
   so `import nnter` loads no modeling code (`tests/test_registry.py:23-36`).
-- **Every value has a `jaxtyping` return annotation**
-  (`Float[Tensor, "batch seq hidden"]`); `layout` and `dims` read it, and
-  `test_values_match_their_annotations` checks every axis against the
-  model's sizes. Axis names are the shared set in `suite.py:447-453`.
+- **Every value is annotated with a layout name** (`-> Residual`,
+  `-> Pattern`, `-> Keys`), never an inline `Float[Tensor, "..."]`. Each name
+  is defined in the file of the envoy that serves it (`Residual` in
+  `components/layer.py`, the attention interior's in `components/attention.py`,
+  the DeltaNet ones in `components/linear_attention.py`, the root's in
+  `standardized.py`) and re-exported from `nnter.components`, which is where a
+  family imports it in its one components import line. A family that
+  redefines a value writes the base's name, so `layout` and `dims` cannot
+  drift from the base, and `test_values_match_their_annotations` checks every
+  axis against the model's sizes. A new shape is a new name defined beside the
+  envoy that serves it, with a comment above it, and exported from
+  `nnter.components`. Axis names are the shared set in those comments and in
+  `suite.py:447-453`.
 - **Every source-located value has an `unavailable=` predicate** (`needs_eager`,
   `interface_reason`, `needs_torch_kernels`, or a family's own), so `status()`
   can answer before a trace runs and a read raises `Unavailable` rather than

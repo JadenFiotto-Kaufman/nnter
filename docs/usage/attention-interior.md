@@ -49,17 +49,18 @@ sum to one and are lower-triangular.
 
 | value | what it is | layout |
 | --- | --- | --- |
-| `attention_queries` | the queries entering the attention interface, after the query projection and, where the family has one, after the rotary embedding | `batch heads seq qk_head_dim` |
-| `attention_keys` | the keys entering the interface, after RoPE and before `repeat_kv`, so the head axis is `num_kv_heads` wide under grouped-query attention | `batch kv_heads seq head_dim` |
-| `attention_values` | the values entering the interface, before `repeat_kv` | `batch kv_heads seq head_dim` |
-| `attention_scores` | the scaled, masked scores that enter the softmax | `batch heads query key` |
-| `attention_probabilities` | the pattern the values are mixed with: the dropout's output after the softmax, in the model dtype, an attention sink's column already dropped | `batch heads query key` |
-| `attention_head_outputs` | what the interface returns, each head's mix of the values, before the reshape to `[batch, seq, hidden]` and the output projection | `batch seq heads head_dim` |
+| `attention_queries` | the queries entering the attention interface, after the query projection and, where the family has one, after the rotary embedding | `Queries`: `batch heads seq qk_head_dim` |
+| `attention_keys` | the keys entering the interface, after RoPE and before `repeat_kv`, so the head axis is `num_kv_heads` wide under grouped-query attention | `Keys`: `batch kv_heads seq qk_head_dim` |
+| `attention_values` | the values entering the interface, before `repeat_kv` | `Values`: `batch kv_heads seq head_dim` |
+| `attention_scores` | the scaled, masked scores that enter the softmax | `Pattern`: `batch heads query key` |
+| `attention_probabilities` | the pattern the values are mixed with: the dropout's output after the softmax, in the model dtype, an attention sink's column already dropped | `Pattern`: `batch heads query key` |
+| `attention_head_outputs` | what the interface returns, each head's mix of the values, before the reshape to `[batch, seq, hidden]` and the output projection | `HeadOutputs`: `batch seq heads head_dim` |
 
 Sizes come off the root: `model.num_heads`, `model.num_kv_heads`,
 `model.head_dim` and `model.qk_head_dim` (`head_dim` except under latent
-attention). Every value's layout is on the descriptor:
-`Attention.attention_keys.dims` is `("batch", "kv_heads", "seq", "head_dim")`.
+attention). Every value's layout is on the descriptor, one of the named
+aliases in `nnter.components`: `Attention.attention_keys.layout is Keys`, and
+`Attention.attention_keys.dims` is `("batch", "kv_heads", "seq", "qk_head_dim")`.
 The sequence axis is 2 on the queries, keys and values, the layout transformers
 hands its interface, and 1 on the head outputs.
 

@@ -257,25 +257,31 @@ position, so it goes in a trace of its own.
 ## Layouts
 
 Every value has one layout on every family, and says what it is: each is
-annotated with a `jaxtyping` type, `Float[Tensor, "batch seq hidden"]`, which
-`value.layout` returns and `value.dims` names (`("batch", "seq", "hidden")`).
-`isinstance(tensor, Attention.attention_queries.layout)` checks rank and
-dtype, and the suite checks every value's axes against the model's sizes on
-every family. Layouts differ between values, not between families:
+annotated with one of fourteen named `jaxtyping` types defined beside the
+envoy that serves it, `Residual = Float[Tensor, "batch seq hidden"]`,
+which `value.layout` returns (`Layer.layer_output.layout is Residual`) and
+`value.dims` names (`("batch", "seq", "hidden")`).
+`isinstance(tensor, Attention.attention_queries.layout)`, or
+`isinstance(tensor, Queries)`, checks rank and dtype, and the suite checks
+every value's axes against the model's sizes on every family. A family that
+redefines a value annotates it with the same name, so it cannot drift from
+the base; a value of your own does the same (`from nnter.components import
+Residual`; the root's `Logits`, `NextTokenProbs` and `Tokens` come from
+`nnter.standardized`). Layouts differ between values, not between families:
 
-| value | layout |
-| --- | --- |
-| `layer_output`, `attention_output`, `mlp_output`, `token_embeddings`, `self_attn.input`, `mlp.input` | `batch seq hidden` |
-| `logits` / `next_token_probs` | `batch seq vocab` / `batch vocab` |
-| `attention_queries` | `batch heads seq qk_head_dim` |
-| `attention_keys` / `attention_values` | `batch kv_heads seq qk_head_dim` / `batch kv_heads seq head_dim` |
-| `attention_scores`, `attention_probabilities` | `batch heads query key` |
-| `attention_head_outputs` | `batch seq heads head_dim` |
-| `linear_attn.attention_queries` / `keys` / `values` | `batch seq heads key_dim` (values: `value_dim`) |
-| `linear_attn.decays`, `betas` | `batch seq heads` |
-| `linear_attn.attention_head_outputs` | `batch seq heads value_dim` |
-| `state_input`, `state_output`, `state` | `batch heads key_dim value_dim` |
-| `states` | `batch seq heads key_dim value_dim` |
+| layout | axes | values |
+| --- | --- | --- |
+| `Residual` | `batch seq hidden` | `layer_output`, `attention_output`, `mlp_output`, `token_embeddings`, `self_attn.input`, `mlp.input` |
+| `Logits` / `NextTokenProbs` | `batch seq vocab` / `batch vocab` | `logits` / `next_token_probs` |
+| `Tokens` | `batch seq` (`Int`) | `input_ids`, `attention_mask` |
+| `Queries` | `batch heads seq qk_head_dim` | `attention_queries` |
+| `Keys` / `Values` | `batch kv_heads seq qk_head_dim` / `batch kv_heads seq head_dim` | `attention_keys` / `attention_values` |
+| `Pattern` | `batch heads query key` | `attention_scores`, `attention_probabilities` |
+| `HeadOutputs` | `batch seq heads head_dim` | `attention_head_outputs` |
+| `LinearQK` / `LinearV` | `batch seq heads key_dim` / `batch seq heads value_dim` | `linear_attn.attention_queries`, `keys` / `values`, `attention_head_outputs` |
+| `Gates` | `batch seq heads` | `linear_attn.decays`, `betas` |
+| `State` | `batch heads key_dim value_dim` | `state_input`, `state_output`, `state` |
+| `States` | `batch seq heads key_dim value_dim` | `states` |
 
 Batch is axis 0 everywhere. The sequence axis is 1 on every value that has
 one except softmax attention's queries, keys and values, where it is 2, the

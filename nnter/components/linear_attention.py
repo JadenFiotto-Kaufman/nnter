@@ -5,13 +5,24 @@ from __future__ import annotations
 from typing import Any, Callable
 
 import torch
-from jaxtyping import Float
-from torch import Tensor
 from nnsight.intervention.envoy import Envoy
 from nnsight.intervention.source import SourceEnvoy
 
+from jaxtyping import Float
+from torch import Tensor
+
 from .eproperty import DerivedEProperty, EProperty, SourceEProperty, Unavailable, at_occurrence, branched, per_call
+from .layer import Residual
 from .standard import Standard, first_tensor, rewrap
+
+#: The layouts at the delta-rule call, tokens before heads: the queries and keys on the state's key side, the
+#: values and each head's read of the state on its value side, one gate per token and head, and the state itself,
+#: one ``key_dim`` by ``value_dim`` matrix per head, alone or stacked along the tokens.
+LinearQK = Float[Tensor, "batch seq heads key_dim"]
+LinearV = Float[Tensor, "batch seq heads value_dim"]
+Gates = Float[Tensor, "batch seq heads"]
+State = Float[Tensor, "batch heads key_dim value_dim"]
+States = Float[Tensor, "batch seq heads key_dim value_dim"]
 
 
 def _modeling_module(envoy: Envoy):
@@ -150,7 +161,7 @@ class LinearAttention(Standard):
     STATE_OP = "last_recurrent_state_3"
 
     @EProperty(key="output", description="What the linear attention adds to the residual stream")
-    def attention_output(self, value: Any) -> Float[Tensor, "batch seq hidden"]:
+    def attention_output(self, value: Any) -> Residual:
         """The mixer's contribution to the residual stream, a tensor."""
         return first_tensor(value)
 
@@ -159,32 +170,32 @@ class LinearAttention(Standard):
         return rewrap(self, value)
 
     @SourceEProperty(KERNEL, attribute="inputs", select=0, description="The queries entering the delta rule, [batch, seq, heads, key_dim]", unavailable=needs_torch_kernels)
-    def attention_queries(self, value: torch.Tensor) -> Float[Tensor, "batch seq heads key_dim"]:
+    def attention_queries(self, value: torch.Tensor) -> LinearQK:
         """The queries the delta rule receives, ``[batch, seq, heads, key_dim]``: after the conv, the activation and the repeat to ``num_v_heads``."""
         return value
 
     @SourceEProperty(KERNEL, attribute="inputs", select=1, description="The keys entering the delta rule, [batch, seq, heads, key_dim]", unavailable=needs_torch_kernels)
-    def attention_keys(self, value: torch.Tensor) -> Float[Tensor, "batch seq heads key_dim"]:
+    def attention_keys(self, value: torch.Tensor) -> LinearQK:
         """The keys the delta rule receives, ``[batch, seq, heads, key_dim]``."""
         return value
 
     @SourceEProperty(KERNEL, attribute="inputs", select=2, description="The values entering the delta rule, [batch, seq, heads, value_dim]", unavailable=needs_torch_kernels)
-    def attention_values(self, value: torch.Tensor) -> Float[Tensor, "batch seq heads value_dim"]:
+    def attention_values(self, value: torch.Tensor) -> LinearV:
         """The values the delta rule receives, ``[batch, seq, heads, value_dim]``."""
         return value
 
     @SourceEProperty(KERNEL, attribute="inputs", select="g", description="The per-token log decay of the recurrent state, [batch, seq, heads]", unavailable=needs_torch_kernels)
-    def decays(self, value: torch.Tensor) -> Float[Tensor, "batch seq heads"]:
+    def decays(self, value: torch.Tensor) -> Gates:
         """The gate: the log of how much of the state each token keeps, ``[batch, seq, heads]``, float32 and non-positive."""
         return value
 
     @SourceEProperty(KERNEL, attribute="inputs", select="beta", description="The per-token write strength into the state, [batch, seq, heads]", unavailable=needs_torch_kernels)
-    def betas(self, value: torch.Tensor) -> Float[Tensor, "batch seq heads"]:
+    def betas(self, value: torch.Tensor) -> Gates:
         """How strongly each token's key/value pair is written into the state, ``[batch, seq, heads]``, in ``(0, 1)``."""
         return value
 
     @SourceEProperty(KERNEL, attribute="inputs", select="initial_state", description="The recurrent state entering the layer, [batch, heads, key_dim, value_dim], or None at the start of a prompt (a copy of the cache's buffer)", unavailable=needs_torch_kernels)
-    def state_input(self, value: Any) -> Float[Tensor, "batch heads key_dim value_dim"] | None:
+    def state_input(self, value: Any) -> State | None:
         """The state this call starts from: ``None`` on a fresh prompt, the cached state on a decode step.
 
         A copy: the cache hands the kernel its own buffer and overwrites it in
@@ -195,12 +206,12 @@ class LinearAttention(Standard):
         return value if value is None else value.clone()
 
     @SourceEProperty(KERNEL, attribute="output", select=0, description="The per-head outputs before the gated norm and the output projection, [batch, seq, heads, value_dim]", unavailable=needs_torch_kernels)
-    def attention_head_outputs(self, value: torch.Tensor) -> Float[Tensor, "batch seq heads value_dim"]:
+    def attention_head_outputs(self, value: torch.Tensor) -> LinearV:
         """Each head's read of the state, ``[batch, seq, heads, value_dim]``, before the gated norm and ``out_proj``."""
         return value
 
     @SourceEProperty(KERNEL, attribute="output", select=1, description="The recurrent state leaving the layer, [batch, heads, key_dim, value_dim]", unavailable=needs_torch_kernels)
-    def state_output(self, value: torch.Tensor) -> Float[Tensor, "batch heads key_dim value_dim"]:
+    def state_output(self, value: torch.Tensor) -> State:
         """The state after this call's last token, ``[batch, heads, key_dim, value_dim]``: what the next decode step starts from."""
         return value
 
@@ -220,7 +231,7 @@ class LinearAttention(Standard):
         return f"{kernel}.source.{LinearAttention.STATE_OP}"
 
     @SourceEProperty(_token_state_op, description="The recurrent state after one token of the prompt; iterate it with tracer.iter; needs route_delta_rule(family, 'recurrent')", unavailable=needs_recurrent_routing)
-    def state(self, value: torch.Tensor) -> Float[Tensor, "batch heads key_dim value_dim"]:
+    def state(self, value: torch.Tensor) -> State:
         """The state after a token of the prompt, ``[batch, heads, key_dim, value_dim]``: one occurrence per token.
 
         A location inside the token-by-token kernel, so it takes nnsight's
@@ -264,7 +275,7 @@ class LinearAttention(Standard):
         op = getattr(getattr(self.source, type(self).KERNEL(self)).source, self.STATE_OP)
         return op, first
 
-    def _states(self) -> Float[Tensor, "batch seq heads key_dim value_dim"]:
+    def _states(self) -> States:
         # Through whichever kernel call fires on this step, so a decode step's
         # one-token call answers too; `state` alone is the prompt's location.
         seq = self._seq()

@@ -7,12 +7,9 @@ block adds is the post-norm's output, not the module's, so the contributions
 point at the sibling norms. The multimodal ``gemma3`` checkpoints are a different task.
 """
 
-import torch
-from jaxtyping import Float
-from torch import Tensor
 from transformers.models.gemma3.modeling_gemma3 import Gemma3Attention, Gemma3DecoderLayer, Gemma3MLP
 
-from ..components import Attention, Layer, Mlp, RelativeEProperty
+from ..components import Attention, Layer, Mlp, RelativeEProperty, Residual
 
 MODEL_TYPES = ("gemma3_text",)
 
@@ -34,7 +31,7 @@ class Attention(Attention):
         "../post_attention_layernorm.output",
         description="What the attention adds to the residual stream: the post-attention norm's output",
     )
-    def attention_output(self, value) -> Float[Tensor, "batch seq hidden"]:
+    def attention_output(self, value) -> Residual:
         return value
 
 
@@ -45,7 +42,7 @@ class Mlp(Mlp):
         "../post_feedforward_layernorm.output",
         description="What the MLP adds to the residual stream: the post-feedforward norm's output",
     )
-    def mlp_output(self, value) -> Float[Tensor, "batch seq hidden"]:
+    def mlp_output(self, value) -> Residual:
         return value
 
 

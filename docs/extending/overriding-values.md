@@ -17,7 +17,8 @@ Llama's forward puts them. When a family's forward puts a value somewhere else, 
 subclass redefines the descriptor under the same name, pointing at the right place,
 and the name keeps its meaning. This page lists every shape of override the shipped
 families use, with the real snippet and the reason. The rule for all of them: keep the
-name, keep the annotation, keep the description, change only the location.
+name, keep the layout name in the annotation (`-> Residual`, the base's, imported from
+`..components` with the envoys), keep the description, change only the location.
 
 ## Canonical pattern
 
@@ -27,7 +28,7 @@ value points there:
 
 ```python
 # nnter/families/gemma2.py
-from ..components import Attention, Layer, Mlp, RelativeEProperty
+from ..components import Attention, Layer, Mlp, RelativeEProperty, Residual
 
 
 class Attention(Attention):
@@ -37,7 +38,7 @@ class Attention(Attention):
         "../post_attention_layernorm.output",
         description="What the attention adds to the residual stream: the post-attention norm's output",
     )
-    def attention_output(self, value) -> Float[Tensor, "batch seq hidden"]:
+    def attention_output(self, value) -> Residual:
         return value
 
 
@@ -46,7 +47,7 @@ class Mlp(Mlp):
         "../post_feedforward_layernorm.output",
         description="What the MLP adds to the residual stream: the post-feedforward norm's output",
     )
-    def mlp_output(self, value) -> Float[Tensor, "batch seq hidden"]:
+    def mlp_output(self, value) -> Residual:
         return value
 ```
 
@@ -69,7 +70,7 @@ An `.input` location serves the raw `(args, kwargs)` pair, the same as nnsight's
 ```python
 class Layer(gpt2.Layer):
     @RelativeEProperty("post_attention_layernorm.input", description="The residual stream after the attention sublayer")
-    def mid_stream(self, value) -> Float[Tensor, "batch seq hidden"]:
+    def mid_stream(self, value) -> Residual:
         (hidden,), _ = value
         return hidden
 ```
@@ -90,13 +91,13 @@ class Attention(Attention):
         attribute="input",
         description="What the attention adds to the residual stream: the tensor entering dropout_add",
     )
-    def attention_output(self, value) -> Float[Tensor, "batch seq hidden"]:
+    def attention_output(self, value) -> Residual:
         return value
 
 
 class Mlp(Mlp):
     @SourceEProperty("dropout_add_0", attribute="input", description="What the MLP adds to the residual stream: the tensor entering dropout_add")
-    def mlp_output(self, value) -> Float[Tensor, "batch seq hidden"]:
+    def mlp_output(self, value) -> Residual:
         return value
 ```
 
@@ -126,7 +127,7 @@ forward makes ([finding-source-ops.md](finding-source-ops.md)).
   ```python
   # nnter/components/attention.py
   @SourceEProperty(INTERFACE, attribute="inputs", select=1, description="The queries entering attention, [batch, heads, seq, head_dim]", unavailable=interface_reason)
-  def attention_queries(self, value: torch.Tensor) -> Float[Tensor, "batch heads seq qk_head_dim"]:
+  def attention_queries(self, value: torch.Tensor) -> Queries:
       return value
   ```
 
@@ -144,18 +145,23 @@ Because the descriptor reads through the operation's own descriptors, the elemen
 hands back is the object the call holds: in-place edits reach the model, and no
 `transform` exists or is needed on a `SourceEProperty`.
 
-### Reuse the base description
+### Reuse the base description and the base layout name
 
-A redefined value keeps its meaning, so it keeps its description:
+A redefined value keeps its meaning, so it keeps its description and its layout name:
 
 ```python
+from ..components import Queries
+
+
 @SourceEProperty("self__reshape_0", attribute="output", select=0, description=Attention.attention_queries.description)
-def attention_queries(self, value) -> Float[Tensor, "batch heads seq qk_head_dim"]:
+def attention_queries(self, value) -> Queries:
     return value
 ```
 
 `Attention.attention_queries` on the class is the descriptor itself (`__get__` with no
-instance returns it), so `.description` is the base's text.
+instance returns it), so `.description` is the base's text; `-> Queries` is the base's
+annotation, so `layout` is the same alias on both (`bloom.Attention.attention_queries.layout
+is Attention.attention_queries.layout`) and the redefinition cannot drift from it.
 
 ### The pattern: the dropout after the softmax
 
@@ -179,7 +185,7 @@ class Attention(Attention):
     SINK = True
 
     @SourceEProperty(f"{INTERFACE}.source.attn_weights_1", description=Attention.attention_scores.description, unavailable=interface_reason)
-    def attention_scores(self, value) -> Float[Tensor, "batch heads query key"]:
+    def attention_scores(self, value) -> Pattern:
         return value
 ```
 
@@ -253,7 +259,7 @@ inverse, so both callbacks are the same function:
 ```python
 # nnter/families/mpt.py
 @SourceEProperty("torch_matmul_1", description=Attention.attention_head_outputs.description)
-def attention_head_outputs(self, value) -> Float[Tensor, "batch seq heads head_dim"]:
+def attention_head_outputs(self, value) -> HeadOutputs:
     return seq_first(value)
 
 @attention_head_outputs.postprocess
@@ -277,7 +283,7 @@ the edited copy back to be swapped in once the block is done with the read:
 # nnter/families/falcon.py
 class Mlp(Mlp):
     @EProperty(key="output", description="What the MLP adds to the residual stream (a copy, since the block adds the attention into the live tensor in place)")
-    def mlp_output(self, value) -> Float[Tensor, "batch seq hidden"]:
+    def mlp_output(self, value) -> Residual:
         return first_tensor(value).clone()
 
     @mlp_output.postprocess
@@ -311,7 +317,7 @@ puts the tensor back in its tuple with the other elements unchanged:
 ```python
 # nnter/components/layer.py
 @EProperty(key="output", description="The residual stream leaving the block, a tensor even when the block returns a tuple")
-def layer_output(self, value: Any) -> Float[Tensor, "batch seq hidden"]:
+def layer_output(self, value: Any) -> Residual:
     return first_tensor(value)
 
 @layer_output.postprocess
@@ -359,9 +365,11 @@ the root's: what the width is, and which config key says so.
 
 - **Keep the name.** An override under another name adds a value instead of replacing one;
   the inherited descriptor stays, and `status()` keeps reporting it.
-- **Keep the return annotation.** `layout` and `dims` are read off it, and the suite
-  checks every value's tensor against its `Float[Tensor, "..."]`
-  ([custom-values.md](custom-values.md)).
+- **Keep the layout name.** Annotate the redefinition with the base's name from
+  `..components` (`-> Keys`, `-> Residual`), never an inline
+  `Float[Tensor, "..."]`: `layout` and `dims` are read off the annotation, the name
+  keeps them identical to the base's, and the suite checks every value's tensor against
+  it ([custom-values.md](custom-values.md), [../usage/layouts.md](../usage/layouts.md)).
 - **An `.input` location serves `(args, kwargs)`.** A `RelativeEProperty` or `EProperty`
   keyed there destructures on read and repacks on write; `SourceEProperty(...,
   attribute="input")` already means the first argument.

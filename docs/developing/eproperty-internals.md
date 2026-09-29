@@ -3,7 +3,7 @@ title: EProperty Internals
 one_liner: How nnter's four descriptors sit on nnsight's eproperty — availability, drilling into .source per run, relative locations, derived values, and the per-call cache a branching forward needs.
 tags: [developing, internals, eproperty, source, descriptors]
 related: [docs/developing/architecture.md, docs/developing/linear-attention-internals.md, docs/developing/gotchas.md, docs/usage/availability.md]
-sources: [nnter/components/eproperty.py, nnter/components/attention.py, nnter/components/standard.py, nnter/families/falcon.py, nnsight src/nnsight/intervention/eproperty.py, nnsight src/nnsight/intervention/source.py, nnsight src/nnsight/intervention/interleaver.py, nnsight src/nnsight/intervention/iterator.py]
+sources: [nnter/components/eproperty.py, nnter/components/layer.py, nnter/components/attention.py, nnter/components/linear_attention.py, nnter/standardized.py, nnter/components/standard.py, nnter/families/falcon.py, nnsight src/nnsight/intervention/eproperty.py, nnsight src/nnsight/intervention/source.py, nnsight src/nnsight/intervention/interleaver.py, nnsight src/nnsight/intervention/iterator.py]
 ---
 
 # EProperty Internals
@@ -115,12 +115,21 @@ per block.
   `__call__` never ran to set them; without this the marker would have no
   name in the repr and `status()`.
 - `layout` and `dims` (`:64-87`) read the return annotation of the stub with
-  `typing.get_type_hints(func, include_extras=True)`, which evaluates a
-  string annotation (the components use `from __future__ import annotations`)
-  in the stub's module globals, where `Float` and `Tensor` are imported, and
-  returns a real annotation as it is; a `Float[...] | None` annotation (`LinearAttention.state_input`, which is
-  `None` on a fresh prompt) is a `types.UnionType`, so the non-`None` member
-  is taken (`:79-80`). `dims` is `layout.dim_str.split()`. Verified:
+  `typing.get_type_hints(func, include_extras=True)`. The annotation is one
+  of the fourteen layout aliases, each defined in the file of the envoy that
+  serves it (`Residual = Float[Tensor, "batch seq hidden"]` in `layer.py`,
+  `Pattern` and `Keys` in `attention.py`, `State` in `linear_attention.py`,
+  `Logits` in `standardized.py`):
+  `get_type_hints` evaluates the string annotation (the components use
+  `from __future__ import annotations`) in the stub's module globals, where
+  the alias is imported, and returns the alias object itself, so
+  `Attention.attention_keys.layout is Keys` and a family's redefinition
+  annotated `-> Keys` has the identical layout. An inline `Float[Tensor, "..."]`
+  resolves the same way (`expanded_keys` above). A `State | None` annotation
+  (`LinearAttention.state_input`, which is `None` on a fresh prompt) is a
+  `types.UnionType`, so the non-`None` member is taken (`:79-80`). `dims` is
+  `layout.dim_str.split()`. Verified:
+  `LinearAttention.state_input.layout is State` and
   `LinearAttention.state_input.dims == ('batch', 'heads', 'key_dim', 'value_dim')`.
 - `hasattr(envoy, "value")` and `getattr(envoy, "value", None)` both **raise**
   `Unavailable`, since Python's default only swallows `AttributeError`

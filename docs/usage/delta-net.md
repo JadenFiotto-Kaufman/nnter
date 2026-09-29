@@ -57,16 +57,18 @@ block', 7: ..., ...}`. `model.status(layer=i)` is flat for one block.
 
 | value | what it is | layout |
 | --- | --- | --- |
-| `attention_output` | what the mixer adds to the residual stream | `batch seq hidden` |
-| `attention_queries`, `attention_keys` | what the delta rule receives: after the short convolution, the activation and the repeat to the value heads | `batch seq heads key_dim` |
-| `attention_values` | the values the delta rule receives | `batch seq heads value_dim` |
-| `decays` | the gate: the log of how much of the state each token keeps; float32, non-positive | `batch seq heads` |
-| `betas` | how strongly each token's key/value pair is written into the state; in `(0, 1)` | `batch seq heads` |
-| `state_input` | the state the call starts from: `None` on a fresh prompt, the cached state on a decode step (a copy) | `batch heads key_dim value_dim` |
-| `state_output` | the state after the call's last token: what the next decode step starts from | `batch heads key_dim value_dim` |
-| `attention_head_outputs` | each head's read of the state, before the gated norm and the output projection | `batch seq heads value_dim` |
+| `attention_output` | what the mixer adds to the residual stream | `Residual`: `batch seq hidden` |
+| `attention_queries`, `attention_keys` | what the delta rule receives: after the short convolution, the activation and the repeat to the value heads | `LinearQK`: `batch seq heads key_dim` |
+| `attention_values` | the values the delta rule receives | `LinearV`: `batch seq heads value_dim` |
+| `decays` | the gate: the log of how much of the state each token keeps; float32, non-positive | `Gates`: `batch seq heads` |
+| `betas` | how strongly each token's key/value pair is written into the state; in `(0, 1)` | `Gates`: `batch seq heads` |
+| `state_input` | the state the call starts from: `None` on a fresh prompt, the cached state on a decode step (a copy) | `State`: `batch heads key_dim value_dim` |
+| `state_output` | the state after the call's last token: what the next decode step starts from | `State`: `batch heads key_dim value_dim` |
+| `attention_head_outputs` | each head's read of the state, before the gated norm and the output projection | `LinearV`: `batch seq heads value_dim` |
 
-`heads` is the mixer's `num_v_heads` (the queries and keys are repeated up to
+The layout names are the aliases in `nnter.components` (`LinearAttention.decays.layout
+is Gates`); `state` is a `State` and `states` a `States`, `batch seq heads key_dim
+value_dim`. `heads` is the mixer's `num_v_heads` (the queries and keys are repeated up to
 it), `key_dim` its `head_k_dim` and `value_dim` its `head_v_dim`. The state is
 float32 in the torch kernels. Everything but `attention_output` is read at the
 delta-rule kernel call, so these are `SourceEProperty` values; assign to

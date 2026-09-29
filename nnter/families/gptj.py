@@ -9,12 +9,11 @@ and the rest of the interior are read around that method call.
 
 from typing import TYPE_CHECKING
 
-import torch
-from jaxtyping import Float
-from torch import Tensor
 from transformers.models.gptj.modeling_gptj import GPTJAttention, GPTJBlock, GPTJMLP
 
-from ..components import Attention, Layer, Mlp, SourceEProperty, needs_eager, seq_first
+from ..components import (
+    Attention, HeadOutputs, Keys, Layer, Mlp, Pattern, Queries, SourceEProperty, Values, needs_eager, seq_first,
+)
 
 if TYPE_CHECKING:
     from ..standardized import StandardizedTransformer
@@ -46,23 +45,23 @@ class Attention(Attention):
     # first.
 
     @SourceEProperty("self__attn_0", attribute="inputs", select=0, description=Attention.attention_queries.description, unavailable=needs_eager)
-    def attention_queries(self, value) -> Float[Tensor, "batch heads seq qk_head_dim"]:
+    def attention_queries(self, value) -> Queries:
         return value
 
     @SourceEProperty("self__attn_0", attribute="inputs", select=1, description=Attention.attention_keys.description, unavailable=needs_eager)
-    def attention_keys(self, value) -> Float[Tensor, "batch kv_heads seq qk_head_dim"]:
+    def attention_keys(self, value) -> Keys:
         return value
 
     @SourceEProperty("self__attn_0", attribute="inputs", select=2, description=Attention.attention_values.description, unavailable=needs_eager)
-    def attention_values(self, value) -> Float[Tensor, "batch kv_heads seq head_dim"]:
+    def attention_values(self, value) -> Values:
         return value
 
     @SourceEProperty("self__attn_0.source.nn_functional_softmax_0", attribute="input", description=Attention.attention_scores.description, unavailable=needs_eager)
-    def attention_scores(self, value) -> Float[Tensor, "batch heads query key"]:
+    def attention_scores(self, value) -> Pattern:
         return value
 
     @SourceEProperty("self__attn_0", attribute="output", select=0, description=Attention.attention_head_outputs.description, unavailable=needs_eager)
-    def attention_head_outputs(self, value) -> Float[Tensor, "batch seq heads head_dim"]:
+    def attention_head_outputs(self, value) -> HeadOutputs:
         return seq_first(value)
 
     @attention_head_outputs.postprocess
@@ -74,7 +73,7 @@ class Attention(Attention):
         description="The attention pattern the values are mixed with, [batch, heads, query, key]",
         unavailable=needs_eager,
     )
-    def attention_probabilities(self, value) -> Float[Tensor, "batch heads query key"]:
+    def attention_probabilities(self, value) -> Pattern:
         return value
 
 

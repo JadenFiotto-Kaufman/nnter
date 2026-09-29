@@ -3,7 +3,7 @@ title: Custom Values
 one_liner: Add a new value to an attention, block or MLP by subclassing the family's envoy with an `EProperty`, `SourceEProperty` or `DerivedEProperty` and passing it through `envoys=`.
 tags: [extending, eproperty, envoys, source, status]
 related: [docs/extending/overriding-values.md, docs/extending/finding-source-ops.md, docs/extending/registering.md, docs/extending/adding-a-family.md]
-sources: [nnter/components/eproperty.py, nnter/components/standard.py, nnter/components/attention.py, nnter/standardized.py, nnter/families/gpt2.py, tests/test_registry.py, tests/test_base.py]
+sources: [nnter/components/eproperty.py, nnter/components/layer.py, nnter/components/standard.py, nnter/components/attention.py, nnter/standardized.py, nnter/families/gpt2.py, tests/test_registry.py, tests/test_base.py]
 ---
 
 # Custom Values
@@ -29,7 +29,7 @@ from torch import Tensor
 
 import nnter
 from nnter import StandardizedTransformer, DerivedEProperty, SourceEProperty
-from nnter.components import interface_reason
+from nnter.components import Pattern, interface_reason
 from nnter.families import gpt2
 from transformers.models.gpt2.modeling_gpt2 import GPT2Attention   # after nnter
 
@@ -47,7 +47,7 @@ class Attention(gpt2.Attention):
         description="The softmax output before the dropout, [batch, heads, query, key]",
         unavailable=interface_reason,
     )
-    def attention_softmax(self, value) -> Float[Tensor, "batch heads query key"]:
+    def attention_softmax(self, value) -> Pattern:
         return value
 
     attention_entropy = DerivedEProperty(
@@ -147,11 +147,19 @@ base classes first, and `Standard.status()` their reasons.
 
 ## Layout: the return annotation
 
-A `jaxtyping` return annotation is the value's declared shape. `Attention.attention_entropy.layout`
-is `Float[Tensor, "batch heads query"]` and `.dims` is `("batch", "heads", "query")`;
-`isinstance(tensor, value.layout)` checks rank and dtype. The family suite checks every
-value's tensor against its annotation and axis sizes, so a value that will ship carries
-one; a value without an annotation has `layout None` and is skipped there.
+A `jaxtyping` return annotation is the value's declared shape, and the standard shapes have
+names exported by `nnter.components`: `Residual`, `Pattern`, `Keys`, ... (each defined
+beside the envoy that serves it; [../usage/layouts.md](../usage/layouts.md) lists the
+fourteen, and the root's `Logits`, `NextTokenProbs`, `Tokens` come from `nnter.standardized`).
+Annotate with the name where one fits: `attention_softmax` above is `-> Pattern`, so
+`Attention.attention_softmax.layout is Pattern`, the same object the base's
+`attention_probabilities` carries, and `.dims` is `("batch", "heads", "query", "key")`.
+A shape none of the names cover takes an inline `Float[Tensor, "..."]` with the same axis
+names: `attention_entropy` is `Float[Tensor, "batch heads query"]`, so its `.dims` is
+`("batch", "heads", "query")`. `isinstance(tensor, value.layout)` checks rank and dtype
+either way. The family suite checks every value's tensor against its annotation and axis
+sizes, so a value that will ship carries one; a value without an annotation has
+`layout None` and is skipped there.
 
 ## The type key displaces the family's envoy
 

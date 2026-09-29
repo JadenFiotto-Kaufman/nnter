@@ -10,12 +10,9 @@ masked scores just before the sink joins them (a binding that exists only
 when an attention mask is passed, as it is on every prompt).
 """
 
-import torch
-from jaxtyping import Float
-from torch import Tensor
 from transformers.models.gpt_oss.modeling_gpt_oss import GptOssAttention, GptOssDecoderLayer, GptOssMLP
 
-from ..components import Attention, INTERFACE, Layer, Mlp, SourceEProperty, interface_reason
+from ..components import Attention, INTERFACE, Layer, Mlp, Pattern, SourceEProperty, interface_reason
 
 MODEL_TYPES = ("gpt_oss",)
 
@@ -41,7 +38,7 @@ class Attention(Attention):
     SINK = True
 
     @SourceEProperty(f"{INTERFACE}.source.attn_weights_1", description=Attention.attention_scores.description, unavailable=interface_reason)
-    def attention_scores(self, value) -> Float[Tensor, "batch heads query key"]:
+    def attention_scores(self, value) -> Pattern:
         return value
 
 

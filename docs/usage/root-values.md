@@ -173,7 +173,8 @@ model.head_dim, model.qk_head_dim                                               
 `head_dim` is the config's on Qwen3 and Gemma, not `hidden // heads`, by the plain rule:
 a Qwen3 checkpoint with `hidden_size=8`, `num_heads=4` and `head_dim=128` has 128-wide
 heads. On DeepSeek-V3 `head_dim` (values, 128) and `qk_head_dim` (queries and keys, 192)
-differ; see [layouts](layouts.md). A mixture of experts' experts are
+differ; see [layouts](layouts.md), which also names each root value's layout (`Logits`,
+`Residual`, `NextTokenProbs`, `Tokens`). A mixture of experts' experts are
 `config.moe_intermediate_size` wide, not `intermediate_size`.
 
 A family of your own, shipped or passed to `nnter.families.register()`, defines a size the

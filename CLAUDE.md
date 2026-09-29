@@ -51,7 +51,7 @@ everywhere. Everything nnsight does (`trace`, `generate`, `.save()`, `tracer.ite
 - [docs/patterns/delta-net-state.md](docs/patterns/delta-net-state.md) — patch and track the state
 
 ### "What shape is this value?"
-- [docs/usage/layouts.md](docs/usage/layouts.md) — one layout per value on every family; `value.dims`, `value.layout`
+- [docs/usage/layouts.md](docs/usage/layouts.md) — one layout per value on every family, named (`Residual`, `Pattern`, `Keys`, ... in `nnter.components`); `value.dims`, `value.layout is Pattern`
 
 ### "Generation, many prompts, activations datasets"
 - [docs/usage/generation.md](docs/usage/generation.md) — the values under `model.generate`, `tracer.iter` picks the step
@@ -67,7 +67,7 @@ everywhere. Everything nnsight does (`trace`, `generate`, `.save()`, `tracer.ite
 ### "Add a family, override a value, add my own value"
 - [docs/extending/adding-a-family.md](docs/extending/adding-a-family.md) — one module named after `model_type`, one test file; `def <size>(model)` in the module where the config spells a root size its own way
 - [docs/extending/overriding-values.md](docs/extending/overriding-values.md) — `RelativeEProperty`, `SourceEProperty`, `unavailable(...)`, `off_interface`, transforms
-- [docs/extending/custom-values.md](docs/extending/custom-values.md) — a new `EProperty` through `envoys=`
+- [docs/extending/custom-values.md](docs/extending/custom-values.md) — a new `EProperty` through `envoys=`; annotate `-> Residual` / `-> Pattern` from `nnter.components`
 - [docs/extending/finding-source-ops.md](docs/extending/finding-source-ops.md) — `print(envoy.source)` and how ops are named
 - [docs/extending/registering.md](docs/extending/registering.md) — `nnter.families.register(module)`
 

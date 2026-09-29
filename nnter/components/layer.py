@@ -5,8 +5,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 import torch
-from jaxtyping import Float
 from nnsight.intervention.envoy import Envoy
+
+from jaxtyping import Float
 from torch import Tensor
 
 from .eproperty import EProperty
@@ -16,6 +17,9 @@ if TYPE_CHECKING:
     from .attention import Attention
     from .linear_attention import LinearAttention
     from .mlp import Mlp
+
+#: The residual stream and everything added to it: ``layer_output``, the contributions, ``token_embeddings``, a sublayer's input.
+Residual = Float[Tensor, "batch seq hidden"]
 
 
 class Layer(Standard):
@@ -52,7 +56,7 @@ class Layer(Standard):
         self.skip((hidden, None) if self.returns_tuple else hidden)
 
     @EProperty(key="output", description="The residual stream leaving the block, a tensor even when the block returns a tuple")
-    def layer_output(self, value: Any) -> Float[Tensor, "batch seq hidden"]:
+    def layer_output(self, value: Any) -> Residual:
         """The residual stream leaving this block, always a tensor.
 
         Some blocks return ``hidden_states`` alone, others a tuple with it first

@@ -18,12 +18,12 @@ runs the same forward with its key/value heads already broadcast.
 
 from typing import TYPE_CHECKING
 
-import torch
-from jaxtyping import Float
-from torch import Tensor
 from transformers.models.falcon.modeling_falcon import FalconAttention, FalconDecoderLayer, FalconMLP
 
-from ..components import Attention, EProperty, Layer, Mlp, SourceEProperty, first_tensor, needs_eager, rewrap, seq_first
+from ..components import (
+    Attention, EProperty, HeadOutputs, Keys, Layer, Mlp, Pattern, Queries, Residual, SourceEProperty, Values,
+    first_tensor, needs_eager, rewrap, seq_first,
+)
 
 if TYPE_CHECKING:
     from ..standardized import StandardizedTransformer
@@ -73,7 +73,7 @@ class Attention(Attention):
     # heads, head_dim]`` as a view, so in-place edits land.
 
     @SourceEProperty(by_alibi("apply_rotary_pos_emb_0", "query_layer_0"), attribute="output", description=Attention.attention_queries.description, unavailable=needs_eager)
-    def attention_queries(self, value) -> Float[Tensor, "batch heads seq qk_head_dim"]:
+    def attention_queries(self, value) -> Queries:
         return value if alibi(self) else value[0]
 
     @attention_queries.postprocess
@@ -84,7 +84,7 @@ class Attention(Attention):
         return value, keys
 
     @SourceEProperty(by_alibi("apply_rotary_pos_emb_0", "key_layer_0"), attribute="output", description=Attention.attention_keys.description, unavailable=needs_eager)
-    def attention_keys(self, value) -> Float[Tensor, "batch kv_heads seq qk_head_dim"]:
+    def attention_keys(self, value) -> Keys:
         return value if alibi(self) else value[1]
 
     @attention_keys.postprocess
@@ -95,15 +95,15 @@ class Attention(Attention):
         return queries, value
 
     @SourceEProperty("value_layer_0", description=Attention.attention_values.description, unavailable=needs_eager)
-    def attention_values(self, value) -> Float[Tensor, "batch kv_heads seq head_dim"]:
+    def attention_values(self, value) -> Values:
         return value
 
     @SourceEProperty(by_alibi("F_softmax_0", "F_softmax_1"), attribute="input", description=Attention.attention_scores.description, unavailable=needs_eager)
-    def attention_scores(self, value) -> Float[Tensor, "batch heads query key"]:
+    def attention_scores(self, value) -> Pattern:
         return value
 
     @SourceEProperty(by_alibi("attn_output_1", "flatten_0"), description=Attention.attention_head_outputs.description, unavailable=needs_eager)
-    def attention_head_outputs(self, value) -> Float[Tensor, "batch seq heads head_dim"]:
+    def attention_head_outputs(self, value) -> HeadOutputs:
         if alibi(self):  # [batch * heads, seq, head_dim] -> a [batch, seq, heads, head_dim] view
             heads = self._module.num_heads
             return value.view(-1, heads, *value.shape[1:]).transpose(1, 2)
@@ -120,7 +120,7 @@ class Attention(Attention):
         description="The attention pattern the values are mixed with, [batch, heads, query, key]",
         unavailable=needs_eager,
     )
-    def attention_probabilities(self, value) -> Float[Tensor, "batch heads query key"]:
+    def attention_probabilities(self, value) -> Pattern:
         return value
 
 
@@ -134,7 +134,7 @@ class Mlp(Mlp):
     """
 
     @EProperty(key="output", description="What the MLP adds to the residual stream (a copy, since the block adds the attention into the live tensor in place)")
-    def mlp_output(self, value) -> Float[Tensor, "batch seq hidden"]:
+    def mlp_output(self, value) -> Residual:
         return first_tensor(value).clone()
 
     @mlp_output.postprocess

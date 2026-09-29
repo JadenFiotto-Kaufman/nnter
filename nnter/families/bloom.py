@@ -12,12 +12,9 @@ The embedding norm has no standard name.
 
 from typing import TYPE_CHECKING
 
-import torch
-from jaxtyping import Float
-from torch import Tensor
 from transformers.models.bloom.modeling_bloom import BloomAttention, BloomBlock, BloomMLP
 
-from ..components import Attention, Layer, Mlp, SourceEProperty
+from ..components import Attention, HeadOutputs, Keys, Layer, Mlp, Pattern, Queries, Residual, SourceEProperty, Values
 
 if TYPE_CHECKING:
     from ..standardized import StandardizedTransformer
@@ -47,23 +44,23 @@ class Attention(Attention):
     # the ``bmm`` result, ``[batch * heads, seq, head_dim]``.
 
     @SourceEProperty("self__reshape_0", attribute="output", select=0, description=Attention.attention_queries.description)
-    def attention_queries(self, value) -> Float[Tensor, "batch heads seq qk_head_dim"]:
+    def attention_queries(self, value) -> Queries:
         return value
 
     @SourceEProperty("self__reshape_0", attribute="output", select=1, description=Attention.attention_keys.description)
-    def attention_keys(self, value) -> Float[Tensor, "batch kv_heads seq qk_head_dim"]:
+    def attention_keys(self, value) -> Keys:
         return value
 
     @SourceEProperty("self__reshape_0", attribute="output", select=2, description=Attention.attention_values.description)
-    def attention_values(self, value) -> Float[Tensor, "batch kv_heads seq head_dim"]:
+    def attention_values(self, value) -> Values:
         return value
 
     @SourceEProperty("F_softmax_0", attribute="input", description=Attention.attention_scores.description)
-    def attention_scores(self, value) -> Float[Tensor, "batch heads query key"]:
+    def attention_scores(self, value) -> Pattern:
         return value
 
     @SourceEProperty("torch_bmm_0", attribute="output", description=Attention.attention_head_outputs.description)
-    def attention_head_outputs(self, value) -> Float[Tensor, "batch seq heads head_dim"]:
+    def attention_head_outputs(self, value) -> HeadOutputs:
         batch_heads, seq, head_dim = value.shape
         heads = self._module.num_heads
         return value.view(batch_heads // heads, heads, seq, head_dim).transpose(1, 2)
@@ -78,14 +75,14 @@ class Attention(Attention):
         attribute="input",
         description="What the attention adds to the residual stream: the tensor entering dropout_add",
     )
-    def attention_output(self, value) -> Float[Tensor, "batch seq hidden"]:
+    def attention_output(self, value) -> Residual:
         return value
 
     @SourceEProperty(
         "self_attention_dropout_0",
         description="The attention pattern the values are mixed with, [batch, heads, query, key]",
     )
-    def attention_probabilities(self, value) -> Float[Tensor, "batch heads query key"]:
+    def attention_probabilities(self, value) -> Pattern:
         return value
 
 
@@ -97,7 +94,7 @@ class Mlp(Mlp):
         attribute="input",
         description="What the MLP adds to the residual stream: the tensor entering dropout_add",
     )
-    def mlp_output(self, value) -> Float[Tensor, "batch seq hidden"]:
+    def mlp_output(self, value) -> Residual:
         return value
 
 

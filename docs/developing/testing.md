@@ -143,7 +143,7 @@ hybrid and drops `mlp.mlp_output` when no block has an MLP module (OPT). `VALUES
 
 | method | asserts |
 |---|---|
-| `test_values_match_their_annotations` | every value with a `layout`, on the root, a block, its attention, its MLP and one mixer, is an instance of its `jaxtyping` type and each named axis matches `axis_sizes` (`hidden_size`, `num_heads`, `head_k_dim`, ...); one value per trace; at least 11 checked |
+| `test_values_match_their_annotations` | every value with a `layout`, on the root, a block, its attention, its MLP and one mixer, is an instance of its layout alias (`Residual`, `Pattern`, ... from `nnter.components`) and each named axis matches `axis_sizes` (`hidden_size`, `num_heads`, `head_k_dim`, ...); one value per trace; at least 11 checked |
 
 **The input** (`:489-514`)
 

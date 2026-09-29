@@ -43,18 +43,25 @@ Two kinds of value:
   (`Attention.attention_probabilities`).
 """
 
-from .attention import INTERFACE, NOT_ON_INTERFACE, Attention, interface_reason, needs_eager, seq_first
+from .attention import (
+    INTERFACE, NOT_ON_INTERFACE, Attention, HeadOutputs, Keys, Pattern, Queries, Values, interface_reason, needs_eager,
+    seq_first,
+)
 from .eproperty import (
     DerivedEProperty, EProperty, RelativeEProperty, SourceEProperty, Unavailable, at_occurrence, branched,
     per_call, unavailable,
 )
-from .layer import Layer
-from .linear_attention import LinearAttention, needs_recurrent_routing, needs_torch_kernels, route_delta_rule
+from .layer import Layer, Residual
+from .linear_attention import (
+    Gates, LinearAttention, LinearQK, LinearV, State, States, needs_recurrent_routing, needs_torch_kernels,
+    route_delta_rule,
+)
 from .mlp import Mlp
 from .standard import Standard, first_tensor, rewrap
 
 __all__ = [
-    "Attention", "DerivedEProperty", "EProperty", "INTERFACE", "Layer", "LinearAttention", "Mlp",
+    "Attention", "DerivedEProperty", "EProperty", "Gates", "HeadOutputs", "INTERFACE", "Keys", "Layer", "LinearAttention",
+    "LinearQK", "LinearV", "Mlp", "Pattern", "Queries", "Residual", "State", "States", "Values",
     "NOT_ON_INTERFACE", "RelativeEProperty", "SourceEProperty", "Standard", "Unavailable", "at_occurrence",
     "branched", "first_tensor", "interface_reason", "needs_eager", "needs_recurrent_routing",
     "needs_torch_kernels", "per_call", "rewrap", "route_delta_rule", "seq_first", "unavailable",
