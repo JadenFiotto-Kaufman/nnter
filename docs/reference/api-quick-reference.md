@@ -91,7 +91,8 @@ Every row is an `EProperty` on the root, listed in `repr(model)` with its descri
 |---|---|---|---|
 | `skip_layers` | `skip_layers(start: int, end: int, skip_with: Tensor \| None = None) -> None` | inside a trace, before block `start` runs | Blocks `start..end` inclusive do not run; block `start`'s input (or `skip_with`) becomes each one's `layer_output`, packed as the family's block returns it (`Layer.skip_with`). Negative indices count from the end. |
 | `steer` | `steer(layers: int \| list[int], vector: Tensor, factor: float = 1.0, token_positions: int \| list[int] \| slice \| None = None, batch_index: int \| None = None) -> None` | inside a trace, `layers` ascending | Adds `factor * vector` in place to `layer_output` of each block, at the given positions and row (default all). |
-| `project_on_vocab` | `project_on_vocab(hidden: Tensor) -> Tensor` | inside (on a live value) or outside (on a saved one) | The logit lens: `lm_head(norm(hidden))` with the model's softcapping. On the last block's `layer_output` it equals `logits`. |
+| `project_on_vocab` | `project_on_vocab(hidden: Tensor) -> Tensor` | inside (on a live value) or outside (on a saved one) | The logit lens: `finish_logits(lm_head(norm(hidden)))`. On the last block's `layer_output` it equals `logits`. |
+| `finish_logits` | `finish_logits(raw: Tensor) -> Tensor` | either | What the model does to `lm_head`'s output to make its logits: the text config's `final_logit_softcapping` if set (Gemma-2), else nothing; a family's `def finish_logits(model, raw)` wins (Cohere's `* logit_scale`, Granite's `/ logits_scaling`). |
 | `get_topk_closest_tokens` | `get_topk_closest_tokens(hidden: Tensor, k: int = 5) -> list[dict[str, float]]` | outside, on a saved `[..., hidden]` tensor | `project_on_vocab` then softmax; one `{token: probability}` per position, row-major over the leading axes. Takes a residual-stream tensor, not logits. |
 | `probs_to_dict` | `probs_to_dict(probs: Tensor, k: int = 5) -> dict[str, float]` | outside | The `k` most likely tokens of one `[vocab]` distribution. |
 | `status` | `status(layer: int \| None = None) -> dict[str, Any]` | outside; nothing runs | Without `layer`: every root value and every block value, `None` when available on every block, else `{layer: reason}`. With `layer`: that block's values by dotted name (`"self_attn.attention_probabilities"`), `None` or the reason, including `"no <module> module on this block"`. The keys come from the tree: every `Standard` child of any block, under its standard name, so a value added through `envoys=` is listed as `self_attn.<name>`, a module some blocks lack (a hybrid's `self_attn`) is reported missing on those, and a module no block has (OPT's `mlp`) has no key. |
@@ -215,7 +216,7 @@ The base of the four hosts.
 |---|---|---|
 | `lookup` | `lookup(model_type: str) -> ModuleType` | The family for `model_type`: a registered one, else `nnter.families.<model_type>`, imported on first use. Raises `UnsupportedFamily` when there is neither. |
 | `register` | `register(family: ModuleType) -> ModuleType` | Add a family (any module or object with `MODEL_TYPES`, `RENAME`, `ENVOYS`, and a function per root size it spells its own way) under its model types; consulted before the shipped modules, so it also overrides a shipped family. Returns `family`. |
-| `known` | `known() -> list[str]` | The shipped families' model types: the module names in the package (31). |
+| `known` | `known() -> list[str]` | The shipped families' model types: the module names in the package (34). |
 | `all_families` | `all_families() -> list[ModuleType]` | Every shipped family, imported. For tooling and tests. |
 | `REGISTRY` | `dict[str, ModuleType]` | `model_type -> family` for what `register` added. |
 | `UnsupportedFamily` | `ValueError` subclass | No module of that name and nothing registered. |
@@ -331,7 +332,7 @@ nnterp's activation helpers on the standard values. `GetActivations = Callable[[
 - The interior attention values need `attn_implementation="eager"`, which the constructor does not force; BLOOM and MPT are the exception (their pattern is their own dropout and carries no `attn_implementation` predicate).
 - `get_topk_closest_tokens(hidden)` takes a residual-stream tensor and projects it itself; passing `project_on_vocab`'s output fails inside `norm` with a shape error.
 - GPT-2's and MPT's queries, keys and values are views of one fused tensor: assign, do not edit in place. Falcon's `mlp_output` is a copy; assignment and in-place edits reach the model through a transform.
-- `model.logits` is the output's `.logits` (softcapped on Gemma-2); `model.lm_head.output` is the raw projection.
+- `model.logits` is the output's `.logits` (softcapped on Gemma-2, scaled on Cohere and Granite); `model.lm_head.output` is the raw projection, and `model.finish_logits(model.lm_head.output)` is `logits`.
 - `next_token_probs`, `input_size` and `states` are read-only.
 - `route_delta_rule(model.family, "recurrent")` before tracing a DeltaNet layer whose `state` you want; a forward `.source` has already instrumented keeps the binding it was compiled with.
 - `import nnter` (or `nnsight`) before any `transformers.models...modeling_*` import; the reverse order segfaults at import on this stack.

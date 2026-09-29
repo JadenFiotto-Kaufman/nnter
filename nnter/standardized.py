@@ -231,15 +231,29 @@ class StandardizedTransformer(TransformersModel):
             out[rows, cols] += factor * vector.to(out)
 
     def project_on_vocab(self, hidden: torch.Tensor) -> torch.Tensor:
-        """Logits for a residual-stream tensor: the final norm, ``lm_head``, and the model's softcapping if any.
+        """Logits for a residual-stream tensor: the final norm, ``lm_head``, then `finish_logits`.
 
         The logit lens: applied to a block's ``layer_output`` it reads that
         layer's prediction; applied to the last block's, it is `logits`.
         Works inside a trace on a live value and outside on a saved one.
         """
-        logits = self.lm_head(self.norm(hidden))
-        cap = getattr(self.config, "final_logit_softcapping", None)
-        return cap * torch.tanh(logits / cap) if cap else logits
+        return self.finish_logits(self.lm_head(self.norm(hidden)))
+
+    def finish_logits(self, raw: torch.Tensor) -> torch.Tensor:
+        """What the model does to ``lm_head``'s output to make its logits: the final softcapping, if any.
+
+        The cap is ``final_logit_softcapping`` on the text config (Gemma-2's
+        own config; a multimodal checkpoint's ``text_config``). A family whose
+        model does something else after the head (Cohere multiplies by
+        ``logit_scale``, Granite divides by ``logits_scaling``) defines
+        ``def finish_logits(model, raw)`` in its module, which wins, like a
+        size (`StandardizedProperty`).
+        """
+        override = getattr(self.family, "finish_logits", None)
+        if override is not None:
+            return override(self, raw)
+        cap = getattr(self.config.get_text_config(), "final_logit_softcapping", None)
+        return cap * torch.tanh(raw / cap) if cap else raw
 
     def probs_to_dict(self, probs: torch.Tensor, k: int = 5) -> dict[str, float]:
         """The ``k`` most likely tokens of one ``[vocab]`` distribution, as ``{token: probability}``."""

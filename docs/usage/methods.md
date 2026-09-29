@@ -20,7 +20,7 @@ trace; two work on saved tensors outside.
 | --- | --- | --- |
 | `skip_layers(start, end, skip_with=None)` | inside a trace | blocks `start..end` inclusive do not run |
 | `steer(layers, vector, factor=1.0, token_positions=None, batch_index=None)` | inside a trace | adds `factor * vector` to `layer_output` in place |
-| `project_on_vocab(hidden)` | inside on a live value, or outside on a saved one | final norm, `lm_head`, softcapping |
+| `project_on_vocab(hidden)` | inside on a live value, or outside on a saved one | final norm, `lm_head`, `finish_logits` |
 | `get_topk_closest_tokens(hidden, k=5)` | either | `project_on_vocab` then softmax then top-k per position |
 | `probs_to_dict(probs, k=5)` | either | one `[vocab]` distribution to `{token: probability}` |
 
@@ -106,9 +106,11 @@ block; nnsight docs/patterns/steering.md is the pattern.
 
 ## `project_on_vocab(hidden)`
 
-Logits for a residual-stream tensor: `lm_head(norm(hidden))`, then the model's softcapping
-when `config.final_logit_softcapping` is set (Gemma-2). Applied to the last block's
-`layer_output` it equals `logits` exactly:
+Logits for a residual-stream tensor: `lm_head(norm(hidden))`, then `model.finish_logits`,
+whatever the model does to the head's output to make its logits. That is the softcap when
+the text config sets `final_logit_softcapping` (Gemma-2), and nothing otherwise, unless the
+family defines its own: Cohere multiplies by `config.logit_scale`, Granite divides by
+`config.logits_scaling`. Applied to the last block's `layer_output` it equals `logits` exactly:
 
 ```python
 with model.trace(prompt):
@@ -161,8 +163,8 @@ on saved tensors, is the plain form.
 - **`steer` layers must be ascending**, and the add happens on `layer_output`: to steer
   the stream *entering* block `i`, steer block `i - 1`.
 - **`project_on_vocab` uses the model's `norm` and `lm_head`**, so on a checkpoint whose
-  head is tied or softcapped it is still exact; a hand-rolled `lm_head(hidden)` without the
-  norm and cap is not the model's prediction.
+  head is tied, softcapped or scaled it is still exact; a hand-rolled `lm_head(hidden)` without
+  the norm and `finish_logits` is not the model's prediction.
 - **Top-k on a tiny random checkpoint is noise**; the shapes are what to check there.
 
 ## Related

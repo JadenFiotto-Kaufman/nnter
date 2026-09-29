@@ -523,8 +523,7 @@ class FamilySuite:
             logits = model.logits.save()
             result = model.output.logits.save()
         assert torch.equal(logits, result) and logits.shape[-1] == model.vocab_size
-        cap = getattr(model.config, "final_logit_softcapping", None)
-        torch.testing.assert_close(logits, raw if not cap else cap * torch.tanh(raw / cap))
+        torch.testing.assert_close(logits, model.finish_logits(raw))  # the family's own step after the head
 
     def test_assigning_logits_replaces_the_result(self, model):
         with model.trace(PROMPT) as tracer:
