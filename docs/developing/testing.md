@@ -120,7 +120,7 @@ hybrid and drops `mlp.mlp_output` when no block has an MLP module (OPT). `VALUES
 | `test_probabilities_are_a_pattern` | shape `[batch, num_heads, seq, seq]`, dtype of `lm_head.weight`, rows sum to one at 8 ulp (or lie in (0, 1) with `ATTENTION_SINK`), lower-triangular |
 | `test_pattern_across_layers_and_traces` | first and last attention blocks have the same shape and differ; two traces of the first agree exactly |
 | `test_written_pattern_moves_the_logits` | assigning a random pattern and zeroing head 0 in place both move the logits (a read can be causally inert) |
-| `test_every_source_value_resolves_on_every_layer` | every available `SourceEProperty` on `FAMILY.Attention` reads a tensor on every attention block, one trace per value |
+| `test_every_source_value_resolves_on_every_layer` | every available value on `FAMILY.Attention` whose path is inside a forward (`inside_forward()`) reads a tensor on every attention block, one trace per value |
 
 **The attention interior** (`:336-396`)
 

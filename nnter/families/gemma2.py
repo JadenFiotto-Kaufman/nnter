@@ -9,7 +9,7 @@ point at the sibling norms. ``final_logit_softcapping`` applies to the logits af
 
 from transformers.models.gemma2.modeling_gemma2 import Gemma2Attention, Gemma2DecoderLayer, Gemma2MLP
 
-from ..components import Attention, Layer, Mlp, RelativeEProperty, Residual
+from ..components import Attention, EProperty, Layer, Mlp, Residual
 
 MODEL_TYPES = ("gemma2",)
 
@@ -27,7 +27,7 @@ class Layer(Layer):
 class Attention(Attention):
     """Gemma-2's attention: the shared eager forward, but what reaches the residual stream is the post-attention norm's output."""
 
-    @RelativeEProperty(
+    @EProperty(
         "../post_attention_layernorm.output",
         description="What the attention adds to the residual stream: the post-attention norm's output",
     )
@@ -38,7 +38,7 @@ class Attention(Attention):
 class Mlp(Mlp):
     """Gemma-2's MLP: what reaches the residual stream is the post-feedforward norm's output."""
 
-    @RelativeEProperty(
+    @EProperty(
         "../post_feedforward_layernorm.output",
         description="What the MLP adds to the residual stream: the post-feedforward norm's output",
     )

@@ -16,7 +16,7 @@ branch, at the eproperty-transform-raw merge), with torch 2.13 and
 jaxtyping 0.3.11; `pyproject.toml` requires `nnsight>=0.8`, `transformers`
 and `jaxtyping`. The names a family binds to (`RENAME`, `ENVOYS`) are
 transformers' module names and classes, which move rarely. The **operation
-names** inside a forward that every `SourceEProperty` pins are what a
+names** inside a forward that every `source.` path pins are what a
 release renames, and this page lists them, says how the suite guards them,
 and gives the procedure when one moves.
 
@@ -28,7 +28,7 @@ What the family pins, next to what the live forward has (run on
 ```python
 import nnter
 from nnter import StandardizedTransformer
-from nnter.components import INTERFACE, SourceEProperty
+from nnter.components import INTERFACE
 
 model = StandardizedTransformer("meta-llama/Llama-3.1-8B", dispatch=True, attn_implementation="eager")
 attn = model.layers[0].self_attn
@@ -43,7 +43,7 @@ with model.trace("Hello world there"):
 #  'attn_weights_0', 'attn_weights_1', 'nn_functional_softmax_0', 'to_0', 'attn_weights_2',
 #  'nn_functional_dropout_0', 'attn_weights_3', 'torch_matmul_1', 'attn_output_0', ...]
 
-{name: attr.key for name, attr in type(attn).values().items() if isinstance(attr, SourceEProperty)}
+{name: attr.key for name, attr in type(attn).values().items() if attr.inside_forward()}
 # {'attention_queries':       'source.attention_interface_1.inputs',
 #  'attention_keys':          'source.attention_interface_1.inputs',
 #  'attention_values':        'source.attention_interface_1.inputs',
@@ -124,12 +124,12 @@ keys, and nnsight binds whichever resolves (`gpt_neox.py:17-20`).
 `tests/families/suite.py` runs on every family's pinned checkpoint
 ([testing.md](testing.md)):
 
-- `test_every_source_value_resolves_on_every_layer` (`suite.py:317-332`):
-  every available `SourceEProperty` on the family's `Attention` reads a
-  tensor on every attention block. A renamed op fails here with
-  `SourceNotAvailable` naming the missing op and the ops that exist
-  (`nnter/components/eproperty.py:202-207`).
-- `test_written_pattern_moves_the_logits` (`:301-315`): assigning a random
+- `test_every_source_value_resolves_on_every_layer` (`suite.py:319-334`):
+  every available value on the family's `Attention` whose path is inside a
+  forward reads a tensor on every attention block. A renamed op fails here
+  with `SourceNotAvailable` naming the missing op and the ops that exist
+  (`nnter/components/eproperty.py:184-188`).
+- `test_written_pattern_moves_the_logits` (`:303-317`): assigning a random
   pattern and zeroing a head in place both move the logits. An op that
   still resolves but is no longer what the values are mixed with (a copy, a
   tensor the forward returns and never uses) reads fine and fails here.
@@ -186,7 +186,7 @@ behaviour:
 - **`eproperty.transform` takes `(self, view, raw)`**: the edited view and
   the value as served (nnsight `eproperty.py:158-166`, `:178-184`). Falcon's
   `mlp_output` uses it to carry an in-place edit on a clone back into the
-  model (`nnter/families/falcon.py:131-143`).
+  model (`nnter/families/falcon.py:136-148`).
 
 Also relied on: `Mediator.current`, `Mediator.iteration`, `Mediator.occurrence`,
 `Interleaver.sourced` and `Iterations` (nnsight `interleaver.py:287-334`,

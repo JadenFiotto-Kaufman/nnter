@@ -23,17 +23,16 @@ the residual inside the module (BLOOM, MPT, DBRX) or adds a post-sublayer
 norm's output instead (Gemma-2/3, OLMo-2), the family's subclass points the
 value at the right place; the identity is what the tests check.
 
-Two kinds of value:
+One descriptor, `EProperty`, whose key is a path from the host envoy:
 
-* At a module boundary, an `eproperty`: ``key="output"`` is a view over the
-  same location as ``.output``, so reading, writing and in-place edits all go
-  through the interleaver the way ``.output`` does (`Layer.layer_output`).
-* Elsewhere in the tree, a `RelativeEProperty`: the value is produced by a
-  module named relative to this one (a sandwich block's post-sublayer norm,
-  the root's embedding).
-* Inside a forward, a `SourceEProperty`: an eproperty whose location is an
-  operation under the module's ``.source``, optionally one element of it
-  (``select``).
+* ``"output"``: the host's own output, a view over the same location as
+  ``.output``, so reading, writing and in-place edits all go through the
+  interleaver the way ``.output`` does (`Layer.layer_output`).
+* ``"../post_attention_layernorm.output"``, ``"embed_tokens.output"``: a value
+  produced by a module named relative to this one (a sandwich block's
+  post-sublayer norm, the root's embedding).
+* ``"source.attention_interface_1.inputs"``: an operation inside a forward,
+  reached through ``.source``, optionally one element of it (``select``).
 * Computed from several served values, a `DerivedEProperty` (a DeltaNet
   layer's state after every token). An operation inside a called
   function only exists once someone has drilled into that call **in the
@@ -48,7 +47,7 @@ from .attention import (
     seq_first,
 )
 from .eproperty import (
-    DerivedEProperty, EProperty, RelativeEProperty, SourceEProperty, Unavailable, at_occurrence, branched,
+    DerivedEProperty, EProperty, Unavailable, at_occurrence, branched,
     per_call, unavailable,
 )
 from .layer import Layer, Residual
@@ -62,7 +61,7 @@ from .standard import Standard, first_tensor, rewrap
 __all__ = [
     "Attention", "DerivedEProperty", "EProperty", "Gates", "HeadOutputs", "INTERFACE", "Keys", "Layer", "LinearAttention",
     "LinearQK", "LinearV", "Mlp", "Pattern", "Queries", "Residual", "State", "States", "Values",
-    "NOT_ON_INTERFACE", "RelativeEProperty", "SourceEProperty", "Standard", "Unavailable", "at_occurrence",
+    "NOT_ON_INTERFACE", "Standard", "Unavailable", "at_occurrence",
     "branched", "first_tensor", "interface_reason", "needs_eager", "needs_recurrent_routing",
     "needs_torch_kernels", "per_call", "rewrap", "route_delta_rule", "seq_first", "unavailable",
 ]

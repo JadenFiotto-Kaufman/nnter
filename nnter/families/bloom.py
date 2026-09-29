@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 
 from transformers.models.bloom.modeling_bloom import BloomAttention, BloomBlock, BloomMLP
 
-from ..components import Attention, HeadOutputs, Keys, Layer, Mlp, Pattern, Queries, Residual, SourceEProperty, Values
+from ..components import Attention, EProperty, HeadOutputs, Keys, Layer, Mlp, Pattern, Queries, Residual, Values
 
 if TYPE_CHECKING:
     from ..standardized import StandardizedTransformer
@@ -43,23 +43,23 @@ class Attention(Attention):
     # the scores are the softmax's input after the mask; the head outputs are
     # the ``bmm`` result, ``[batch * heads, seq, head_dim]``.
 
-    @SourceEProperty("self__reshape_0", attribute="output", select=0, description=Attention.attention_queries.description)
+    @EProperty("source.self__reshape_0.output", select=0, description=Attention.attention_queries.description)
     def attention_queries(self, value) -> Queries:
         return value
 
-    @SourceEProperty("self__reshape_0", attribute="output", select=1, description=Attention.attention_keys.description)
+    @EProperty("source.self__reshape_0.output", select=1, description=Attention.attention_keys.description)
     def attention_keys(self, value) -> Keys:
         return value
 
-    @SourceEProperty("self__reshape_0", attribute="output", select=2, description=Attention.attention_values.description)
+    @EProperty("source.self__reshape_0.output", select=2, description=Attention.attention_values.description)
     def attention_values(self, value) -> Values:
         return value
 
-    @SourceEProperty("F_softmax_0", attribute="input", description=Attention.attention_scores.description)
+    @EProperty("source.F_softmax_0.input", description=Attention.attention_scores.description)
     def attention_scores(self, value) -> Pattern:
         return value
 
-    @SourceEProperty("torch_bmm_0", attribute="output", description=Attention.attention_head_outputs.description)
+    @EProperty("source.torch_bmm_0.output", description=Attention.attention_head_outputs.description)
     def attention_head_outputs(self, value) -> HeadOutputs:
         batch_heads, seq, head_dim = value.shape
         heads = self._module.num_heads
@@ -70,16 +70,15 @@ class Attention(Attention):
         batch, seq, heads, head_dim = value.shape
         return value.transpose(1, 2).reshape(batch * heads, seq, head_dim)
 
-    @SourceEProperty(
-        "dropout_add_0",
-        attribute="input",
+    @EProperty(
+        "source.dropout_add_0.input",
         description="What the attention adds to the residual stream: the tensor entering dropout_add",
     )
     def attention_output(self, value) -> Residual:
         return value
 
-    @SourceEProperty(
-        "self_attention_dropout_0",
+    @EProperty(
+        "source.self_attention_dropout_0.output",
         description="The attention pattern the values are mixed with, [batch, heads, query, key]",
     )
     def attention_probabilities(self, value) -> Pattern:
@@ -89,9 +88,8 @@ class Attention(Attention):
 class Mlp(Mlp):
     """BLOOM's MLP adds the residual inside: the contribution is what enters ``dropout_add``."""
 
-    @SourceEProperty(
-        "dropout_add_0",
-        attribute="input",
+    @EProperty(
+        "source.dropout_add_0.input",
         description="What the MLP adds to the residual stream: the tensor entering dropout_add",
     )
     def mlp_output(self, value) -> Residual:

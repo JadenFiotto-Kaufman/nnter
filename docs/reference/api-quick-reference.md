@@ -46,7 +46,7 @@ Reads within one trace follow the forward: the pattern is produced inside block 
 | `StandardizedTransformer` | The model class: a `TransformersModel` renamed to the standard vocabulary and wrapped in the family's envoys. |
 | `Layer`, `Attention`, `Mlp`, `LinearAttention` | The base envoys a family subclasses; the hosts of the standard values. |
 | `Standard` | The envoy base of the four, with `values()` and `status()`. |
-| `EProperty`, `SourceEProperty`, `RelativeEProperty`, `DerivedEProperty` | The descriptors a value is made of. |
+| `EProperty`, `DerivedEProperty` | The descriptors a value is made of: one keyed on a path from the host, one computed. |
 | `unavailable`, `branched`, `route_delta_rule` | A value a family lacks; an op picked by the forward's own branch; the DeltaNet kernel switch. |
 | `Unavailable`, `UnsupportedFamily` | The two exceptions nnter raises itself. |
 
@@ -77,7 +77,7 @@ Every row is an `EProperty` on the root, listed in `repr(model)` with its descri
 | Value | Layout | Assignable | Description (as the repr shows it) |
 |---|---|---|---|
 | `model.logits` | `Logits` | yes: replaces `output.logits` | The model's final logits, softcapping applied (Gemma-2); `model.lm_head.output` is the raw projection. |
-| `model.token_embeddings` | `Residual` | yes | The token embeddings entering the first block: `embed_tokens.output`, before positional embeddings and embedding norms. A `RelativeEProperty`. |
+| `model.token_embeddings` | `Residual` | yes | The token embeddings entering the first block: `embed_tokens.output`, before positional embeddings and embedding norms. An `EProperty` keyed `"embed_tokens.output"`. |
 | `model.next_token_probs` | `NextTokenProbs` | no (`AttributeError`: assign `logits`) | `logits[:, -1].softmax(-1)`; the last position is every row's last token only under left padding. |
 | `model.input_ids` | `Tokens` | yes: the model runs on the ids you set | The token ids the model was called with. |
 | `model.attention_mask` | `Tokens` | yes | The attention mask the model was called with; zeros are padding. |
@@ -229,9 +229,7 @@ A family module declares `MODEL_TYPES: tuple[str, ...]`, `RENAME: dict[str, str]
 
 | Descriptor | Signature | What |
 |---|---|---|
-| `EProperty` | `EProperty(key=None, description=None, unavailable=None)` | nnsight's `eproperty` plus availability. `unavailable` is a reason string, or a function of the envoy returning one or `None`, checked on every read and write; `reason(obj)` returns it. `key` defaults to the attribute name; `key="output"` is a view over `.output`. |
-| `SourceEProperty` | `SourceEProperty(op, attribute="output", description=None, unavailable=None, select=None)` | A value at an operation under the module's `.source`. `op` is a dotted path with `.source.` between a call and an op inside it (`"attention_interface_1.source.nn_functional_softmax_0"`), or a function of the envoy returning one. `attribute` is `"output"`, `"input"` or `"inputs"`; `select` picks an element (`"inputs"`: an int is a positional argument, a str a keyword; `"output"`: an int indexes the returned tuple). A write with `select` repacks the element and writes the whole value back. Drills into `.source` before every read or write; a missing op raises nnsight's `SourceNotAvailable`. |
-| `RelativeEProperty` | `RelativeEProperty(key, description=None, unavailable=None)` | A value produced by another module named relative to this envoy: `key` is `"<path>.<attribute>"`, resolved through aliases (`"embed_tokens.output"` on the root); a leading `../` steps to the parent by native name (`"../post_attention_layernorm.output"`). |
+| `EProperty` | `EProperty(key=None, description=None, unavailable=None, select=None)` | nnsight's `eproperty` plus availability and a path for a key. `key` is a path from the host envoy, dotted segments ending in `output`, `input` or `inputs`: `"output"` is the host's own output; a leading `../` (repeatable) steps to the parent by native name; another segment is a child module (aliases included) or, after a `source` segment, an operation; `source` drills into the current module's or operation's forward, instrumenting it for this run (`"source.attention_interface_1.source.nn_functional_softmax_0.output"`, `"../post_attention_layernorm.output"`, `"embed_tokens.output"`, `"../source.hidden_states_view_0.output"`). A function of the envoy returning such a path is allowed (`branched`, Falcon's `by_alibi`). `None` means the attribute name. `select` picks an element: with `inputs` an int is a positional argument and a str a keyword, with `output` an int indexes the returned tuple; `input` is the call's first argument. A write with `select` (or on `input`) repacks the element and writes the whole value back. `unavailable` is a reason string, or a function of the envoy returning one or `None`, checked on every read and write; `reason(obj)` returns it. `path(obj)`, `inside_forward(obj=None)` and `reads_parent_forward()` describe the key. A path is walked before every read or write; a missing op raises nnsight's `SourceNotAvailable`. |
 | `DerivedEProperty` | `DerivedEProperty(compute, description=None, unavailable=None)` | `compute(envoy)` runs at read time inside the trace over any served values; read-only (assignment raises `AttributeError`). Its layout is read off `compute`'s return annotation. |
 
 Every descriptor exposes `.layout` (the layout alias the defining function's return annotation names, or `None`), `.dims` (its axis names as a tuple), `.description`, `.reason(envoy)`.
@@ -275,7 +273,7 @@ The axis names are the same on every layout (`batch` axis 0 everywhere, `seq` th
 
 | Name | Signature | What |
 |---|---|---|
-| `branched` | `branched(variable: str, ops: dict[Any, str]) -> Callable[[Envoy], str]` | An `op` for `SourceEProperty` chosen by a binding the forward makes before it branches: `ops[value of <variable>]`, decided once per module call (`per_call`). |
+| `branched` | `branched(variable: str, ops: dict[Any, str]) -> Callable[[Envoy], str]` | A key function for `EProperty` whose op is chosen by a binding the forward makes before it branches: `ops[value of <variable>]`, decided once per module call (`per_call`). |
 | `per_call` | `per_call(envoy, key: str, compute: Callable[[], Any]) -> Any` | `compute()` once per module call, cached on the envoy under `key`; a call is told apart by the worker's mediator and its step. |
 | `at_occurrence` | `at_occurrence(t: int)` | The `for step in tracer.iter[t]` stretch as an object: one occurrence of a location inside a call. What `states`, `state_after` and `set_state_after` iterate with. |
 | `route_delta_rule` | `route_delta_rule(family, kernel: str = "recurrent") -> None` | Bind a hybrid family's delta-rule names process-wide: `"recurrent"` to transformers' token-by-token torch loop (the only kernel that materializes `state`, `states`, `state_after`, `set_state_after`), `"chunked"` back to what the modeling module bound at import. `family` is `model.family`, `nnter.families.<name>` or the modeling module. Call it before tracing a layer. |
@@ -317,7 +315,7 @@ nnterp's activation helpers on the standard values. `GetActivations = Callable[[
 |---|---|
 | `nnter.Unavailable` (`RuntimeError`) | A standard value this checkpoint does not have is read or written: `"<path>.<name> is not available: <reason>"`, at that line, before the model runs. `status()` gives the same reason without raising. `hasattr(envoy, name)` also raises it. |
 | `nnter.UnsupportedFamily` (`ValueError`) | The checkpoint's `model_type` has no family module and nothing registered; the message lists the known types. |
-| `nnsight.intervention.source.SourceNotAvailable` | A `SourceEProperty`'s operation is not under `.source` in this run: the forward took a path the family does not expect. |
+| `nnsight.intervention.source.SourceNotAvailable` | An `EProperty`'s path names an operation that is not under `.source` in this run: the forward took a path the family does not expect. |
 | `nnter.prompt_utils.TokenizationError` | A word has no standalone first token under the tokenizer. |
 | `AttributeError` | Assigning a read-only value: `next_token_probs`, `input_size`, `states`, or any `DerivedEProperty`. |
 | `nnsight.intervention.interleaver.OutOfOrderError` | A value is read after the model ran past its location: a block's interior after its output, `input_ids` after a block, Falcon's queries before its values. |

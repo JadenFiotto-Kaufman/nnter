@@ -82,9 +82,10 @@ rest of this page says which.
    └── lm_head
         │
         ▼  inside a trace, a value read
-   EProperty.__get__ ── _check(unavailable) ── nnsight eproperty over "{path}.{key}"   (boundary values)
-   SourceEProperty.__get__ ── _check ── _drill(obj.source ...) ── op.output / op.inputs (values inside a forward)
-   RelativeEProperty ── _location("../post_attention_layernorm.output")                  (a sibling's value)
+   EProperty.__get__ ── _check(unavailable) ── _resolve(path) ── Mediator.value(location) ── _pick(select)
+        key "output"                              → "{path}.output"                        (boundary values)
+        key "../post_attention_layernorm.output"  → the sibling's ".output"                (a sibling's value)
+        key "source.<call>.source.<op>.output"    → _drill per run → the op's location     (values inside a forward)
         │
         ▼  outside a trace, a size read
    StandardizedProperty.__get__ ── family.<name>(model) if the family module defines it, else the plain rule over config
@@ -160,17 +161,18 @@ eproperty that carries a `description` (`envoy.py:1066-1095`), which is how
 | layer | owns | must not know |
 |---|---|---|
 | `nnter/families/<model_type>.py` | `MODEL_TYPES`; `RENAME` (native name → standard name); `Layer`/`Attention`/`Mlp`/`LinearAttention` subclasses that point a value at *this family's* op or sibling; `ENVOYS` keyed on transformers types; a module-level `def <size>(model)` for each root size *this family's* config spells its own way (`falcon.py`: `num_kv_heads`, `intermediate_size`; `deepseek_v2.py`: `head_dim`, `qk_head_dim`) | what a value means, how nnsight serves it; the plain rule for a size |
-| `nnter/components/` | what each standard value **means** (`layer_output` is the residual stream leaving the block, `attention_output` the contribution, `attention_probabilities` the post-dropout pattern); how to read/write it (`EProperty`, `SourceEProperty`, `RelativeEProperty`, `DerivedEProperty`); availability (`unavailable=`, `status`); the default op on transformers' shared interface (`INTERFACE`, `attention.py:26`) | any one family's module names or classes |
+| `nnter/components/` | what each standard value **means** (`layer_output` is the residual stream leaving the block, `attention_output` the contribution, `attention_probabilities` the post-dropout pattern); how to read/write it (`EProperty` with a path for a key, `DerivedEProperty`); availability (`unavailable=`, `status`); the default op on transformers' shared interface (`INTERFACE`, `attention.py:28`) | any one family's module names or classes |
 | `nnter/standardized.py` | the root values (`logits`, `token_embeddings`, `next_token_probs`, `input_ids`, `attention_mask`, `input_size`); the methods (`skip_layers`, `steer`, `project_on_vocab`, `get_topk_closest_tokens`); the sizes (`num_layers` … `intermediate_size`, `standardized.py:365-403`), each a `StandardizedProperty` (`:19-43`) holding the plain rule over the config and yielding on read to a same-named function in `model.family`; `status()` over the tree (`:254-318`: `_hosts` unions each block's `Standard` children under their standard names, a mounted alias such as DBRX's `norm_attn_norm.attn` included, so a value installed through `envoys=` is listed and a module no block has is not); the remote key (`:407-416`) | op names inside a forward; any one family's config keys |
 
 Two examples of the boundary. Gemma-2's contribution is the post-attention
-norm's output: the *family* says so with a `RelativeEProperty` on its
-`Attention` (`families/gemma2.py:33-38`), while the *component*
-`RelativeEProperty` only knows how to resolve `"../<sibling>.output"`
-(`components/eproperty.py:262-267`). BLOOM's contribution is the first
-argument of `dropout_add`: the family names the op
-(`families/bloom.py:77-83`), the component `SourceEProperty` knows how to
-drill to it and read `.input`. A family that keeps transformers' shared
+norm's output: the *family* says so with an `EProperty` keyed
+`"../post_attention_layernorm.output"` on its `Attention`
+(`families/gemma2.py:30-36`), while the *component* only knows how to walk a
+path: `../` to the parent, a name to a child, `source` into a forward
+(`components/eproperty.py:170-189`). BLOOM's contribution is the first
+argument of `dropout_add`: the family names the op,
+`"source.dropout_add_0.input"` (`families/bloom.py:73-78`), the component
+drills to it and reads the call's first argument. A family that keeps transformers' shared
 path overrides nothing (`families/llama.py:22-31`: three empty subclasses)
 and its module is three dict entries plus the type keys. The sizes draw the
 same line: the *root* holds the plain rule (`num_kv_heads` is
@@ -184,14 +186,16 @@ place a size is said.
 
 ### The base envoys
 
-`Standard` (`components/standard.py:24-39`) is the `Envoy` subclass every
+`Standard` (`components/standard.py:24-63`) is the `Envoy` subclass every
 component derives from: `values()` collects the `EProperty`s of a class,
-base classes first (`:27-35`), and `status()` maps each to its reason on
-this instance (`:37-39`). `Layer` (`components/layer.py`) adds
-`returns_tuple` (`:41`), `skip_with` (`:43-52`) and `layer_output`
-(`:54-73`, `first_tensor` in, `rewrap` out). `Attention`
-(`components/attention.py:50-159`) adds the contribution and the six
-interior values on `INTERFACE`; `off_interface` (`:70-72`) is the one method
+base classes first (`:51-59`), `status()` maps each to its reason on
+this instance (`:61-63`), and `_instrument_for_children` (`:43-49`, run at
+`__init__` and `_update`) instruments the envoy's own forward when a child's
+value reads inside it (a `../source.` key, Llama 4's `mlp_output`). `Layer`
+(`components/layer.py`) adds `returns_tuple` (`:45`), `skip_with` (`:47-56`)
+and `layer_output` (`:58-77`, `first_tensor` in, `rewrap` out). `Attention`
+(`components/attention.py:63-176`) adds the contribution and the six
+interior values on `INTERFACE`; `off_interface` (`:87-89`) is the one method
 a family overrides to give another reason the interface does not run
 (`families/gpt2.py:50-53` for `reorder_and_upcast_attn`). `Mlp`
 (`components/mlp.py:15-32`) adds `mlp_output`. `LinearAttention` is its own

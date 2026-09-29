@@ -9,7 +9,7 @@ point at the sibling norms. OLMo 2 has only the post-norms: no ``input_layernorm
 
 from transformers.models.olmo2.modeling_olmo2 import Olmo2Attention, Olmo2DecoderLayer, Olmo2MLP
 
-from ..components import Attention, Layer, Mlp, RelativeEProperty, Residual
+from ..components import Attention, EProperty, Layer, Mlp, Residual
 
 MODEL_TYPES = ("olmo2",)
 
@@ -27,7 +27,7 @@ class Layer(Layer):
 class Attention(Attention):
     """OLMo-2's attention: the shared eager forward, but what reaches the residual stream is the post-attention norm's output."""
 
-    @RelativeEProperty(
+    @EProperty(
         "../post_attention_layernorm.output",
         description="What the attention adds to the residual stream: the post-attention norm's output",
     )
@@ -38,7 +38,7 @@ class Attention(Attention):
 class Mlp(Mlp):
     """OLMo-2's MLP: what reaches the residual stream is the post-feedforward norm's output."""
 
-    @RelativeEProperty(
+    @EProperty(
         "../post_feedforward_layernorm.output",
         description="What the MLP adds to the residual stream: the post-feedforward norm's output",
     )

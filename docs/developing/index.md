@@ -26,7 +26,7 @@ read.
 ## Pages
 
 - [architecture](architecture.md) — the map, which layer owns what, lazy family import.
-- [eproperty-internals](eproperty-internals.md) — `EProperty`, `SourceEProperty` (drilling per run, `select`, the relaxed drill), `RelativeEProperty`, `DerivedEProperty`, `branched`/`per_call`.
+- [eproperty-internals](eproperty-internals.md) — `EProperty` and its path grammar (`../`, `source`, `input`/`inputs`/`output`), `_resolve`'s walk, drilling per run and the relaxed drill, `select`, the `Standard` instrumentation rule, `DerivedEProperty`, `branched`/`per_call`.
 - [linear-attention-internals](linear-attention-internals.md) — the branch-chosen kernel op, per-token state through occurrence arithmetic, `route_delta_rule`.
 - [testing](testing.md) — `HF_HUB_OFFLINE=1 pytest`, what `FamilySuite` asserts method by method, the root tests.
 - [transformers-compat](transformers-compat.md) — the versions nnter is developed against, which operation names a release can move, the upgrade procedure.

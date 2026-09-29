@@ -22,7 +22,31 @@ def rewrap(envoy: Envoy, value: torch.Tensor) -> Any:
 
 
 class Standard(Envoy):
-    """An envoy carrying standard values: what `Layer`, `Attention` and `Mlp` share."""
+    """An envoy carrying standard values: what `Layer`, `Attention` and `Mlp` share.
+
+    A value of a child that reads an operation inside *this* module's forward
+    (``"../source.<op>.output"``) needs the forward instrumented before the
+    call begins: the read can come after the call started, when instrumenting
+    is too late for it. So the forward is instrumented when the envoy is built,
+    and again when real weights replace meta ones, which reinstalls the plain
+    forward.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._instrument_for_children()
+
+    def _update(self, module: Any) -> None:
+        super()._update(module)
+        self._instrument_for_children()
+
+    def _instrument_for_children(self) -> None:
+        for _, child in self._named_children():
+            if isinstance(child, Standard) and any(
+                value.reads_parent_forward() for value in type(child).values().values()
+            ):
+                self.source
+                return
 
     @classmethod
     def values(cls) -> dict[str, EProperty]:
