@@ -116,7 +116,7 @@ with model.trace(prompt):
 
 ## Blocks without one of the modules
 
-A hybrid (Qwen3-Next, Qwen3.5, Qwen3.5-MoE text) has `linear_attn` on three blocks in
+A hybrid (Qwen3-Next, Qwen3.5, Qwen3.5-MoE text, OLMo-Hybrid) has `linear_attn` on three blocks in
 four and `self_attn` on the fourth, never both. Decide which blocks have which outside the
 trace:
 

@@ -19,9 +19,9 @@ The same block runs unchanged on `meta-llama/Llama-3.1-8B`,
 Llama, Llama 4 (text), GPT-NeoX, Mistral, Mixtral, MiniMax-M2, Qwen2, Qwen2-MoE, Qwen3, Qwen3-MoE, Gemma,
 Gemma-2, Gemma-3 (text), GPT-OSS, DeepSeek-V2, DeepSeek-V3, DeepSeek-V3.2, GLM-4.5/4.6,
 GLM-4.7-Flash, GLM-5, DBRX, Phi, Phi-3,
-OLMo, OLMo-2, OLMo-3, EXAONE 4.0, SmolLM3, StableLM, GPT-J, BLOOM, MPT, Falcon (7B and 40B
-layouts), OPT, and the gated DeltaNet hybrids Qwen3-Next, Qwen3.5 and
-Qwen3.5-MoE (text), on transformers 5.17. The vocabulary is Llama's block names, with the containers
+OLMo, OLMo-2, OLMo-3, OLMoE, EXAONE 4.0, SmolLM3, StableLM, GPT-J, BLOOM, MPT, Falcon (7B and 40B
+layouts), OPT, and the gated DeltaNet hybrids Qwen3-Next, Qwen3.5,
+Qwen3.5-MoE (text) and OLMo-Hybrid, on transformers 5.17. The vocabulary is Llama's block names, with the containers
 lifted out of the inner `.model`:
 
 | standard name                              | GPT-2                     | Llama                   | GPT-NeoX                          |
