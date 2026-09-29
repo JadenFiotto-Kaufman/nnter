@@ -44,7 +44,7 @@ from transformers.models.llama4.modeling_llama4 import (
     Llama4TextAttention, Llama4TextDecoderLayer, Llama4TextMLP, Llama4TextMoe,
 )
 
-from ..components import Attention, Layer, Mlp, RelativeEProperty, Residual
+from ..components import Attention, EProperty, Layer, Mlp, Residual
 
 if TYPE_CHECKING:
     from nnsight.intervention.envoy import Envoy
@@ -78,20 +78,12 @@ def _not_a_block_feed_forward(envoy: "Envoy") -> str | None:
 class Layer(Layer):
     """Llama 4's decoder block; returns a bare tensor, so the base holds.
 
-    Its forward is source-instrumented when the envoy is built (and again when
-    real weights replace meta ones), because `Mlp.mlp_output` is an operation
-    in it: an operation is only served on a call whose forward was already
-    instrumented when the call began, and the MLP's value is read after the
-    block has started.
+    `Mlp.mlp_output` is an operation in this forward, read after the block
+    has started (its attention has returned), so the forward is instrumented
+    at build.
     """
 
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        self.source
-
-    def _update(self, module) -> None:
-        super()._update(module)
-        self.source
+    sourced = True
 
 
 class Attention(Attention):
@@ -111,7 +103,7 @@ class Mlp(Mlp):
     the value on every block, dense or not, so the layout is the same.
     """
 
-    @RelativeEProperty(
+    @EProperty(
         f"../source.{FEED_FORWARD_VIEW}.output",
         description="What the MLP adds to the residual stream: its output viewed in the residual's shape, [batch, seq, hidden]",
         unavailable=_not_a_block_feed_forward,

@@ -1,6 +1,6 @@
 ---
 title: Finding Source Ops
-one_liner: Discover the operation names a `SourceEProperty` needs — `print(envoy.source)` outside a trace, `<call>.source` inside one, and how nnsight names calls and bindings.
+one_liner: Discover the operation names a `source.` path needs — `print(envoy.source)` outside a trace, `<call>.source` inside one, and how nnsight names calls and bindings.
 tags: [extending, source, operations, transformers]
 related: [docs/extending/overriding-values.md, docs/extending/custom-values.md, docs/extending/adding-a-family.md]
 sources: [nnter/components/eproperty.py, nnter/components/attention.py, nnter/families/gptj.py, nnter/families/bloom.py, nnter/families/falcon.py, nnter/families/gpt_oss.py]
@@ -63,8 +63,8 @@ print(model.layers[0].self_attn.source)
 
 The interface call is `attention_interface_1` on every family that uses it, which is why
 `nnter.components.INTERFACE` is that string. Its arguments are `(self, query, key, value,
-attention_mask, ...)`, so the base `Attention` reads the queries as `attribute="inputs",
-select=1`.
+attention_mask, ...)`, so the base `Attention` reads the queries as
+`EProperty("source.attention_interface_1.inputs", select=1)`.
 
 ## Inside a call: nested `.source`, inside a trace only
 
@@ -119,8 +119,9 @@ is `nn_functional_dropout_0`'s output, `attention_head_outputs` is the call's ow
 `attn_weights_1` and the softmax, so its family reads `attention_scores` at
 `attn_weights_1` by name ([overriding-values.md](overriding-values.md)).
 
-`SourceEProperty` does this drill for you at every read, with `.source.` in the op path
-separating the call from the operation inside it: `"attention_interface_1.source.nn_functional_dropout_0"`.
+An `EProperty` does this drill for you at every read, with a `source` segment in the path
+separating the call from the operation inside it:
+`"source.attention_interface_1.source.nn_functional_dropout_0.output"`.
 
 ## How operations are named
 
@@ -167,8 +168,8 @@ BLOOM reads its `dropout_add_0` call's input.
 
 - A name not in the listing raises `AttributeError` naming every operation the module has:
   `'model.transformer.h.0.attn.source' has no operation 'nope_0'; available: is_cross_attention_0, ...`.
-- A `SourceEProperty` whose op is missing raises `SourceNotAvailable` with the value's
-  path, the op, and that list, plus "The forward took a path this family's toolkit does
+- An `EProperty` whose op is missing raises `SourceNotAvailable` with the value's
+  path, its key, and that list, plus "The forward took a path this family's toolkit does
   not expect."
 - A name that is in the listing but under a branch this forward does not take
   (`self__upcast_and_reordered_attn_0` when `reorder_and_upcast_attn` is off, GPT-2's
@@ -188,7 +189,7 @@ Requests are served in the forward's order. For a call and its inside: the call'
 `.inputs`, then the drill (`.source`, served from the call's `.fn` just before it runs),
 then the operations inside, then the call's `.output`. The Llama snippet above reads them
 in that order; reading `attention_interface_1.inputs` after an operation inside the call
-raises `OutOfOrderError` on `...attention_interface_1.input.i0`. `SourceEProperty` drills
+raises `OutOfOrderError` on `...attention_interface_1.input.i0`. An `EProperty` drills
 at every read, so the same rule governs two values read in one trace: `attention_queries`
 (the call's inputs) before `attention_probabilities` (inside the call), and on Falcon
 `attention_values` (the `value_layer_0` binding) before the rotary's returns. The family
@@ -216,8 +217,11 @@ address can read a perfectly good tensor nothing downstream uses.
 - **A submodule call is not drilled.** `self_c_proj_0.source` is refused; read
   `attn.c_proj.output` or `.source` on that submodule.
 - **First `.source` access on a module must come before that module's forward runs** in a
-  trace, since it rewrites the forward. A `SourceEProperty` read as the first request on
-  its module is fine; a bare `_ = envoy.source` outside the trace instruments it up front.
+  trace, since it rewrites the forward. A value on the module's own `source.` path read as
+  the first request on its module is fine; a bare `_ = envoy.source` outside the trace
+  instruments it up front, and `sourced = True` on a `Standard` subclass does that at
+  build, for a value in its forward that is read after the call has begun (Llama 4's
+  `Layer`, whose `mlp_output` follows `attention_output`).
 - **Sourcing a module costs a little on every forward afterwards**, trace or not
   (nnsight docs/usage/source.md quotes about 6% for all of GPT-2's blocks); a family
   value instruments only the modules it is read on.
@@ -225,6 +229,6 @@ address can read a perfectly good tensor nothing downstream uses.
 ## Related
 
 - [overriding-values.md](overriding-values.md): the descriptors that take these names.
-- [custom-values.md](custom-values.md): a `SourceEProperty` of your own on an op you found.
+- [custom-values.md](custom-values.md): an `EProperty` of your own on an op you found.
 - [adding-a-family.md](adding-a-family.md): the suite test that guards every op name.
 - nnsight docs/usage/source.md: operation naming, iteration, dispatchers and the full gotcha list.

@@ -13,7 +13,7 @@ way, so the values are the same on every block.
 
 from transformers.models.exaone4.modeling_exaone4 import Exaone4Attention, Exaone4DecoderLayer, Exaone4MLP
 
-from ..components import Attention, Layer, Mlp, RelativeEProperty, Residual
+from ..components import Attention, EProperty, Layer, Mlp, Residual
 
 MODEL_TYPES = ("exaone4",)
 
@@ -31,7 +31,7 @@ class Layer(Layer):
 class Attention(Attention):
     """EXAONE-4's attention: the shared eager forward, but what reaches the residual stream is the post-attention norm's output."""
 
-    @RelativeEProperty(
+    @EProperty(
         "../post_attention_layernorm.output",
         description="What the attention adds to the residual stream: the post-attention norm's output",
     )
@@ -42,7 +42,7 @@ class Attention(Attention):
 class Mlp(Mlp):
     """EXAONE-4's MLP: what reaches the residual stream is the post-feedforward norm's output."""
 
-    @RelativeEProperty(
+    @EProperty(
         "../post_feedforward_layernorm.output",
         description="What the MLP adds to the residual stream: the post-feedforward norm's output",
     )

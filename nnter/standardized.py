@@ -13,7 +13,7 @@ from nnsight.modeling.transformers import TransformersModel
 from torch import Tensor
 
 from . import families
-from .components import EProperty, Layer, RelativeEProperty, Residual, Standard
+from .components import EProperty, Layer, Residual, Standard
 
 #: The layouts of the root's values: the logits, the next-token distribution at the last position, and one
 #: integer per token (``input_ids``, ``attention_mask``).
@@ -164,7 +164,7 @@ class StandardizedTransformer(TransformersModel):
         output.logits = value
         return output
 
-    @RelativeEProperty("embed_tokens.output", description="The token embeddings entering the first block, [batch, seq, hidden]")
+    @EProperty("embed_tokens.output", description="The token embeddings entering the first block, [batch, seq, hidden]")
     def token_embeddings(self, value: torch.Tensor) -> Residual:
         """The embedding module's output, ``[batch, seq, hidden]``.
 
@@ -325,7 +325,7 @@ class StandardizedTransformer(TransformersModel):
 
     # -- the input (inside a trace) ----------------------------------------------
 
-    @EProperty(key="input", description="The token ids the model was called with, [batch, seq]")
+    @EProperty(key="inputs", description="The token ids the model was called with, [batch, seq]")
     def input_ids(self, value: Any) -> Tokens:
         """The token ids the model was called with, ``[batch, seq]``. Assign to run the model on other ids."""
         return value[1]["input_ids"]
@@ -335,7 +335,7 @@ class StandardizedTransformer(TransformersModel):
         args, kwargs = self.inputs
         return args, {**kwargs, "input_ids": value}
 
-    @EProperty(key="input", description="The attention mask the model was called with, [batch, seq]; zeros are padding")
+    @EProperty(key="inputs", description="The attention mask the model was called with, [batch, seq]; zeros are padding")
     def attention_mask(self, value: Any) -> Tokens:
         """The attention mask the model was called with, ``[batch, seq]``; zeros are padding. Assignable."""
         return value[1]["attention_mask"]
@@ -345,7 +345,7 @@ class StandardizedTransformer(TransformersModel):
         args, kwargs = self.inputs
         return args, {**kwargs, "attention_mask": value}
 
-    @EProperty(key="input", description="[batch, seq] of the current call; read-only")
+    @EProperty(key="inputs", description="[batch, seq] of the current call; read-only")
     def input_size(self, value: Any) -> torch.Size:
         """``[batch, seq]`` of the current call, from the ids; read-only."""
         return value[1]["input_ids"].shape

@@ -1,6 +1,6 @@
 ---
 title: Custom Values
-one_liner: Add a new value to an attention, block or MLP by subclassing the family's envoy with an `EProperty`, `SourceEProperty` or `DerivedEProperty` and passing it through `envoys=`.
+one_liner: Add a new value to an attention, block or MLP by subclassing the family's envoy with an `EProperty` (keyed on a path) or a `DerivedEProperty` and passing it through `envoys=`.
 tags: [extending, eproperty, envoys, source, status]
 related: [docs/extending/overriding-values.md, docs/extending/finding-source-ops.md, docs/extending/registering.md, docs/extending/adding-a-family.md]
 sources: [nnter/components/eproperty.py, nnter/components/layer.py, nnter/components/standard.py, nnter/components/attention.py, nnter/standardized.py, nnter/families/gpt2.py, tests/test_registry.py, tests/test_base.py]
@@ -28,7 +28,7 @@ from jaxtyping import Float
 from torch import Tensor
 
 import nnter
-from nnter import StandardizedTransformer, DerivedEProperty, SourceEProperty
+from nnter import StandardizedTransformer, DerivedEProperty, EProperty
 from nnter.components import Pattern, interface_reason
 from nnter.families import gpt2
 from transformers.models.gpt2.modeling_gpt2 import GPT2Attention   # after nnter
@@ -42,8 +42,8 @@ def attention_entropy(self) -> Float[Tensor, "batch heads query"]:
 class Attention(gpt2.Attention):
     """GPT-2's attention plus two values of my own."""
 
-    @SourceEProperty(
-        "attention_interface_1.source.nn_functional_softmax_0",
+    @EProperty(
+        "source.attention_interface_1.source.nn_functional_softmax_0.output",
         description="The softmax output before the dropout, [batch, heads, query, key]",
         unavailable=interface_reason,
     )
@@ -82,38 +82,46 @@ in `[0, log(seq)]`; assigning `attn.attention_softmax` moves the logits, and und
 `attn_implementation="sdpa"` both values report the same reason `attention_probabilities`
 does, through `interface_reason`.
 
-## The three descriptors
+## The two descriptors
 
-### `EProperty(key=..., description=...)`: a view over a module location
+### `EProperty(key, description=, unavailable=, select=)`: a value at a path
 
-`key="output"` shares the module's `.output` location; the stub is the preprocess, mapping
-the served value to what the user reads. GPT-2's attention returns `(attn_output,
-attn_weights)`, so the weights it returns are one line:
+`key` is a path from the host envoy, dotted segments ending in `output`, `input` or
+`inputs`; the stub is the preprocess, mapping the served value to what the user reads.
 
-```python
-from nnter import EProperty
+- **`key="output"`** shares the module's `.output` location. GPT-2's attention returns
+  `(attn_output, attn_weights)`, so the weights it returns are one line:
+
+  ```python
+  from nnter import EProperty
 
 
-class Attention(gpt2.Attention):
-    @EProperty(key="output", description="The attention weights the module returns beside its output")
-    def returned_weights(self, value):
-        return value[1]
-```
+  class Attention(gpt2.Attention):
+      @EProperty(key="output", description="The attention weights the module returns beside its output")
+      def returned_weights(self, value):
+          return value[1]
+  ```
 
-A preprocess that returns a slice or a copy is a view the model does not see; an
-in-place edit to it needs a `transform` to land, and an assignment needs a `postprocess`
-that rebuilds the served shape (`rewrap`). See [overriding-values.md](overriding-values.md).
-`key="input"` serves the raw `(args, kwargs)` pair.
-
-### `SourceEProperty(op, attribute=, select=)`: an operation inside the forward
-
-`op` is the path under the module's `.source`, with `.source.` between a call and an
-operation inside it. `attention_interface_1.source.nn_functional_softmax_0` is the
-softmax inside transformers' shared eager attention. Find names with
-`print(model.layers[0].self_attn.source)` ([finding-source-ops.md](finding-source-ops.md));
-the operation must exist on the path this checkpoint's forward takes, and a value inside
-the interface needs `attn_implementation="eager"`, which `unavailable=interface_reason`
-states for you.
+  A preprocess that returns a slice or a copy is a view the model does not see; an
+  in-place edit to it needs a `transform` to land, and an assignment needs a `postprocess`
+  that rebuilds the served shape (`rewrap`). See [overriding-values.md](overriding-values.md).
+  `key="input"` is the call's first argument, `key="inputs"` the raw `(args, kwargs)` pair.
+- **A module named relative to the host.** A leading `../` steps to the parent, any other
+  segment to a child, aliases included. On GPT-2's attention,
+  `EProperty("../ln_2.output", description="The stream entering the MLP")` is the block's
+  second norm; on the block, `EProperty("post_attention_layernorm.input", ...)` is the
+  residual stream after the attention sublayer (verified: equal to
+  `layer.input + attention_output`). In-place edits and assignments on either reach the
+  model.
+- **An operation inside the forward.** `source` drills into the current module's forward,
+  and again into a call the forward makes; the segment after it names the operation.
+  `source.attention_interface_1.source.nn_functional_softmax_0.output` is the softmax
+  inside transformers' shared eager attention. Find names with
+  `print(model.layers[0].self_attn.source)` ([finding-source-ops.md](finding-source-ops.md));
+  the operation must exist on the path this checkpoint's forward takes, and a value inside
+  the interface needs `attn_implementation="eager"`, which `unavailable=interface_reason`
+  states for you. `select` picks one element: with `inputs` an int is a positional
+  argument and a str a keyword, with `output` an int indexes the returned tuple.
 
 ### `DerivedEProperty(compute, description=)`: computed from other values
 
@@ -143,7 +151,11 @@ model = StandardizedTransformer("openai-community/gpt2", envoys={GPT2Attention: 
 Subclass the family's class (`gpt2.Mlp`) rather than `nnter.Mlp` so the family's own
 overrides stay; subclass `nnter.components.Standard` for a module that has no standard
 values at all (a norm, an embedding). `Standard.values()` lists the descriptors by name,
-base classes first, and `Standard.status()` their reasons.
+base classes first, and `Standard.status()` their reasons. `Standard.sourced` (`False`
+by default) set to `True` on a subclass instruments that envoy's forward at build, for a
+value inside it that is read after the call has started (Llama 4's `Layer`, whose
+`Mlp.mlp_output` is read after `attention_output`); a path alone declares where a value
+is, not when its forward is instrumented.
 
 ## Layout: the return annotation
 
@@ -190,9 +202,11 @@ modeling module; import them after `import nnter`.
   segfaults at import on this stack.
 - **Key on the module type, not the alias.** `envoys=` matches type or native path; a
   path key loses to the family's type key.
-- **`unavailable=` is yours to state.** A `SourceEProperty` on an interface op without
+- **`unavailable=` is yours to state.** A value on an interface op without
   `unavailable=interface_reason` raises `SourceNotAvailable` at read time under `sdpa`
   instead of reporting in `status()` and raising `Unavailable` before the model runs.
+- **`input` is the first argument.** A stub on an `input` path receives the tensor, not
+  the pair; take an `inputs` path for a keyword argument.
 - **A `DerivedEProperty`'s function takes the envoy only** (`compute(self)`), not a served
   value; it is stored as `_preprocess` so `layout` can read its annotation, but it is
   never called as a preprocess.
@@ -207,7 +221,7 @@ modeling module; import them after `import nnter`.
 
 ## Related
 
-- [overriding-values.md](overriding-values.md): the same descriptors used to relocate a standard value.
-- [finding-source-ops.md](finding-source-ops.md): finding the op name for a `SourceEProperty`.
+- [overriding-values.md](overriding-values.md): the same descriptor, relocating a standard value.
+- [finding-source-ops.md](finding-source-ops.md): finding the op name for a `source.` path.
 - [registering.md](registering.md): making the custom class the family's for every load of that model type in the process.
 - nnsight docs/usage/extending.md and docs/developing/extending-envoy.md: the `eproperty` descriptor nnter's are built on.

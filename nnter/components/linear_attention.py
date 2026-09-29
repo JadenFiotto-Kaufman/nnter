@@ -11,7 +11,7 @@ from nnsight.intervention.source import SourceEnvoy
 from jaxtyping import Float
 from torch import Tensor
 
-from .eproperty import DerivedEProperty, EProperty, SourceEProperty, Unavailable, at_occurrence, branched, per_call
+from .eproperty import DerivedEProperty, EProperty, Unavailable, branched, per_call
 from .layer import Residual
 from .standard import Standard, first_tensor, rewrap
 
@@ -120,6 +120,24 @@ def needs_recurrent_routing(envoy: Envoy) -> str | None:
         )
     return None
 
+
+def at_occurrence(t: int):
+    """The ``for step in tracer.iter[t]`` stretch, for one occurrence of a location inside a call."""
+    from nnsight.intervention.iterator import Iterations
+
+    return Iterations()[t : t + 1]
+
+
+def kernel(attribute: str) -> Callable[[Envoy], str]:
+    """A key at whichever delta-rule kernel fires on this call: ``source.<kernel>.<attribute>``."""
+
+    def locate(envoy: Envoy) -> str:
+        return f"source.{type(envoy).KERNEL(envoy)}.{attribute}"
+
+    locate.__name__ = f"kernel.{attribute}"
+    return locate
+
+
 class LinearAttention(Standard):
     """A gated DeltaNet mixer (Qwen3-Next, Qwen3.5/3.6): linear attention with a recurrent state.
 
@@ -169,32 +187,32 @@ class LinearAttention(Standard):
     def attention_output(self, value: torch.Tensor) -> Any:
         return rewrap(self, value)
 
-    @SourceEProperty(KERNEL, attribute="inputs", select=0, description="The queries entering the delta rule, [batch, seq, heads, key_dim]", unavailable=needs_torch_kernels)
+    @EProperty(kernel("inputs"), select=0, description="The queries entering the delta rule, [batch, seq, heads, key_dim]", unavailable=needs_torch_kernels)
     def attention_queries(self, value: torch.Tensor) -> LinearQK:
         """The queries the delta rule receives, ``[batch, seq, heads, key_dim]``: after the conv, the activation and the repeat to ``num_v_heads``."""
         return value
 
-    @SourceEProperty(KERNEL, attribute="inputs", select=1, description="The keys entering the delta rule, [batch, seq, heads, key_dim]", unavailable=needs_torch_kernels)
+    @EProperty(kernel("inputs"), select=1, description="The keys entering the delta rule, [batch, seq, heads, key_dim]", unavailable=needs_torch_kernels)
     def attention_keys(self, value: torch.Tensor) -> LinearQK:
         """The keys the delta rule receives, ``[batch, seq, heads, key_dim]``."""
         return value
 
-    @SourceEProperty(KERNEL, attribute="inputs", select=2, description="The values entering the delta rule, [batch, seq, heads, value_dim]", unavailable=needs_torch_kernels)
+    @EProperty(kernel("inputs"), select=2, description="The values entering the delta rule, [batch, seq, heads, value_dim]", unavailable=needs_torch_kernels)
     def attention_values(self, value: torch.Tensor) -> LinearV:
         """The values the delta rule receives, ``[batch, seq, heads, value_dim]``."""
         return value
 
-    @SourceEProperty(KERNEL, attribute="inputs", select="g", description="The per-token log decay of the recurrent state, [batch, seq, heads]", unavailable=needs_torch_kernels)
+    @EProperty(kernel("inputs"), select="g", description="The per-token log decay of the recurrent state, [batch, seq, heads]", unavailable=needs_torch_kernels)
     def decays(self, value: torch.Tensor) -> Gates:
         """The gate: the log of how much of the state each token keeps, ``[batch, seq, heads]``, float32 and non-positive."""
         return value
 
-    @SourceEProperty(KERNEL, attribute="inputs", select="beta", description="The per-token write strength into the state, [batch, seq, heads]", unavailable=needs_torch_kernels)
+    @EProperty(kernel("inputs"), select="beta", description="The per-token write strength into the state, [batch, seq, heads]", unavailable=needs_torch_kernels)
     def betas(self, value: torch.Tensor) -> Gates:
         """How strongly each token's key/value pair is written into the state, ``[batch, seq, heads]``, in ``(0, 1)``."""
         return value
 
-    @SourceEProperty(KERNEL, attribute="inputs", select="initial_state", description="The recurrent state entering the layer, [batch, heads, key_dim, value_dim], or None at the start of a prompt (a copy of the cache's buffer)", unavailable=needs_torch_kernels)
+    @EProperty(kernel("inputs"), select="initial_state", description="The recurrent state entering the layer, [batch, heads, key_dim, value_dim], or None at the start of a prompt (a copy of the cache's buffer)", unavailable=needs_torch_kernels)
     def state_input(self, value: Any) -> State | None:
         """The state this call starts from: ``None`` on a fresh prompt, the cached state on a decode step.
 
@@ -205,12 +223,12 @@ class LinearAttention(Standard):
         """
         return value if value is None else value.clone()
 
-    @SourceEProperty(KERNEL, attribute="output", select=0, description="The per-head outputs before the gated norm and the output projection, [batch, seq, heads, value_dim]", unavailable=needs_torch_kernels)
+    @EProperty(kernel("output"), select=0, description="The per-head outputs before the gated norm and the output projection, [batch, seq, heads, value_dim]", unavailable=needs_torch_kernels)
     def attention_head_outputs(self, value: torch.Tensor) -> LinearV:
         """Each head's read of the state, ``[batch, seq, heads, value_dim]``, before the gated norm and ``out_proj``."""
         return value
 
-    @SourceEProperty(KERNEL, attribute="output", select=1, description="The recurrent state leaving the layer, [batch, heads, key_dim, value_dim]", unavailable=needs_torch_kernels)
+    @EProperty(kernel("output"), select=1, description="The recurrent state leaving the layer, [batch, heads, key_dim, value_dim]", unavailable=needs_torch_kernels)
     def state_output(self, value: torch.Tensor) -> State:
         """The state after this call's last token, ``[batch, heads, key_dim, value_dim]``: what the next decode step starts from."""
         return value
@@ -228,9 +246,9 @@ class LinearAttention(Standard):
 
         step = Mediator.current("state").iteration
         kernel = type(envoy).KERNEL(envoy) if step in (None, 0) else LinearAttention.CHUNK_KERNEL
-        return f"{kernel}.source.{LinearAttention.STATE_OP}"
+        return f"source.{kernel}.source.{LinearAttention.STATE_OP}.output"
 
-    @SourceEProperty(_token_state_op, description="The recurrent state after one token of the prompt; iterate it with tracer.iter; needs route_delta_rule(family, 'recurrent')", unavailable=needs_recurrent_routing)
+    @EProperty(_token_state_op, description="The recurrent state after one token of the prompt; iterate it with tracer.iter; needs route_delta_rule(family, 'recurrent')", unavailable=needs_recurrent_routing)
     def state(self, value: torch.Tensor) -> State:
         """The state after a token of the prompt, ``[batch, heads, key_dim, value_dim]``: one occurrence per token.
 

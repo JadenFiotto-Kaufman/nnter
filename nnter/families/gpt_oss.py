@@ -12,7 +12,7 @@ when an attention mask is passed, as it is on every prompt).
 
 from transformers.models.gpt_oss.modeling_gpt_oss import GptOssAttention, GptOssDecoderLayer, GptOssMLP
 
-from ..components import Attention, INTERFACE, Layer, Mlp, Pattern, SourceEProperty, interface_reason
+from ..components import Attention, EProperty, INTERFACE, Layer, Mlp, Pattern, interface_reason
 
 MODEL_TYPES = ("gpt_oss",)
 
@@ -37,7 +37,7 @@ class Attention(Attention):
     #: The pattern's rows sum to less than one: the sink takes the rest.
     SINK = True
 
-    @SourceEProperty(f"{INTERFACE}.source.attn_weights_1", description=Attention.attention_scores.description, unavailable=interface_reason)
+    @EProperty(f"source.{INTERFACE}.source.attn_weights_1.output", description=Attention.attention_scores.description, unavailable=interface_reason)
     def attention_scores(self, value) -> Pattern:
         return value
 

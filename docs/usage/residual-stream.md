@@ -120,7 +120,7 @@ name means the same thing everywhere. Contrast each with the raw `.output`:
 `post_attention_layernorm(attn(...))` and `post_feedforward_layernorm(mlp(...))`. What
 reaches the residual stream is the post-norm's output, so `attention_output` is
 `post_attention_layernorm.output` and `mlp_output` is `post_feedforward_layernorm.output`
-(a `RelativeEProperty` at the sibling norm):
+(an `EProperty` keyed `"../post_attention_layernorm.output"`, the sibling norm):
 
 ```python
 model = StandardizedTransformer("google/gemma-2-2b", dispatch=True)
@@ -138,8 +138,8 @@ torch.equal(attn, post), torch.equal(attn, raw_attn[0])                     # (T
 the attention module, so its base holds).** The module's output is already a
 residual-stream state: BLOOM's `self_attention.output[0]` equals
 `layers[i].input + attention_output`. The contribution is the tensor entering the add: the
-first argument of `dropout_add` on BLOOM, the MLP dropout's output on MPT (a
-`SourceEProperty` inside the forward):
+first argument of `dropout_add` on BLOOM, the MLP dropout's output on MPT (an
+`EProperty` keyed inside the forward, `"source.dropout_add_0.input"`):
 
 ```python
 model = StandardizedTransformer("bigscience/bloom-560m", dispatch=True)
