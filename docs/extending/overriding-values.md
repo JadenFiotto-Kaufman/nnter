@@ -77,6 +77,25 @@ class Layer(gpt2.Layer):
 
 On GPT-2 tiny this reads `layer.input + attention_output` exactly.
 
+The location can be an operation in the parent's forward. Llama 4's mixture of experts
+returns its output flattened to `[batch * seq, hidden]` and the block views it back
+(`residual + hidden_states.view(residual.shape)`), so its `mlp_output` is that view:
+
+```python
+# nnter/families/llama4_text.py
+class Mlp(Mlp):
+    @RelativeEProperty("../source.hidden_states_view_0.output", description="...", unavailable=_not_a_block_feed_forward)
+    def mlp_output(self, value) -> Residual:
+        return value
+```
+
+An operation is only served on a call whose forward was source-instrumented before the
+call began, and this one is read after the block has started (after its attention), so
+the family's `Layer` builds its `.source` in `__init__` and again in `_update` (when
+real weights replace the meta ones a lazy load starts from). Without that, the first
+trace that reads `attention_output` and then `mlp_output` raises nnsight's
+`OutOfOrderError`, and later traces work.
+
 ## `SourceEProperty`: a value at an operation inside the forward
 
 BLOOM's sublayers take the residual as an argument and add it inside the module
