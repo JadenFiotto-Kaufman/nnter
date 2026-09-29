@@ -80,6 +80,10 @@ class Attention(Standard):
     (GPT-OSS), after the sink column is dropped.
     """
 
+    #: Whether the softmax has an attention sink: the pattern's rows then sum to less than one, by the
+    #: mass the sink took, and the scores are read just before the sink column joins them (GPT-OSS).
+    SINK = False
+
     def off_interface(self) -> str | None:
         """Why the shared attention interface does not run on this module, or ``None``."""
         return needs_eager(self)

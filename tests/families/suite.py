@@ -571,6 +571,7 @@ class FamilySuite:
         # family keeps it (OPT: on the block; fused experts: a 3-d parameter).
         block = self.attn_blocks(model)[0]._module
         dims = {d for p in block.parameters() for d in p.shape}
+        assert isinstance(model.intermediate_size, int)  # resolves on every family, whatever the config calls it
         width = getattr(model.config, self.MLP_WIDTH_KEY) if self.MLP_WIDTH_KEY else model.intermediate_size
         assert width in dims, (self.MLP_WIDTH_KEY or "intermediate_size", width, dims)
 

@@ -11,9 +11,14 @@ The attention is on the shared interface since transformers 5.17. The FFN is
 a mixture of experts returning the hidden states.
 """
 
+from typing import TYPE_CHECKING
+
 from transformers.models.dbrx.modeling_dbrx import DbrxAttention, DbrxBlock, DbrxFFN
 
 from ..components import Attention, Layer, Mlp
+
+if TYPE_CHECKING:
+    from ..standardized import StandardizedTransformer
 
 MODEL_TYPES = ("dbrx",)
 
@@ -42,3 +47,10 @@ class Mlp(Mlp):
 
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.
 ENVOYS = {DbrxBlock: Layer, DbrxAttention: Attention, DbrxFFN: Mlp}
+
+
+# -- sizes: what DBRX's config calls them ------------------------------------------
+
+def intermediate_size(model: "StandardizedTransformer") -> int:
+    """The experts' width, ``ffn_config.ffn_hidden_size``; every MLP is a mixture of experts."""
+    return model.config.ffn_config.ffn_hidden_size
