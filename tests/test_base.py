@@ -7,7 +7,7 @@ from transformers.models.gptj.modeling_gptj import GPTJBlock
 from transformers.models.llama.modeling_llama import LlamaAttention
 
 from nnter import Layer, StandardizedTransformer, Unavailable, unavailable
-from nnter.components import Attention
+from nnter.components import Attention, RelativeEProperty
 
 
 @pytest.fixture(scope="module")
@@ -34,6 +34,31 @@ def test_tuple_block_unwrapped_and_rewrapped(tuple_model):
     assert isinstance(after, tuple) and len(after) == len(raw)
     assert torch.equal(after[0], torch.zeros_like(raw[0]))
     assert not torch.equal(clean, edited)
+
+
+def test_relative_eproperty_takes_a_location_function():
+    """A function key names the location per envoy, at read time; reads and writes go there."""
+
+    def by_layer(envoy):
+        return "../input_layernorm.output" if envoy.path.endswith(".0.self_attn") else "../post_attention_layernorm.output"
+
+    class Located(Attention):
+        @RelativeEProperty(by_layer, description="A sibling norm's output, chosen per block")
+        def sibling(self, value):
+            return value
+
+    model = StandardizedTransformer("hf-internal-testing/tiny-random-LlamaForCausalLM", envoys={LlamaAttention: Located})
+    assert "(sibling): A sibling norm's output" in repr(model.layers[0].self_attn)
+    with model.trace("Hello world"):
+        first = model.layers[0].self_attn.sibling.save()
+        first_norm = model.layers[0].input_layernorm.output.save()
+        second_norm = model.layers[1].post_attention_layernorm.output.save()
+        second = model.layers[1].self_attn.sibling.save()
+    assert torch.equal(first, first_norm) and torch.equal(second, second_norm)
+    with model.trace("Hello world"):
+        model.layers[0].self_attn.sibling = model.layers[0].self_attn.sibling * 0
+        attn_in = model.layers[0].self_attn.input.save()
+    assert torch.equal(attn_in, torch.zeros_like(attn_in))
 
 
 def test_unavailable_marker_is_listed_and_raises():

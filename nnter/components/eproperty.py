@@ -257,10 +257,27 @@ class RelativeEProperty(EProperty):
     to this module in meaning but is produced elsewhere in the tree: what a
     sandwich block's attention adds to the residual stream is the post-attention
     norm's output, so that family's `Attention.attention_output` points there.
+
+    ``key`` may instead be a function of the envoy returning that string, for
+    a module class shared by blocks of different layouts: it runs at read time
+    and names the location on this block (OLMo-Hybrid's one MLP class feeds a
+    post-norm on its attention blocks and the stream directly on its linear
+    ones). A function is named ``<name>`` in the repr, as on `SourceEProperty`.
     """
 
+    def __init__(
+        self,
+        key: str | Callable[[Envoy], str],
+        description: str | None = None,
+        unavailable: str | Callable[[Envoy], str | None] | None = None,
+    ) -> None:
+        # eproperty takes a callable ``key`` for the decorated stub, so a function key is kept aside.
+        super().__init__(key=key if isinstance(key, str) else f"<{key.__name__}>", description=description, unavailable=unavailable)
+        self.locate = key
+
     def _location(self, obj: Envoy) -> str:
-        path, _, attribute = self.key.rpartition(".")
+        key = self.locate if isinstance(self.locate, str) else self.locate(obj)
+        path, _, attribute = key.rpartition(".")
         if path.startswith("../"):
             parent = obj.path.rsplit(".", 1)[0]
             return f"{parent}.{path.removeprefix('../')}.{attribute}"

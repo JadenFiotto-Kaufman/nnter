@@ -27,7 +27,7 @@ everywhere. Everything nnsight does (`trace`, `generate`, `.save()`, `tracer.ite
 ### "Load a model and use the standard names"
 - [docs/usage/loading.md](docs/usage/loading.md) — `StandardizedTransformer(repo_id, ...)`; pass `attn_implementation="eager"` for anything inside attention
 - [docs/usage/vocabulary.md](docs/usage/vocabulary.md) — `embed_tokens`, `layers[i].self_attn`, `layers[i].mlp`, `norm`, `lm_head`; native names keep working
-- [docs/reference/families.md](docs/reference/families.md) — the 31 families, their native names and quirks
+- [docs/reference/families.md](docs/reference/families.md) — the 33 families, their native names and quirks
 
 ### "Read or edit the residual stream / a sublayer's contribution"
 - [docs/usage/residual-stream.md](docs/usage/residual-stream.md) — `layer_output`, `attention_output`, `mlp_output`; `input + attention_output + mlp_output == layer_output`
@@ -46,7 +46,7 @@ everywhere. Everything nnsight does (`trace`, `generate`, `.save()`, `tracer.ite
 - [docs/usage/methods.md](docs/usage/methods.md) — `skip_layers`, `steer`, `project_on_vocab`, `get_topk_closest_tokens`
 - [docs/patterns/logit-lens.md](docs/patterns/logit-lens.md), [docs/patterns/steering.md](docs/patterns/steering.md)
 
-### "Qwen3-Next / Qwen3.5: linear attention, the recurrent state"
+### "Qwen3-Next / Qwen3.5 / OLMo-Hybrid: linear attention, the recurrent state"
 - [docs/usage/delta-net.md](docs/usage/delta-net.md) — `linear_attn` values; `route_delta_rule(model.family, "recurrent")` for the per-token `state`/`states`
 - [docs/patterns/delta-net-state.md](docs/patterns/delta-net-state.md) — patch and track the state
 
@@ -98,7 +98,7 @@ everywhere. Everything nnsight does (`trace`, `generate`, `.save()`, `tracer.ite
 - **Pass `attn_implementation="eager"` at load** if you will touch anything inside attention (`attention_probabilities`, queries, keys, values, scores, head outputs). The default is the checkpoint's, usually `sdpa`, and the values are then unavailable.
 - **Check `model.status()` outside the trace, not `hasattr` inside it.** `hasattr(envoy, "attention_probabilities")` never answers `False`: it raises `nnter.Unavailable` when the value is unavailable, and outside a trace raises nnsight's "Cannot access ... outside of interleaving" for an available one.
 - **`layer_output`, `attention_output`, `mlp_output` are tensors on every family**; never index `[0]`. The native `.output` may be a tuple (GPT-J, BLOOM, MPT, Falcon).
-- **`attention_output` is what the block adds to the stream**, not necessarily the module's return: on Gemma-2/3 and OLMo-2/3 it is the post-norm's output, on BLOOM/MPT/DBRX the pre-residual value. The identity `layers[i].input + attention_output + mlp_output == layer_output` is what you can rely on.
+- **`attention_output` is what the block adds to the stream**, not necessarily the module's return: on Gemma-2/3, OLMo-2/3 and OLMo-Hybrid's attention blocks it is the post-norm's output, on BLOOM/MPT/DBRX the pre-residual value. The identity `layers[i].input + attention_output + mlp_output == layer_output` is what you can rely on.
 - **`model.logits` is the model's output logits (softcap applied); `lm_head.output` is the raw projection.** `next_token_probs`, `input_size` and `states` are read-only.
 - **Decide which blocks have `self_attn` vs `linear_attn` outside the trace** on a hybrid; `getattr(envoy, name, None)` inside a trace can trip served values, and `if envoy:` falls through to the module's `__len__`.
 - **Read order traps**: on Falcon without alibi read `attention_values` before `attention_queries`/`attention_keys` (with alibi: queries, then keys, then values); on DeltaNet read `states` before any state write; `skip_layers` consumes `layers[start].input`, so read it first; a block's interior values come before its `attention_output`.

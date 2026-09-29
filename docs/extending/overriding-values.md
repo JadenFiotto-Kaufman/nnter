@@ -77,6 +77,28 @@ class Layer(gpt2.Layer):
 
 On GPT-2 tiny this reads `layer.input + attention_output` exactly.
 
+`key` may be a function of the envoy returning that string, for one module class that
+sits in blocks of different layouts. It runs at read time and names the location on this
+block, as a function `op` does on `SourceEProperty`. OLMo-Hybrid's two block classes share
+`OlmoHybridMLP`; the attention block adds its post-feedforward norm's output, the linear
+block the MLP's own, so the family's `Mlp` chooses by the block's layer type:
+
+```python
+def by_block(envoy) -> str:
+    index = int(envoy.path.rsplit(".", 2)[-2])
+    if envoy._module.config.layer_types[index] == "full_attention":
+        return "../post_feedforward_layernorm.output"
+    return "../mlp.output"
+
+
+class Mlp(Mlp):
+    @RelativeEProperty(by_block, description="What the MLP adds to the residual stream: ...")
+    def mlp_output(self, value) -> Residual:
+        return value
+```
+
+The repr lists it as `<by_block>`.
+
 ## `SourceEProperty`: a value at an operation inside the forward
 
 BLOOM's sublayers take the residual as an argument and add it inside the module

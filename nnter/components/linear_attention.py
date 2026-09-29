@@ -191,7 +191,7 @@ class LinearAttention(Standard):
 
     @SourceEProperty(KERNEL, attribute="inputs", select="beta", description="The per-token write strength into the state, [batch, seq, heads]", unavailable=needs_torch_kernels)
     def betas(self, value: torch.Tensor) -> Gates:
-        """How strongly each token's key/value pair is written into the state, ``[batch, seq, heads]``, in ``(0, 1)``."""
+        """How strongly each token's key/value pair is written into the state, ``[batch, seq, heads]``, in ``(0, 1)`` (``(0, 2)`` on OLMo-Hybrid with ``linear_allow_neg_eigval``)."""
         return value
 
     @SourceEProperty(KERNEL, attribute="inputs", select="initial_state", description="The recurrent state entering the layer, [batch, heads, key_dim, value_dim], or None at the start of a prompt (a copy of the cache's buffer)", unavailable=needs_torch_kernels)
