@@ -40,6 +40,7 @@ One row per family, keyed on `model_type`. Public ids are checkpoints of that `m
 | `gpt_neox` | `nnter.families.gpt_neox` | `EleutherAI/pythia-70m-deduped`, `EleutherAI/gpt-neox-20b` | `hf-internal-testing/tiny-random-GPTNeoXForCausalLM` |
 | `mistral` | `nnter.families.mistral` | `mistralai/Mistral-7B-v0.1` | `hf-internal-testing/tiny-random-MistralForCausalLM` |
 | `mixtral` | `nnter.families.mixtral` | `mistralai/Mixtral-8x7B-v0.1` | `hf-internal-testing/tiny-random-MixtralForCausalLM` |
+| `minimax_m2` | `nnter.families.minimax_m2` | `MiniMaxAI/MiniMax-M2.5`, `MiniMaxAI/MiniMax-M2` (native class; the checkpoints' `auto_map` is not needed) | `hf-tiny-v2/tiny-random-MiniMaxM2ForCausalLM` |
 | `qwen2` | `nnter.families.qwen2` | `Qwen/Qwen2.5-7B`, `Qwen/Qwen2-7B` | `yujiepan/qwen2-tiny-random` |
 | `qwen2_moe` | `nnter.families.qwen2_moe` | `Qwen/Qwen1.5-MoE-A2.7B` | `hf-internal-testing/tiny-random-Qwen2MoeForCausalLM` |
 | `qwen3` | `nnter.families.qwen3` | `Qwen/Qwen3-8B` | `trl-internal-testing/tiny-Qwen3ForCausalLM` |
@@ -56,6 +57,7 @@ One row per family, keyed on `model_type`. Public ids are checkpoints of that `m
 | `olmo` | `nnter.families.olmo` | `allenai/OLMo-1B-hf` | `katuni4ka/tiny-random-olmo-hf` |
 | `olmo2` | `nnter.families.olmo2` | `allenai/OLMo-2-1124-7B` | `hf-tiny-v2/tiny-random-Olmo2ForCausalLM` |
 | `olmo3` | `nnter.families.olmo3` | the allenai OLMo-3 checkpoints (`model_type` `olmo3`) | `yujiepan/olmo-3-tiny-random`, with its config rewritten to the per-layer-type rope form by the test (`tests/families/test_olmo3.py`); not part of the sweep |
+| `exaone4` | `nnter.families.exaone4` | `LGAI-EXAONE/EXAONE-4.0-32B`, `LGAI-EXAONE/EXAONE-4.0-1.2B` | `hf-tiny-v2/tiny-random-Exaone4ForCausalLM` |
 | `smollm3` | `nnter.families.smollm3` | `HuggingFaceTB/SmolLM3-3B` | `yujiepan/smollm3-tiny-random` |
 | `stablelm` | `nnter.families.stablelm` | `stabilityai/stablelm-2-1_6b` | `stabilityai/tiny-random-stablelm-2` |
 | `gptj` | `nnter.families.gptj` | `EleutherAI/gpt-j-6b` | `hf-internal-testing/tiny-random-GPTJForCausalLM` |
@@ -83,6 +85,7 @@ The same rows again. "Native" is what `RENAME` maps onto the standard name, in t
 | `gpt_neox` | `gpt_neox.embed_in` / `gpt_neox.layers` / `gpt_neox.final_layer_norm`; `attention` / `mlp`; `input_layernorm`, `post_attention_layernorm` | no | none | none. Parallel block under `use_parallel_residual` (Pythia's default): both norms take the block input, so `post_attention_layernorm` does not follow the attention. |
 | `mistral` | as Llama | no | none | none |
 | `mixtral` | as Llama; the MLP is `MixtralSparseMoeBlock` | no | none | none. `mlp_output` is the routed hidden states. |
+| `minimax_m2` | as Llama; `q_norm` / `k_norm` inside the attention, each over the whole projection (`heads * head_dim`) before the head split; the MLP is `MiniMaxM2SparseMoeBlock` | no | none | none. Every block is a mixture of experts with a sigmoid router; `intermediate_size` is the experts' width. `head_dim` is the config's (128 on a 3072 residual with 48 heads). |
 | `qwen2` | as Llama | no | none | none |
 | `qwen2_moe` | as Llama; `Qwen2MoeSparseMoeBlock` (with a shared expert) | no | none | none |
 | `qwen3` | as Llama; `q_norm` / `k_norm` inside the attention | no | none | none. `head_dim` is the config's, not `hidden_size // num_heads`. |
@@ -99,6 +102,7 @@ The same rows again. "Native" is what `RENAME` maps onto the standard name, in t
 | `olmo` | as Llama | no | none | none |
 | `olmo2` | as Llama minus `input_layernorm`: `post_attention_layernorm` and `post_feedforward_layernorm` only | no | as Gemma-2 | none. Post-norms only: `self_attn.input` is the block input; there is no `input_layernorm` to alias. |
 | `olmo3` | as OLMo-2 | no | as Gemma-2 | none (per the suite; not in the sweep). Post-norms only; sliding and full attention layers mix. |
+| `exaone4` | as OLMo-2; `q_norm` / `k_norm` (per head) inside the attention | no | as Gemma-2 | none. Post-norms only, as OLMo-2. With a `sliding_window`, sliding-window layers apply the rotary and full-attention layers apply none (NoPE); the values are read at the interface on both. |
 | `smollm3` | as Llama | no | none | none. Some layers use sliding-window attention and some no positional embedding. |
 | `stablelm` | as Llama; `post_attention_layernorm` only without `use_parallel_residual`; `q_layernorm` / `k_layernorm` inside the attention | no | none | none. Parallel block under `use_parallel_residual` (StableLM-2): one `input_layernorm` feeds both sublayers. |
 | `gptj` | `transformer.wte` / `transformer.h` / `transformer.ln_f`; `attn` / `mlp`; `ln_1` = `input_layernorm` | yes | Interior on the module's own `_attn` call: queries / keys / values = `self__attn_0` arguments 0, 1, 2; `attention_scores` = `self__attn_0.source.nn_functional_softmax_0` input; `attention_probabilities` = `self__attn_0.source.self_attn_dropout_0`; `attention_head_outputs` = `self__attn_0` return 0, served through `seq_first` | none. Parallel block: `ln_1` feeds both sublayers. Interior needs eager (`needs_eager`). Keys and values are `num_heads` wide. `intermediate_size` is `n_inner`, `4 * hidden_size` when `None`. |
@@ -121,7 +125,7 @@ Two reasons apply to every family and are not repeated per row. Loaded without `
 
 ### Sandwich norms
 
-`gemma2`, `gemma3_text`, `olmo2`, `olmo3`: the residual stream receives a post-sublayer norm's output, not the module's, so `attention_output` is a `RelativeEProperty` at `../post_attention_layernorm.output` and `mlp_output` at `../post_feedforward_layernorm.output`. On these families `post_attention_layernorm` *follows* the attention. Gemma-2/3 also norm before each sublayer (`input_layernorm`, `pre_feedforward_layernorm`); OLMo-2/3 have only the post-norms, so `self_attn.input` is the block input and no `input_layernorm` exists.
+`gemma2`, `gemma3_text`, `olmo2`, `olmo3`, `exaone4`: the residual stream receives a post-sublayer norm's output, not the module's, so `attention_output` is a `RelativeEProperty` at `../post_attention_layernorm.output` and `mlp_output` at `../post_feedforward_layernorm.output`. On these families `post_attention_layernorm` *follows* the attention. Gemma-2/3 also norm before each sublayer (`input_layernorm`, `pre_feedforward_layernorm`); OLMo-2/3 and EXAONE-4 have only the post-norms, so `self_attn.input` is the block input and no `input_layernorm` exists.
 
 ### Residual added inside the module
 
@@ -141,7 +145,7 @@ Two reasons apply to every family and are not repeated per row. Loaded without `
 
 ### Mixtures of experts
 
-`mixtral`, `qwen2_moe`, `qwen3_moe`, `gpt_oss`, `dbrx`, `deepseek_v2`, `deepseek_v3` (after the first `first_k_dense_replace` dense blocks), `qwen3_next`, `qwen3_5_moe_text`. `mlp_output` is the routed hidden states on all of them. `intermediate_size` is the dense MLP's width; the experts are `config.moe_intermediate_size` wide (`ffn_config.ffn_hidden_size` on DBRX). On an all-MoE family (Qwen3-MoE) `intermediate_size` names a width the model never uses; the suite reads `MLP_WIDTH_KEY = "moe_intermediate_size"` there.
+`mixtral`, `minimax_m2`, `qwen2_moe`, `qwen3_moe`, `gpt_oss`, `dbrx`, `deepseek_v2`, `deepseek_v3` (after the first `first_k_dense_replace` dense blocks), `qwen3_next`, `qwen3_5_moe_text`. `mlp_output` is the routed hidden states on all of them. `intermediate_size` is the dense MLP's width; the experts are `config.moe_intermediate_size` wide (`ffn_config.ffn_hidden_size` on DBRX; `intermediate_size` itself on MiniMax-M2, whose config has no dense width). On an all-MoE family (Qwen3-MoE) `intermediate_size` names a width the model never uses; the suite reads `MLP_WIDTH_KEY = "moe_intermediate_size"` there.
 
 ### Gated query
 
