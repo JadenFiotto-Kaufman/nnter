@@ -9,7 +9,7 @@ point at the sibling norms. The multimodal ``gemma3`` checkpoints are a differen
 
 from transformers.models.gemma3.modeling_gemma3 import Gemma3Attention, Gemma3DecoderLayer, Gemma3MLP
 
-from ..components import Attention, Layer, Mlp, RelativeEProperty, Residual
+from ..components import Attention, EProperty, Layer, Mlp, Residual
 
 MODEL_TYPES = ("gemma3_text",)
 
@@ -27,7 +27,7 @@ class Layer(Layer):
 class Attention(Attention):
     """Gemma-3's attention: the shared eager forward, but what reaches the residual stream is the post-attention norm's output."""
 
-    @RelativeEProperty(
+    @EProperty(
         "../post_attention_layernorm.output",
         description="What the attention adds to the residual stream: the post-attention norm's output",
     )
@@ -38,7 +38,7 @@ class Attention(Attention):
 class Mlp(Mlp):
     """Gemma-3's MLP: what reaches the residual stream is the post-feedforward norm's output."""
 
-    @RelativeEProperty(
+    @EProperty(
         "../post_feedforward_layernorm.output",
         description="What the MLP adds to the residual stream: the post-feedforward norm's output",
     )

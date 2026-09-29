@@ -1,9 +1,9 @@
 ---
 title: EProperty Internals
-one_liner: How nnter's four descriptors sit on nnsight's eproperty — availability, drilling into .source per run, relative locations, derived values, and the per-call cache a branching forward needs.
+one_liner: How nnter's descriptors sit on nnsight's eproperty — one `EProperty` whose key is a path (`output`, `../norm.output`, `source.<op>.inputs`), availability, `_resolve`'s walk and the per-run drill into `.source`, `select`, the once-per-access key, the `Standard.sourced` flag, derived values, and the per-call cache a branching forward needs.
 tags: [developing, internals, eproperty, source, descriptors]
 related: [docs/developing/architecture.md, docs/developing/linear-attention-internals.md, docs/developing/gotchas.md, docs/usage/availability.md]
-sources: [nnter/components/eproperty.py, nnter/components/layer.py, nnter/components/attention.py, nnter/components/linear_attention.py, nnter/standardized.py, nnter/components/standard.py, nnter/families/falcon.py, nnsight src/nnsight/intervention/eproperty.py, nnsight src/nnsight/intervention/source.py, nnsight src/nnsight/intervention/interleaver.py, nnsight src/nnsight/intervention/iterator.py]
+sources: [nnter/components/eproperty.py, nnter/components/standard.py, nnter/components/layer.py, nnter/components/attention.py, nnter/components/linear_attention.py, nnter/standardized.py, nnter/families/falcon.py, nnter/families/llama4_text.py, nnsight src/nnsight/intervention/eproperty.py, nnsight src/nnsight/intervention/envoy.py, nnsight src/nnsight/intervention/source.py, nnsight src/nnsight/intervention/interleaver.py, nnsight src/nnsight/intervention/iterator.py, nnsight src/nnsight/intervention/util.py]
 ---
 
 # EProperty Internals
@@ -12,10 +12,12 @@ sources: [nnter/components/eproperty.py, nnter/components/layer.py, nnter/compon
 
 Every standard value is a descriptor from `nnter/components/eproperty.py`,
 and every one of them is nnsight's `eproperty` (a `property` subclass over a
-location string) plus one thing nnsight does not have: an answer, before
-anything runs, to "does this checkpoint have this value, and why not". This
-page is the contract of each descriptor and the nnsight fact it depends on,
-with the line that establishes it on each side. Read nnsight
+location string) plus two things nnsight does not have: an answer, before
+anything runs, to "does this checkpoint have this value, and why not", and a
+*path* for a key, so one descriptor serves a value wherever it lives: on the
+host module, on a module named relative to it, or at an operation inside a
+forward. This page is the contract of the descriptor and the nnsight facts
+it depends on, with the line that establishes it on each side. Read nnsight
 `docs/developing/extending-envoy.md` first if `eproperty`, location, and
 `Mediator` are new words.
 
@@ -32,12 +34,12 @@ from transformers.models.llama.modeling_llama import LlamaAttention   # after `i
 
 import nnter
 from nnter import StandardizedTransformer
-from nnter.components import INTERFACE, SourceEProperty, interface_reason
+from nnter.components import EProperty, INTERFACE, interface_reason
 from nnter.families import llama
 
 
 class Attention(llama.Attention):
-    @SourceEProperty(f"{INTERFACE}.source.repeat_kv_0", description="The keys after repeat_kv, [batch, heads, seq, head_dim]", unavailable=interface_reason)
+    @EProperty(f"source.{INTERFACE}.source.repeat_kv_0.output", description="The keys after repeat_kv, [batch, heads, seq, head_dim]", unavailable=interface_reason)
     def expanded_keys(self, value: torch.Tensor) -> Float[Tensor, "batch heads seq head_dim"]:
         return value
 
@@ -45,8 +47,9 @@ class Attention(llama.Attention):
 model = StandardizedTransformer("meta-llama/Llama-3.1-8B", dispatch=True, attn_implementation="eager", envoys={LlamaAttention: Attention})
 attn = model.layers[0].self_attn
 
-Attention.expanded_keys.key      # 'source.attention_interface_1.source.repeat_kv_0.output'
-Attention.expanded_keys.dims     # ('batch', 'heads', 'seq', 'head_dim')
+Attention.expanded_keys.key                # 'source.attention_interface_1.source.repeat_kv_0.output'
+Attention.expanded_keys.inside_forward()   # True
+Attention.expanded_keys.dims               # ('batch', 'heads', 'seq', 'head_dim')
 "(expanded_keys): The keys after repeat_kv" in repr(attn)   # True
 
 with model.trace("Hello world there"):
@@ -54,16 +57,16 @@ with model.trace("Hello world there"):
     expanded = attn.expanded_keys.save()    # [batch, heads, seq, head_dim]
 ```
 
-## The nnsight side, in five facts
+## The nnsight side, in six facts
 
 1. **An `eproperty` is a `property` over `"{obj.path}.{key}"`.** Reading
    parks the worker with `Mediator.value(location)`, runs the decorated stub
    as the *preprocess* on the served value, and returns the result; writing
-   runs `postprocess` and `Mediator.swap` (nnsight `eproperty.py:168-190`).
+   runs `postprocess` and `Mediator.swap` (nnsight `eproperty.py:172-190`).
    `key` defaults to the stub's name (`:144-151`), and a `description` is
    only what the repr prints (`envoy.py:1082-1095`).
 2. **A getter's `AttributeError` is swallowed.** A `property` raising
-   `AttributeError` falls through to `Envoy.__getattr__` (`envoy.py:802-819`),
+   `AttributeError` falls through to `Envoy.__getattr__` (`envoy.py:802-810`),
    which reports `'X' object (nor its module) has attribute 'name'`; the real
    error is lost (`eproperty.py:68-72`).
 3. **`transform` is the write-back of a reshaping preprocess.** `__get__`
@@ -73,7 +76,7 @@ with model.trace("Hello world there"):
    (`interleaver.py:487-497`). Its signature is `(self, view, raw)`: the
    edited view and the value as served (`eproperty.py:158-166`).
 4. **A location can be visited many times in one run**, and a worker asks
-   for one *occurrence* of it (`Pending.iteration`, `interleaver.py:85-96`).
+   for one *occurrence* of it (`Pending.iteration`, `interleaver.py:73-96`).
    `Mediator.iteration` is the occurrence the worker wants: `0` with no
    `tracer.iter`, an int a `tracer.iter[n]` pins, `None` when *relaxed*, which
    resolves to the mediator's own count of that location
@@ -84,37 +87,188 @@ with model.trace("Hello world there"):
 5. **An operation inside a called function exists only after a drill in the
    current run.** `SourceEnvoy.source` writes a `None` placeholder into
    `interleaver.sourced`, parks on `{path}.fn`, receives the live callee from
-   `run_op` and stores the instrumented copy back (`source.py:787-833`,
+   `run_op` and stores the instrumented copy back (`source.py:788-833`,
    `run_op` `:495-503`); `interleaver.sourced` is cleared on every run's entry
    (`interleaver.py:710`). The `.fn` handoff happens *before* the call runs,
    and a `Source.__getattr__` for an unknown name is an `AttributeError`
-   listing the available ops (`source.py:1014-1033`).
+   listing the available ops (`source.py:1014-1033`). A module's own
+   `.source` is different: `Envoy.source` instruments the forward once, for
+   good, and works outside a trace (`envoy.py:645-663`).
+6. **The tree is navigable downward from any envoy, and an envoy knows its
+   own path but not its parent.** `Envoy.get(path)` resolves a dotted path
+   from an envoy, aliases included (`envoy.py:954-975`); `.path` is the
+   native dotted name from the root (`model.model.layers.0.self_attn`). An envoy's `.input` is the call's first argument,
+   `first_input` over the served `(args, kwargs)` pair, and assigning it is
+   `replace_first_input` (`envoy.py:569-584`, `util.py:20-36`).
 
-Everything below is a consequence of these five.
+Everything below is a consequence of these six.
 
-## `EProperty`: availability
+## `EProperty`: one descriptor, a path for a key
 
-`EProperty(eproperty)` (`nnter/components/eproperty.py:33-110`) adds one
-argument, `unavailable`: a reason string, or a predicate `f(envoy) -> str |
-None` (`:43-50`). `reason(obj)` evaluates it on the *instance* (`:60-62`), so
-a checkpoint's config decides (`needs_eager`, `components/attention.py:16-21`,
-reads `envoy._module.config._attn_implementation`) and so a hybrid can answer
-per block.
+`EProperty(eproperty)` (`nnter/components/eproperty.py:37-242`) takes
+`key`, `description`, `unavailable` and `select` (`:81-91`). A string `key`
+is stored as nnsight's `key`; a callable one is stored as `locate` and the
+`key` shown in the repr and in `.key` is `<its name>` (`<kernel.inputs>`,
+`<apply_rotary_pos_emb_0|query_layer_0>`, `<_token_state_op>`).
+`__set_name__` (`:93-99`) fills `name` and `key` from the class body when
+they are still `None`: a bare marker `attention_probabilities =
+unavailable("...")` (`:272-279`) is never called on a stub, so nnsight's
+`__call__` never ran to set them; without this the marker would have no
+name in the repr and `status()`.
 
-- `_check` (`:89-100`) runs before every read and write. A reason raises
-  `Unavailable` (a `RuntimeError`, `:19-30`) naming `{obj.path}.{name}` and
+### The path grammar
+
+A key is dotted segments ending in `output`, `input` or `inputs`, walked
+from the host envoy:
+
+| segment | meaning | example |
+|---|---|---|
+| `output` (last) | the current node's output | `"output"`: `Layer.layer_output` (`layer.py:58`), a view over the same location as `.output` |
+| `input` (last) | the first argument of the current node's call (fact 6) | `"source.dropout_add_0.input"`: BLOOM's contribution (`families/bloom.py:73-78`) |
+| `inputs` (last) | the `(args, kwargs)` pair, one element of it with `select` | `"inputs"` on the root: `input_ids` (`standardized.py:328-336`); `"source.attention_interface_1.inputs"` with `select=1`: `attention_queries` (`attention.py:91`) |
+| `../` (leading, repeatable) | the parent module, by native name | `"../post_attention_layernorm.output"`: Gemma-2's `attention_output` (`families/gemma2.py:30-36`) |
+| a name | a child module of the current node, aliases included; under a `source`, an operation | `"embed_tokens.output"`: `token_embeddings` (`standardized.py:167-175`) |
+| `source` | the current module's or operation's forward, instrumented for this run | `"source.attention_interface_1.source.nn_functional_dropout_0.output"`: `attention_probabilities` (`attention.py:147-153`); `"../source.hidden_states_view_0.output"`: Llama 4's `mlp_output` (`families/llama4_text.py:106-112`) |
+| a function of the host | returns a path, at read time, inside the trace | `branched(...)` (`:282-305`), Falcon's `by_alibi(without, with_alibi, attribute)` (`families/falcon.py:51-58`), `LinearAttention`'s `kernel("inputs")` (`linear_attention.py:123-130`) |
+
+### `_resolve`: the walk
+
+`_resolve(obj, key)` (`:161-180`) turns a path into the served location, and
+runs before every read and write, because of fact 5: an operation under a
+call is per run, so nothing about the walk can be cached on the descriptor.
+It strips every leading `../` (counting them), splits the rest on `.`, and,
+below the host, walks every segment but the last: `source` is
+`_drill(obj, node)`; a segment on an `Envoy` is `node.get(segment)` (fact 6,
+so an alias works); a segment on anything else (a `Source`, the object a
+drill returns) is `getattr`, which is how an operation is named. An
+`AttributeError` anywhere is re-raised as `SourceNotAvailable` naming the
+value, the path and nnsight's list of what is there (`:175-179`), because of
+fact 2. `_location(obj)` (`:158-159`) is `_resolve` over `path(obj)`
+(`:149-151`: the string, or the function applied to the host), for a caller
+that wants only the location. Verified on tiny GPT-2: a wrong op
+reads `model.transformer.h.0.attn.broken reads 'source.no_such_op_0.output',
+which this run does not have: 'model.transformer.h.0.attn.source' has no
+operation 'no_such_op_0'; available: is_cross_attention_0, ...`.
+
+The result is `f"{node.path}.{attribute}"` with `inputs` folded into `input`: `input` and `inputs` are the same served location, the pair;
+picking the first argument out of it is `_pick`'s job. So a value at any
+depth is served by `Mediator` at a location string, the same way a plain
+eproperty's is.
+
+### Above the host: arithmetic on names
+
+An envoy carries its path but not its parent, so a path that starts with
+`../` is not walked through envoys at all: `_resolve` drops as many trailing
+segments from the host's own path as there are `../`, appends the rest of
+the key, and returns that string as the location. The parent's name is
+native, so a `../` step is by native name, and the segment after it is
+joined as written, so a sibling is named by its native name too
+(`"../post_attention_layernorm.output"` on `model.model.layers.0.self_attn`
+is `model.model.layers.0.post_attention_layernorm.output`). Nothing is
+drilled: a `source` segment above the host names an operation of the
+parent's own forward, which is served by its string because the family
+instrumented that forward at build (`sourced = True`, below); a second
+`source` on such a path, a call inside the parent's forward, would need the
+parent drilled, which only an envoy can do, and `_resolve` refuses it with
+a `ValueError` saying so. Verified on tiny GPT-2: `EProperty("../ln_2.output")`
+on the attention equals `layers[0].ln_2.output`, and zeroing it in place
+moves the logits.
+
+### `_drill` and the relaxed mediator
+
+`_drill(obj, node)` (`:252-269`) is `node.source`, with one care. On the
+module envoy, or on an operation already drilled this run (its path is in
+`interleaver.sourced`), it is a plain `node.source`. The first drill of a
+run into a call is fact 4 meeting fact 5: the drill parks on `{path}.fn`, a
+location the call fires **once per forward**. Inside `tracer.iter[7]` the
+mediator is pinned to occurrence 7, so the `.fn` read would wait for the
+eighth firing of a call that fires once, and the run would end with it
+parked. So the pin is saved, set to `None`, the drill made relaxed (it
+resolves to the next occurrence, the call in flight), and the pin restored
+in `finally` for the value read that follows. This is what lets
+`for t in tracer.iter[2]: mix.state` resolve on a first read pinned past 0
+(`tests/families/test_qwen3_5_text.py:173-176`).
+
+### `_pick` / `_put`: `select`, and why `input` is the first argument
+
+`_pick(attribute, value)` (`:184-192`) takes one element of the served
+value and `_put(attribute, current, element)` (`:194-208`) puts one back;
+`attribute` is the path's last segment, handed in by the caller:
+
+- `input` is `first_input(args, kwargs)` on read and
+  `replace_first_input(args, kwargs, element)` on write, nnsight's own rule
+  for `.input` with nnsight's own helpers (fact 6), so `EProperty("ln_2.input")`
+  on a block reads what `block.ln_2.input` reads. Verified on tiny GPT-2: it
+  equals `layer.input + attention_output`, and assigning it moves the logits
+  with the call's other arguments intact. Nothing is destructured in the
+  stub.
+- `inputs` with an int `select` is `args[n]`, with a str `kwargs[name]`
+  (`attention_queries` is `select=1`, `attention.py:91`; a DeltaNet `decays`
+  is `select="g"`, `linear_attention.py:197`); with no `select` it is the
+  pair (the root's `input_ids`, whose stub takes `kwargs["input_ids"]` and
+  whose postprocess puts it back, `standardized.py:328-336`).
+- `output` with an int `select` is one element of the returned tuple
+  (`attention_head_outputs` is `select=0`, `attention.py:166`); with no
+  `select` it is the value as returned.
+
+A write that selects (a `select`, or an `input` attribute, `:240`)
+re-reads the current value with `Mediator.value`, puts the element in and
+swaps the whole back (`__set__`, `:233-242`), which is why assigning
+`attention_keys` swaps in the keys and keeps every other argument.
+
+### `__get__` / `__set__`: nnsight's machinery on every path
+
+`__get__` (`:215-231`) is `_check`, one `path(obj)`, `_resolve` over it,
+`Mediator.value`, `_pick` with the key's last segment, the preprocess, and,
+when a `transform` is registered, the bind of fact 3 with the raw served
+value riding along (`:225-230`). `__set__` (`:233-242`) is `_check`, the
+postprocess, one `path(obj)`, `_resolve`, `_put` when selecting, and
+`Mediator.swap`. The key is computed **once per access** (`:211-213`) and
+its last segment passed down, never re-derived: a key function may read a
+served value pinned to the current step (`branched` reads the forward's
+branch variable as a step's first, pinned read, fact 4), and a second
+evaluation after that read would run with the pin relaxed and ask the model
+for an occurrence it has moved past. Because the location is served by
+`Mediator` whatever the path, `preprocess`, `postprocess` and `transform`
+all work on every value, including an operation inside a forward. Families that serve a transposed
+view of head outputs (`seq_first`, `attention.py:48-57`;
+`families/mpt.py:65-71`) rely on a transpose being a view of the same
+storage, so in-place edits land, and transpose back in `postprocess`; a
+value that needs a copy carries edits back with a transform (Falcon's
+`mlp_output`, `families/falcon.py:136-148`), and the transform's `raw` is
+what a tuple-returning module would need to rebuild its container
+(nnsight `eproperty.py:52-66`).
+
+### Introspection
+
+- `path(obj)` (`:149-151`): the key for this host, the string or what the
+  function returns.
+- `inside_forward(obj=None)` (`:153-156`): a `source` segment on the path,
+  leading `../` stripped first, or any function key (every function key in
+  the tree names an operation). So `"source.dropout_add_0.input"` and
+  `"../source.hidden_states_view_0.output"` both answer `True`, and
+  `"../post_attention_layernorm.output"` `False`. The suite uses it to pick
+  the interior values of a family's `Attention` (`tests/families/suite.py:319-334`).
+  It says where a value is, not when its forward has to be instrumented;
+  that is the host's `sourced` flag, below.
+
+## Availability
+
+`unavailable` is a reason string, or a predicate `f(envoy) -> str | None`.
+`reason(obj)` evaluates it on the *instance* (`:103-105`), so a checkpoint's
+config decides (`needs_eager`, `components/attention.py:18-23`, reads
+`envoy._module.config._attn_implementation`) and so a hybrid can answer per
+block.
+
+- `_check` (`:107-118`) runs before every read and write. A reason raises
+  `Unavailable` (a `RuntimeError`, `:23-34`) naming `{obj.path}.{name}` and
   the reason. A predicate that itself raises `AttributeError` is re-raised as
-  `RuntimeError("the availability check of ... failed: ...")` (`:92-98`),
+  `RuntimeError("the availability check of ... failed: ...")` (`:110-116`),
   because of fact 2: left alone, a typo in a predicate would surface as "no
   attribute `attention_probabilities`" and hide the predicate's own bug.
   Verified: a predicate reading `config.no_such_flag` raises
-  `RuntimeError: the availability check of model.model.layers.0.self_attn.probe failed: 'LlamaConfig' object has no attribute ...`.
-- `__set_name__` (`:52-58`) fills `name` and `key` from the class body when
-  they are still `None`. A bare marker `attention_probabilities =
-  unavailable("...")` (`:113-120`) is never called on a stub, so nnsight's
-  `__call__` never ran to set them; without this the marker would have no
-  name in the repr and `status()`.
-- `layout` and `dims` (`:64-87`) read the return annotation of the stub with
+  `RuntimeError: the availability check of model.transformer.h.0.attn.probe failed: 'GPT2Config' object has no attribute 'no_such_flag'`.
+- `layout` and `dims` (`:122-145`) read the return annotation of the stub with
   `typing.get_type_hints(func, include_extras=True)`. The annotation is one
   of the fourteen layout aliases, each defined in the file of the envoy that
   serves it (`Residual = Float[Tensor, "batch seq hidden"]` in `layer.py`,
@@ -127,7 +281,7 @@ per block.
   annotated `-> Keys` has the identical layout. An inline `Float[Tensor, "..."]`
   resolves the same way (`expanded_keys` above). A `State | None` annotation
   (`LinearAttention.state_input`, which is `None` on a fresh prompt) is a
-  `types.UnionType`, so the non-`None` member is taken (`:79-80`). `dims` is
+  `types.UnionType`, so the non-`None` member is taken (`:137-138`). `dims` is
   `layout.dim_str.split()`. Verified:
   `LinearAttention.state_input.layout is State` and
   `LinearAttention.state_input.dims == ('batch', 'heads', 'key_dim', 'value_dim')`.
@@ -137,105 +291,69 @@ per block.
   `AttributeError` is fact 2 again: the reason text would be lost. Use
   `status()`.
 
-## `SourceEProperty`: a value inside a forward
+## `Standard`: the `sourced` flag
 
-`SourceEProperty` (`:123-246`) is an `EProperty` whose location is an
-operation under the module's `.source`.
+`Standard` (`components/standard.py:24-64`) is the envoy every component
+derives from, and it carries one flag about forwards. A value that is an
+operation inside a forward is served only on a call whose forward was
+instrumented before the call began. The drill at read time (fact 5) is
+enough when the read comes before the module runs, the usual case: a value
+on the host's own `source.` is the first request on that module or it is
+out of order, as with a bare `.source`
+([finding-source-ops.md](../extending/finding-source-ops.md)). It is too
+late when the worker is already parked inside the module, which a read can
+legitimately do: Llama 4's block is read as `attention_output` (the
+attention module's output, after the block is running) and then
+`mlp_output` (`../source.hidden_states_view_0.output`, an operation in the
+block's forward). The `.fn` handoff and the instrumented forward are both
+installed before a call, so the first trace that reads the two in that
+order ends with an `OutOfOrderError` on the view. Nothing infers this from
+a path; the family that puts a value in such a forward is the one that
+knows, and it says so on the envoy that owns the forward: `sourced = True`
+on its class (`sourced = False` on `Standard`, `:40`). `__init__` (`:42-45`)
+and `_update` (`:47-50`) then touch `self.source`, at build and again when
+real weights replace meta ones and nnsight reinstalls the plain forward
+(nnsight `envoy.py:391`). Llama 4's `Layer` is the one instance
+(`families/llama4_text.py:78-86`): `sourced = True` under a docstring
+saying why, its `Mlp.mlp_output` being an operation in the block's forward
+read after the block's attention has returned. Verified on tiny GPT-2: a
+custom `Mlp` with `EProperty("../source.hidden_states_1.output")` passed
+through `envoys=` and read after `attention_output` ends with
+`OutOfOrderError: 'model.transformer.h.0.source.hidden_states_1.output.i0'
+was requested but the model already ran past it`; with `class
+Layer(gpt2.Layer): sourced = True` passed beside it, the read is served.
+Only the modules a family flags are instrumented, so the per-forward cost
+of `.source` stays where a family asked for it. `EProperty` has no part in
+the flag: `inside_forward()` says where a value is, not when its forward
+is instrumented.
 
-- **Key.** `key = f"source.{op}.{attribute}"` (`:166-167`), the same string
-  a user would write after the envoy (`envoy.source.<op>.<attribute>`). When
-  `op` is a function (a branching forward, or Falcon's `by_alibi`, whose
-  function is named `<without>|<with_alibi>`), the key shows `<name>`.
-- **`_drill`** (`:194-207`) walks `op.split(".source.")`: every component
-  but the last is a *call* to drill into, the last is the operation whose
-  `.output` / `.inputs` / `.input` descriptor is read. The walk starts at
-  `obj.source`, which itself instruments the module's forward once
-  (`Envoy.source`, nnsight `envoy.py:645-663`) and is fine outside a trace;
-  each `.source` on an op needs a running trace (fact 5). An `AttributeError`
-  anywhere in the walk is re-raised as `SourceNotAvailable` naming the value,
-  the op and nnsight's list of what is there (`:202-207`), again because of
-  fact 2. Verified: a wrong op name reads `model.model.layers.0.self_attn.broken reads operation 'no_such_op_0' under .source, which this run does not have: 'model.model.layers.0.self_attn.source' has no operation ...`.
-- **Every read and write drills.** Because `interleaver.sourced` is per run
-  (fact 5), the descriptor cannot remember a `SourceEnvoy` from a previous
-  trace. `_is_drilled` (`:209-211`) checks `getattr(source, call).path in
-  obj.interleaver.sourced` to tell "already drilled this run" (walk the cached
-  entry with a plain `.source`) from "first time this run" (`_drill_relaxed`).
-- **`_drill_relaxed`** (`:213-230`) is fact 4 meeting fact 5. A drill parks
-  on `{path}.fn`, a location the call fires **once per forward**. Inside
-  `tracer.iter[7]` the mediator is pinned to occurrence 7, so the `.fn` read
-  would wait for the eighth firing of a call that fires once, and the run
-  would end with it parked. So the pin is saved, set to `None`, the drill
-  made relaxed (it resolves to the next occurrence, the call in flight), and
-  the pin restored in `finally` for the value read that follows. This is what
-  lets `for t in tracer.iter[2]: mix.state` resolve on a first read pinned
-  past 0 (`tests/families/test_qwen3_5_text.py:173-176`).
-- **`_pick` / `_put`** (`:172-192`) implement `select`: with
-  `attribute="inputs"` an int indexes `args` and a str indexes `kwargs`
-  (`attention_queries` is `select=1` of the interface's inputs,
-  `components/attention.py:74`; a DeltaNet `decays` is `select="g"`,
-  `linear_attention.py:176`); with `"output"` an int indexes the returned
-  tuple (`attention_head_outputs` is `select=0`, `attention.py:149`). A write
-  re-reads the current `(args, kwargs)` or tuple, replaces the one element
-  and writes the whole back (`__set__`, `:239-246`), which is why assigning
-  `attention_keys` replaces only the keys and keeps every other argument.
-- **`__get__` / `__set__`** (`:232-246`) do not call `eproperty.__get__` at
-  all: they read `getattr(op, self.attribute)`, i.e. the `SourceEnvoy`'s own
-  `.output` / `.inputs` / `.input` eproperties (nnsight `source.py:835-884`),
-  and apply nnter's preprocess/postprocess around them. `.input`'s postprocess
-  re-reads the pair and replaces the first argument (`source.py:882-884`), so
-  BLOOM's `attention_output = value` (a `dropout_add` `.input`) keeps the
-  residual argument intact.
-- **Why `transform` is not wired here.** Fact 3 is a feature of
-  `eproperty.__get__`, which this descriptor bypasses. The element `_pick`
-  returns is the very object the call holds, so an in-place edit on it
-  reaches the model without a write-back, and a reshaped view would need one
-  the descriptor does not provide (`:152-155`). The two families that serve a
-  transposed view of head outputs (`seq_first`, `attention.py:35-43`) rely on
-  a transpose being a view of the same storage, so in-place edits still land,
-  and transpose back in `postprocess` for assignments
-  (`families/falcon.py:62-68`, `families/mpt.py:61-67`). A value that needs a
-  real write-back stays a plain `EProperty`: Falcon's `mlp_output` reads a
-  clone and carries edits back with `@mlp_output.transform`
-  (`families/falcon.py:91-103`), and the transform's `raw` is what a
-  tuple-returning module would need to rebuild its container
-  (nnsight `eproperty.py:52-66`).
-
-## `RelativeEProperty`: a sibling's value
-
-`RelativeEProperty(EProperty)` (`:249-267`) is a plain `eproperty` whose
-location is computed from another envoy. `key` is `"<path>.<attribute>"`;
-`_location` (`:262-267`) splits on the last dot, then either steps to the
-parent by string surgery on `obj.path` when the path starts with `../`
-(`"../post_attention_layernorm.output"` on `model.layers.0.self_attn`
-becomes `model.layers.0.post_attention_layernorm.output`, by **native**
-name since it is a path string), or resolves the path from the envoy with
-`obj.get(path).path`, which follows aliases (`"embed_tokens.output"` on the
-root reaches `transformer.wte` on GPT-2, `standardized.py:161-169`). Reading
-and writing then go through `eproperty.__get__` / `__set__` unchanged, so
-`transform` *is* available on this descriptor.
+`values()` (`:52-60`) collects a class's `EProperty`s by name, base classes
+first, and `status()` (`:62-64`) maps each to its reason on this instance.
 
 ## `DerivedEProperty`: computed, read-only
 
-`DerivedEProperty(EProperty)` (`:315-338`) has no location: `__get__`
-(`:331-335`) runs `_check` then `compute(obj)`, which may read any number of
+`DerivedEProperty(EProperty)` (`:328-351`) has no location: `__get__`
+(`:344-348`) runs `_check` then `compute(obj)`, which may read any number of
 served values in forward order; `__set__` raises `AttributeError("... is
-derived and read-only")` (`:337-338`), which is the one place an
+derived and read-only")` (`:350-351`), which is the one place an
 `AttributeError` is right (it is the assignment that fails). `_preprocess`
-is set to `compute` (`:326`) **only** so that `layout` reads its return
+is set to `compute` (`:339`) **only** so that `layout` reads its return
 annotation; it is never called as a preprocess. `LinearAttention.states`
-(`linear_attention.py:281-285`) is the one instance.
+(`linear_attention.py:302-306`) is the one instance.
 
 ## `branched`, `per_call`, `at_occurrence`
 
 A forward that branches fires a different op on each branch, and the value
 of the branch variable is itself served once per module call. Three helpers
-(`:269-344`) let a `SourceEProperty` name the op that fires *on this call*:
+let a function key name the op that fires *on this call*:
 
-- `branched(variable, ops)` (`:269-292`) returns an `op` function for
-  `SourceEProperty`: read `getattr(envoy.source, variable).output` (a
-  binding is an operation, nnsight `source.py:26-31`) and look it up in
-  `ops`. The read is cached through `per_call`.
-- `per_call(envoy, key, compute)` (`:295-312`) caches `compute()` on the
+- `branched(variable, ops)` (`:282-305`) returns a key function: read
+  `getattr(envoy.source, variable).output` (a binding is an operation,
+  nnsight `source.py:26-31`) and look it up in `ops`. The read is cached
+  through `per_call`. `LinearAttention.KERNEL` (`linear_attention.py:169`)
+  is the one instance, and `kernel(attribute)` (`:123-130`) turns it into
+  the path `source.<kernel>.<attribute>` every kernel-located value declares.
+- `per_call(envoy, key, compute)` (`:308-325`) caches `compute()` on the
   envoy under `key`, telling calls apart by fact 4: the cache entry is
   `(mediator, step, value)`; another mediator is another run; a step that is
   `None` (relaxed) is the same call; a pinned step different from the cached
@@ -243,8 +361,8 @@ of the branch variable is itself served once per module call. Three helpers
   is pinned to that step and misses the cache, and every later read in the
   same body is relaxed and hits it. Reading the variable as the step's first,
   pinned read also keeps the kernel read sequential, which is what lets an op
-  that never fires on step 0 resolve on later steps (`:279-285`).
-- `at_occurrence(t)` (`:340-344`) is `Iterations()[t : t + 1]`: the
+  that never fires on step 0 resolve on later steps (`:290-298`).
+- `at_occurrence(t)` (`:353-357`) is `Iterations()[t : t + 1]`: the
   `for step in tracer.iter[t]` stretch as a value, so library code can pin
   one occurrence of a location and have the pin restored afterwards
   (`iterator.py:121-144`).
@@ -254,22 +372,24 @@ three are used.
 
 ## Where it lives
 
-| descriptor | class | location it serves | write path |
+| value | key | location it serves | write path |
 |---|---|---|---|
 | boundary value (`layer_output`, `attention_output`, `logits`) | `EProperty(key="output")` | `{path}.output` (same as `.output`) | `postprocess` → swap; `transform` available |
-| value inside a forward (`attention_probabilities`, `decays`) | `SourceEProperty(op, attribute, select)` | `{path}.source.<op>.<attribute>` after a drill | `postprocess` → `_put` → the op's own descriptor |
-| a sibling's value (Gemma-2 `attention_output`) | `RelativeEProperty("../norm.output")` | the sibling's `.output` | as `EProperty` |
+| the root's call arguments (`input_ids`, `attention_mask`, `input_size`) | `EProperty(key="inputs")` | `{path}.input`, the `(args, kwargs)` pair | `postprocess` repacks the pair → swap |
+| another module's value (Gemma-2 `attention_output`, `token_embeddings`) | `EProperty("../norm.output")`, `EProperty("embed_tokens.output")` | that module's `.output` | as any value |
+| value inside a forward (`attention_probabilities`, `decays`) | `EProperty("source.<op>.<attribute>", select=...)` | `{path}.source.<op>.{input\|output}` after a drill | `postprocess` → `_put` → swap |
+| an operation in the parent's forward (Llama 4 `mlp_output`) | `EProperty("../source.<op>.output")` | the parent's `.source.<op>.output`; the parent's class sets `sourced = True` | as any value |
 | computed (`states`) | `DerivedEProperty(compute)` | none | refused |
 | declared missing | `unavailable("reason")` | none | refused with the reason |
 
 One thing on the root is none of these. A size (`num_layers`, `hidden_size`,
 `vocab_size`, `num_heads`, `num_kv_heads`, `head_dim`, `qk_head_dim`,
-`intermediate_size`) is a `StandardizedProperty` (`nnter/standardized.py:19-43`),
+`intermediate_size`) is a `StandardizedProperty` (`nnter/standardized.py:25-50`),
 a bare descriptor with no `eproperty` underneath: no location, nothing served
 during a trace, no `description`, `layout` or `status()` entry.
-Its `__get__` (`:36-40`) does one lookup, `getattr(obj.family, name)`, and calls
+Its `__get__` (`:42-46`) does one lookup, `getattr(obj.family, name)`, and calls
 that function with the model when the family module defines it, else the
-wrapped plain rule (`:365-403`); its `__set__` (`:42-43`) raises
+wrapped plain rule (`:376-410`); its `__set__` (`:48-50`) raises
 `AttributeError("<name> is read off the config; a family defines `def <name>(model)`
 to say it otherwise")`, so an assignment cannot shadow it. It is what lets `falcon.py` say
 `num_kv_heads` and `deepseek_v2.py` say `head_dim` without a subclass of the root.
@@ -279,21 +399,28 @@ to say it otherwise")`, so an assignment cannot shadow it. It is what lets `falc
 - `hasattr` / `getattr(..., default)` raise `Unavailable`; only
   `AttributeError` counts as absence in Python, and turning `Unavailable`
   into one would lose the reason through `Envoy.__getattr__`.
-- A nested `.source` (`op.source`) only works inside a trace, and the drill
+- A nested `.source` (an operation's) only works inside a trace, and the drill
   parks *before* the call fires; a value read after the op's `.output` cannot
   then drill into it (nnsight `source.py:807-813`, the `.fn` ordering).
 - `interleaver.sourced` is cleared on entry to every run, so nothing about a
-  drill can be cached on the descriptor across traces; `_drill` runs on every
-  access by design.
-- An out-of-order read of a source-located value ends the block with
+  drill can be cached on the descriptor across traces; `_resolve` walks the
+  path on every access by design.
+- An out-of-order read of a value inside a forward ends the block with
   nnsight's "was never reached … cut short" *warning*, not `OutOfOrderError`,
   because the mediator is relaxed while it waits on `.fn`
   (`dangling_unwind`, nnsight `interleaver.py:554-572`): the rest of the block
   silently does not run. See [gotchas.md](gotchas.md).
-- `select` on `"output"` indexes a tuple; on a module that returns a bare
+- A value read after its forward has started (Llama 4's `mlp_output`, a
+  `../source.` key read after `attention_output`) needs that forward
+  instrumented ahead of the trace, and nothing infers it from the path: the
+  envoy that owns the forward sets `sourced = True`, or the read is an
+  `OutOfOrderError`.
+- `input` is the first argument, never the pair; a stub on an `input` path
+  receives a tensor. The pair is `inputs`.
+- `select` on `output` indexes a tuple; on a module that returns a bare
   tensor use no `select`.
 - `.source` instruments the forward over a snapshot of the module's globals
-  at first drill (nnsight `source.py:447-471`, `function_like` copies
+  at first drill (nnsight `source.py:439-471`, `function_like` copies
   `fn.__globals__`); a kernel binding switched after that is not seen. See
   `route_delta_rule` in [linear-attention-internals.md](linear-attention-internals.md).
 

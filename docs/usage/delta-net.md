@@ -71,7 +71,8 @@ is Gates`); `state` is a `State` and `states` a `States`, `batch seq heads key_d
 value_dim`. `heads` is the mixer's `num_v_heads` (the queries and keys are repeated up to
 it), `key_dim` its `head_k_dim` and `value_dim` its `head_v_dim`. The state is
 float32 in the torch kernels. Everything but `attention_output` is read at the
-delta-rule kernel call, so these are `SourceEProperty` values; assign to
+delta-rule kernel call, so these are `EProperty` values keyed inside the
+forward (`kernel("inputs")`, the kernel that fires on this call); assign to
 replace them, or edit in place (`mix.attention_head_outputs[:, -1] = 0`
 reaches the model). `state_input` is a clone of the cache's buffer: the cache
 hands the kernel its own tensor and overwrites it with the new state

@@ -66,8 +66,8 @@ everywhere. Everything nnsight does (`trace`, `generate`, `.save()`, `tracer.ite
 
 ### "Add a family, override a value, add my own value"
 - [docs/extending/adding-a-family.md](docs/extending/adding-a-family.md) — one module named after `model_type`, one test file; `def <size>(model)` in the module where the config spells a root size its own way
-- [docs/extending/overriding-values.md](docs/extending/overriding-values.md) — `RelativeEProperty`, `SourceEProperty`, `unavailable(...)`, `off_interface`, transforms
-- [docs/extending/custom-values.md](docs/extending/custom-values.md) — a new `EProperty` through `envoys=`; annotate `-> Residual` / `-> Pattern` from `nnter.components`
+- [docs/extending/overriding-values.md](docs/extending/overriding-values.md) — an `EProperty` keyed on a path (`"../norm.output"`, `"source.<op>.inputs"` with `select`), `unavailable(...)`, `off_interface`, transforms
+- [docs/extending/custom-values.md](docs/extending/custom-values.md) — a new `EProperty` (a path from the host: `"output"`, `"../ln_2.output"`, `"source.<op>.output"`) through `envoys=`; annotate `-> Residual` / `-> Pattern` from `nnter.components`
 - [docs/extending/finding-source-ops.md](docs/extending/finding-source-ops.md) — `print(envoy.source)` and how ops are named
 - [docs/extending/registering.md](docs/extending/registering.md) — `nnter.families.register(module)`
 

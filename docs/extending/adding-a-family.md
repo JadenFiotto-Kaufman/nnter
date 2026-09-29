@@ -350,7 +350,7 @@ is the block's tensor; the contribution identity `input + attention_output + mlp
 == layer_output` holds on every block; `self_attn.input` and `mlp.input` equal the
 family's own norms' outputs; the standardized model equals a raw `TransformersModel`;
 boundary writes move the logits; the pattern has the right shape, dtype, row sums and
-causal mask; a written pattern moves the logits; every `SourceEProperty` resolves on every
+causal mask; a written pattern moves the logits; every value inside a forward resolves on every
 attention block; the interior's shapes, causal writes and in-place edits; `skip_layers`,
 `steer`, `project_on_vocab`; every value's tensor matches its layout annotation (the
 name the base carries, imported from `..components`: `Residual`, `Pattern`, ...); the
@@ -403,6 +403,6 @@ into the package and the `register()` line removed.
 
 - [overriding-values.md](overriding-values.md): what to write in the subclasses when the base does not hold.
 - [custom-values.md](custom-values.md): adding a value the base classes do not have.
-- [finding-source-ops.md](finding-source-ops.md): discovering the operation names a `SourceEProperty` needs.
+- [finding-source-ops.md](finding-source-ops.md): discovering the operation names a `source.` path needs.
 - [registering.md](registering.md): a family outside the package, or overriding a shipped one.
 - nnsight docs/usage/rename-modules.md: the alias rules `RENAME` relies on.

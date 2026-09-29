@@ -91,13 +91,13 @@ A value you define is annotated with the name, so its layout is the same object 
 base's and reads back through `.layout` and `.dims` like any standard value:
 
 ```python
-from nnter import SourceEProperty
+from nnter import EProperty
 from nnter.components import Pattern, interface_reason
 from nnter.families import gpt2
 
 
 class Attention(gpt2.Attention):
-    @SourceEProperty("attention_interface_1.source.nn_functional_softmax_0", description="The softmax output before the dropout, [batch, heads, query, key]", unavailable=interface_reason)
+    @EProperty("source.attention_interface_1.source.nn_functional_softmax_0.output", description="The softmax output before the dropout, [batch, heads, query, key]", unavailable=interface_reason)
     def attention_softmax(self, value) -> Pattern:
         return value
 

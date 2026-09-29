@@ -17,7 +17,7 @@ when the checkpoint sets no ``rope_theta``), so its contribution is OLMo-3's
 override at the post-attention norm. Both block classes hold one MLP class,
 ``OlmoHybridMLP``, whose contribution is its own output on a linear block and the
 post-feedforward norm's output on an attention block, so ``mlp_output`` is a
-`RelativeEProperty` whose location is chosen by the parent block's layer type.
+`EProperty` whose key is chosen by the parent block's layer type.
 The DeltaNet calls transformers' ``torch_chunk_gated_delta_rule`` /
 ``torch_recurrent_gated_delta_rule`` as Qwen3-Next does, so the base
 `LinearAttention` holds; with ``linear_allow_neg_eigval`` the betas are doubled
@@ -32,7 +32,7 @@ from transformers.models.olmo_hybrid.modeling_olmo_hybrid import (
     OlmoHybridMLP,
 )
 
-from ..components import Attention, Layer, LinearAttention, Mlp, RelativeEProperty, Residual
+from ..components import Attention, EProperty, Layer, LinearAttention, Mlp, Residual
 
 MODEL_TYPES = ("olmo_hybrid",)
 
@@ -50,7 +50,7 @@ class Layer(Layer):
 class Attention(Attention):
     """OLMo-Hybrid's softmax attention: the shared eager forward, but what reaches the residual stream is the post-attention norm's output."""
 
-    @RelativeEProperty(
+    @EProperty(
         "../post_attention_layernorm.output",
         description="What the attention adds to the residual stream: the post-attention norm's output",
     )
@@ -63,17 +63,17 @@ class LinearAttention(LinearAttention):
 
 
 def by_block(envoy) -> str:
-    """Where this MLP's contribution is served: the post-feedforward norm on an attention block, the MLP itself on a linear one."""
+    """The key of this MLP's contribution: the post-feedforward norm on an attention block, the MLP's own output on a linear one."""
     index = int(envoy.path.rsplit(".", 2)[-2])
     if envoy._module.config.layer_types[index] == "full_attention":
         return "../post_feedforward_layernorm.output"
-    return "../mlp.output"
+    return "output"
 
 
 class Mlp(Mlp):
     """OLMo-Hybrid's MLP, one class in both block types: what reaches the residual stream depends on the block holding it."""
 
-    @RelativeEProperty(
+    @EProperty(
         by_block,
         description="What the MLP adds to the residual stream: the post-feedforward norm's output on an attention block, the MLP's own on a linear block",
     )
