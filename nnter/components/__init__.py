@@ -47,13 +47,13 @@ from .attention import (
     seq_first,
 )
 from .eproperty import (
-    DerivedEProperty, EProperty, Unavailable, at_occurrence, branched,
+    DerivedEProperty, EProperty, Unavailable, branched,
     per_call, unavailable,
 )
 from .layer import Layer, Residual
 from .linear_attention import (
-    Gates, LinearAttention, LinearQK, LinearV, State, States, needs_recurrent_routing, needs_torch_kernels,
-    route_delta_rule,
+    Gates, LinearAttention, LinearQK, LinearV, State, States, at_occurrence, needs_recurrent_routing,
+    needs_torch_kernels, route_delta_rule,
 )
 from .mlp import Mlp
 from .standard import Standard, first_tensor, rewrap

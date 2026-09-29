@@ -349,9 +349,3 @@ class DerivedEProperty(EProperty):
 
     def __set__(self, obj: Envoy, value: Any) -> None:
         raise AttributeError(f"{self.name} is derived and read-only")
-
-def at_occurrence(t: int):
-    """The ``for step in tracer.iter[t]`` stretch, for one occurrence of a location inside a call."""
-    from nnsight.intervention.iterator import Iterations
-
-    return Iterations()[t : t + 1]

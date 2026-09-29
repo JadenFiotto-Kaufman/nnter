@@ -11,7 +11,7 @@ from nnsight.intervention.source import SourceEnvoy
 from jaxtyping import Float
 from torch import Tensor
 
-from .eproperty import DerivedEProperty, EProperty, Unavailable, at_occurrence, branched, per_call
+from .eproperty import DerivedEProperty, EProperty, Unavailable, branched, per_call
 from .layer import Residual
 from .standard import Standard, first_tensor, rewrap
 
@@ -119,6 +119,14 @@ def needs_recurrent_routing(envoy: Envoy) -> str | None:
             "(slower, like attn_implementation='eager')"
         )
     return None
+
+
+def at_occurrence(t: int):
+    """The ``for step in tracer.iter[t]`` stretch, for one occurrence of a location inside a call."""
+    from nnsight.intervention.iterator import Iterations
+
+    return Iterations()[t : t + 1]
+
 
 def kernel(attribute: str) -> Callable[[Envoy], str]:
     """A key at whichever delta-rule kernel fires on this call: ``source.<kernel>.<attribute>``."""
