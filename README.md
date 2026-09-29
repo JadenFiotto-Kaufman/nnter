@@ -46,6 +46,13 @@ sublayers. What a user wants from a norm is what it produces, and that is
 `self_attn.input` and `mlp.input` on every family, checked per family by the
 test suite against the family's own norm.
 
+## Docs
+
+`docs/` holds one page per feature (`usage/`), interpretability recipes written once against
+the standard values (`patterns/`), how to add or override a family (`extending/`), the
+internals (`developing/`) and the API and families tables (`reference/`). `CLAUDE.md` routes
+a task to the right page. Every snippet in them has run against the pinned checkpoints.
+
 ## How it works
 
 `StandardizedTransformer` subclasses `TransformersModel`. Its `__init__` reads
@@ -77,7 +84,7 @@ wrapped by the family's `Layer`, an nnsight `Envoy` subclass, and gains:
 | `model.layers[i].self_attn.attention_output` | what the attention sublayer adds to the residual stream |
 | `model.layers[i].mlp.mlp_output` | what the MLP sublayer adds to the residual stream |
 | `model.layers[i].self_attn.attention_probabilities` | the attention pattern the values are mixed with, `[batch, heads, query, key]`, read at the dropout after the softmax inside the eager attention forward |
-| `model.layers[i].self_attn.attention_queries` / `attention_keys` / `attention_values` | what the attention interface receives: queries `[batch, heads, seq, head_dim]` after RoPE, keys and values `[batch, kv_heads, seq, head_dim]` before `repeat_kv` |
+| `model.layers[i].self_attn.attention_queries` / `attention_keys` / `attention_values` | what the attention interface receives: queries `[batch, heads, seq, qk_head_dim]` after RoPE, keys `[batch, kv_heads, seq, qk_head_dim]` and values `[batch, kv_heads, seq, head_dim]` before `repeat_kv` |
 | `model.layers[i].self_attn.attention_scores` | the masked, scaled scores entering the softmax, `[batch, heads, query, key]`; `softmax(scores)` is the pattern up to the dtype cast |
 | `model.layers[i].self_attn.attention_head_outputs` | each head's output before concatenation and the output projection, `[batch, seq, heads, head_dim]` |
 
@@ -122,10 +129,9 @@ interface `num_heads` key/value heads, so the root also publishes
 
 Both are nnsight `eproperty` descriptors, so they show up in the model's repr
 with their description. `attention_probabilities` reaches into the forward
-through nnsight's `.source`, so it needs the eager attention path:
-`StandardizedTransformer` defaults `attn_implementation` to `"eager"`, and the
-value refuses with a `SourceNotAvailable` naming the missing operation under
-any other implementation.
+through nnsight's `.source`, so it needs the eager attention path: load with
+`attn_implementation="eager"`, or the value is unavailable (`status()` says so,
+and a read raises `Unavailable` naming the implementation the model runs).
 
 It is a `nnter.components.SourceEProperty`, an `eproperty` subclass for values that
 live inside a forward. An operation inside a called function only exists once
@@ -153,12 +159,13 @@ path, never by alias). Three shapes of override exist today:
   `unavailable(NOT_ON_INTERFACE)`.
 
 Falcon's block adds the attention into the MLP's output tensor in place, so its
-`mlp_output` reads a copy; assign to edit it. OPT has no MLP module and waits
-for the availability work.
+`mlp_output` reads a copy; assign to edit it. OPT has no MLP module, and
+`status()` lists no `mlp` value for it.
 
 Pass `envoys=` to `StandardizedTransformer` to add your own; yours replace the
 family's on the same key. nnsight tries type keys before path keys, so to
-displace a family's type-keyed envoy, key yours on the type too.
+displace a family's type-keyed envoy, key yours on the type too. A value on a
+class installed this way is listed by `model.status()` like the family's own.
 
 ## Hybrids: gated DeltaNet
 
@@ -199,8 +206,8 @@ family's prompts through it (process-wide, like installing a kernel; call it
 before tracing a layer; `"chunked"` restores the default), and then:
 
 ```python
-route_delta_rule(model.family, "recurrent")
 model = StandardizedTransformer("Qwen/Qwen3.5-9B", attn_implementation="eager")
+route_delta_rule(model.family, "recurrent")   # before the first trace of a linear block
 mix = model.layers[0].linear_attn
 
 with model.trace(prompt) as tracer:
@@ -208,8 +215,10 @@ with model.trace(prompt) as tracer:
         s_t = mix.state.save()
 
 with model.trace(prompt) as tracer:
+    for t in tracer.iter[6]:
+        s6 = mix.state                        # a token's state is served once: read one, write the next
     for t in tracer.iter[7]:
-        mix.state = mix.state * 0             # a write at token 7: the tokens after it continue from zeros
+        mix.state = torch.zeros_like(s6)      # a write at token 7: the tokens after it continue from zeros
     for t in tracer.iter[9]:
         s9 = mix.state.save()
 
@@ -240,7 +249,7 @@ Without the switch, reading any of them raises `Unavailable` with that
 instruction, and `status()` reports it. The results are the same to float error: the two kernels compute
 the same rule. Reads follow the forward: in one trace, positions before a
 write come before it and positions after it come after; `states` reads every
-position, so it goes in a trace of its own or before any write.
+position, so it goes in a trace of its own.
 
 ## Layouts
 
@@ -256,7 +265,7 @@ every family. Layouts differ between values, not between families:
 | `layer_output`, `attention_output`, `mlp_output`, `token_embeddings`, `self_attn.input`, `mlp.input` | `batch seq hidden` |
 | `logits` / `next_token_probs` | `batch seq vocab` / `batch vocab` |
 | `attention_queries` | `batch heads seq qk_head_dim` |
-| `attention_keys`, `attention_values` | `batch kv_heads seq head_dim` |
+| `attention_keys` / `attention_values` | `batch kv_heads seq qk_head_dim` / `batch kv_heads seq head_dim` |
 | `attention_scores`, `attention_probabilities` | `batch heads query key` |
 | `attention_head_outputs` | `batch seq heads head_dim` |
 | `linear_attn.attention_queries` / `keys` / `values` | `batch seq heads key_dim` (values: `value_dim`) |
@@ -278,10 +287,11 @@ standard names so they run on every family:
 with model.trace(prompt):
     model.skip_layers(4, 7)                       # blocks 4..7 do not run; the stream passes straight through
     model.steer(10, vector, factor=3, token_positions=-1)   # add to the residual stream leaving block 10
-    lens = model.project_on_vocab(model.layers[5].layer_output).save()   # logit lens at block 5
+    resid = model.layers[5].layer_output.save()
+    lens = model.project_on_vocab(resid).save()   # logit lens at block 5
     logits = model.logits.save()
 
-model.get_topk_closest_tokens(lens[0, -1], k=5)   # {token: probability} for that position
+model.get_topk_closest_tokens(resid[0, -1], k=5)   # [{token: probability}] for that position, projected the same way
 ```
 
 `skip_layers` hands each skipped block's input on as its `layer_output`,
@@ -312,8 +322,9 @@ Two helper modules carry nnterp's names, written against the standard values:
 ## What a checkpoint has
 
 Not every checkpoint has every value: OPT has no MLP module, a model loaded
-with sdpa cannot expose the eager pattern, alibi Falcon takes a different
-attention path, a hybrid's linear-attention blocks have no softmax. nnter
+with sdpa cannot expose the eager pattern, a GPT-2 checkpoint with
+`reorder_and_upcast_attn` leaves the shared attention path, a hybrid's
+linear-attention blocks have no softmax. nnter
 answers that before any trace runs:
 
 ```python
@@ -323,12 +334,16 @@ model.status()
 #  'layer_output': None,
 #  'self_attn.attention_output': None,
 #  'self_attn.attention_probabilities': {0: "read inside the eager attention forward, but this model runs 'sdpa'; ...", ...},
-#  'mlp.mlp_output': {0: 'no mlp module on this block', 1: ..., ...}}
+#  ...}                       # no 'mlp.*' key: no block has an mlp module
 model.status(layer=3)        # one block, flat
 model.layers[3].self_attn.status()   # one envoy
 ```
 
-`None` means available; otherwise the reason, per block where it differs.
+`None` means available; otherwise the reason, per block where it differs. The
+keys come from the tree: the root's values and every standard module on each
+block, so a module no block has (OPT's `mlp`) is not listed, and one some
+blocks lack (a hybrid's `self_attn`) reads `no self_attn module on this block`
+there.
 Reading an unavailable value raises `nnter.Unavailable` with the same reason,
 at that line, before the model runs.
 
@@ -337,8 +352,8 @@ the envoy returning one or `None`, evaluated on the instance so the config can
 decide (`components.needs_eager` is the one the pattern uses). A family that lacks a
 value altogether assigns `attention_probabilities = unavailable("...")` in its
 class body; the name stays in the tree and the repr shows the reason. A module
-that does not exist on a block (OPT's `mlp`) is reported as such from the tree,
-with nothing to declare.
+some blocks lack (a hybrid's `self_attn`) is reported missing there from the
+tree, with nothing to declare; one no block has (OPT's `mlp`) is not listed.
 
 ## Remote (NDIF)
 

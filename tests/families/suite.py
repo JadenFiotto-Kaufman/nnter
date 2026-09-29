@@ -97,7 +97,7 @@ class FamilySuite:
         return TransformersModel(cls.REPO, task="text-generation", dispatch=True, attn_implementation="eager", **cls.LOAD_KWARGS)
 
     def has_mlp(self, model):
-        return model.status()["mlp.mlp_output"] is None
+        return model.status().get("mlp.mlp_output", "absent") is None
 
     def attn_blocks(self, model):
         """The blocks with softmax attention: all of them, or one in four on a hybrid."""
@@ -107,6 +107,8 @@ class FamilySuite:
         values = set(VALUES)
         if hasattr(model.family, "LinearAttention"):
             values |= {f"linear_attn.{name}" for name in LINEAR}
+        if not self.has_mlp(model):  # a module no block has is not listed (OPT)
+            values.discard("mlp.mlp_output")
         return values
 
     # -- names ------------------------------------------------------------------
@@ -208,7 +210,7 @@ class FamilySuite:
     def test_contribution_identity(self, model):
         """``input + attention_output + mlp_output == layer_output``: the definition of the contributions."""
         if not self.has_mlp(model):
-            pytest.skip(model.status()["mlp.mlp_output"][0])
+            pytest.skip("no mlp module on any block")
         parts = {}
         with model.trace(PROMPT):
             for i, layer in enumerate(model.layers):

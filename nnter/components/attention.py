@@ -83,8 +83,8 @@ class Attention(Standard):
         """
         return value
 
-    @SourceEProperty(INTERFACE, attribute="inputs", select=2, description="The keys entering attention, [batch, kv_heads, seq, head_dim]", unavailable=interface_reason)
-    def attention_keys(self, value: torch.Tensor) -> Float[Tensor, "batch kv_heads seq head_dim"]:
+    @SourceEProperty(INTERFACE, attribute="inputs", select=2, description="The keys entering attention, [batch, kv_heads, seq, qk_head_dim]", unavailable=interface_reason)
+    def attention_keys(self, value: torch.Tensor) -> Float[Tensor, "batch kv_heads seq qk_head_dim"]:
         """The keys the attention interface receives, ``[batch, kv_heads, seq, head_dim]``.
 
         Before ``repeat_kv``, so under grouped-query attention the head axis

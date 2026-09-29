@@ -90,3 +90,29 @@ def test_default_load_keeps_the_checkpoints_attention():
     assert model.config._attn_implementation != "eager"
     assert "eager" in model.status()["self_attn.attention_probabilities"][0]
     assert model.status()["self_attn.attention_output"] is None
+
+
+def test_register_needs_only_names_and_envoys_for_status():
+    """`status()` walks the tree, so a family without `Attention`/`Mlp` classes still reports every block value."""
+    custom = types.SimpleNamespace(MODEL_TYPES=("gpt2",), RENAME=gpt2.RENAME, ENVOYS=gpt2.ENVOYS)
+    try:
+        families.register(custom)
+        status = StandardizedTransformer(GPT2).status()
+    finally:
+        del families.REGISTRY["gpt2"]
+    assert "self_attn.attention_output" in status and "mlp.mlp_output" in status
+
+
+def test_custom_value_through_envoys_is_in_status():
+    """A value added on an envoy subclass passed through ``envoys=`` is listed by `status()` like the family's own."""
+    from transformers.models.gpt2.modeling_gpt2 import GPT2Attention
+
+    from nnter.components import DerivedEProperty
+
+    class Attention(gpt2.Attention):
+        heads = DerivedEProperty(lambda self: self._module.num_heads, description="The head count")
+
+    model = StandardizedTransformer(GPT2, envoys={GPT2Attention: Attention})
+    assert model.status()["self_attn.heads"] is None
+    assert model.status(layer=0)["self_attn.heads"] is None
+    assert "self_attn.heads" not in StandardizedTransformer(GPT2).status()

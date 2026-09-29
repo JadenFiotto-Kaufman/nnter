@@ -45,7 +45,7 @@ class Attention(Attention):
         return value
 
     @SourceEProperty("self__attn_0", attribute="inputs", select=1, description=Attention.attention_keys.description, unavailable=needs_eager)
-    def attention_keys(self, value) -> Float[Tensor, "batch kv_heads seq head_dim"]:
+    def attention_keys(self, value) -> Float[Tensor, "batch kv_heads seq qk_head_dim"]:
         return value
 
     @SourceEProperty("self__attn_0", attribute="inputs", select=2, description=Attention.attention_values.description, unavailable=needs_eager)

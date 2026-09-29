@@ -1,5 +1,10 @@
 """Falcon (7B layout), end to end: parallel block, multi-query, in-place add into the MLP output."""
 
+import glob
+import json
+import os
+import tempfile
+
 import torch
 from suite import FamilySuite, rows, PROMPT
 
@@ -37,13 +42,35 @@ class TestFalcon(FamilySuite):
             q = model.layers[0].self_attn.attention_queries.save()
         assert v.shape[1] == 1 and q.shape[1] == model.num_heads  # multi-query
 
-    def test_alibi_makes_the_interior_unavailable(self, model):
-        config = model.layers[0].self_attn._module.config
-        config.alibi = True
-        try:
-            assert "alibi" in model.status()["self_attn.attention_probabilities"][0]
-        finally:
-            config.alibi = False
+
+
+def _alibi_checkpoint(repo="Rocketknight1/tiny-random-falcon-7b"):
+    """The 7B tiny checkpoint with ``alibi`` switched on in its config: the same weights, the other attention branch."""
+    snapshot = glob.glob(os.path.expanduser(f"~/.cache/huggingface/hub/models--{repo.replace('/', '--')}/snapshots/*"))[0]
+    patched = tempfile.mkdtemp(prefix="falcon-alibi-")
+    for name in os.listdir(snapshot):
+        if name != "config.json":
+            os.symlink(os.path.realpath(os.path.join(snapshot, name)), os.path.join(patched, name))
+    config = json.load(open(os.path.join(snapshot, "config.json")))
+    config["alibi"] = True
+    json.dump(config, open(os.path.join(patched, "config.json"), "w"))
+    return patched
+
+
+class TestFalconAlibi(FamilySuite):
+    """The 7B layout with alibi: no rotary, the pattern at the dropout after the second softmax, flattened head outputs."""
+
+    REPO = _alibi_checkpoint()
+    FAMILY = falcon
+    NATIVE = rows("transformer", "h", "word_embeddings", "ln_f", attn="self_attention", ln2=None)
+    MLP_NORM = "input_layernorm"
+
+    def test_alibi_branch(self, model):
+        assert model.layers[0].self_attn._module.config.alibi
+        with model.trace(PROMPT):
+            probs = model.layers[0].self_attn.attention_probabilities.save()
+            raw = model.layers[0].self_attn.source.self_attention_dropout_0.output.save()
+        assert torch.equal(probs, raw)
 
 
 class TestFalcon40B(FamilySuite):

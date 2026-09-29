@@ -1,0 +1,318 @@
+---
+title: API Quick Reference
+one_liner: Every public nnter symbol in one place: the model class, the standard values by host with their layouts and availability, the descriptors, the registry, the helper modules and the exceptions.
+tags: [reference, api, values, layouts, availability]
+related: [docs/usage/loading.md, docs/usage/vocabulary.md, docs/usage/root-values.md, docs/usage/methods.md, docs/usage/availability.md, docs/usage/layouts.md, docs/usage/attention-interior.md, docs/usage/delta-net.md, docs/usage/prompt-utils.md, docs/usage/activations.md, docs/extending/custom-values.md, docs/extending/registering.md, docs/developing/eproperty-internals.md, docs/reference/families.md, docs/reference/glossary.md]
+sources: [nnter/__init__.py, nnter/standardized.py, nnter/components/__init__.py, nnter/components/eproperty.py, nnter/components/standard.py, nnter/components/layer.py, nnter/components/attention.py, nnter/components/mlp.py, nnter/components/linear_attention.py, nnter/families/__init__.py, nnter/prompt_utils.py, nnter/nnsight_utils.py]
+---
+
+# API Quick Reference
+
+## What this is for
+
+One page with every name nnter exports, its signature as the source declares it, and for every standard value its layout, whether it can be assigned, and what decides its availability. `model` is a `StandardizedTransformer`. Everything nnsight's `TransformersModel` offers (`trace`, `generate`, `session`, `edit`, `tracer.iter`, `.save()`, `remote=`) is inherited unchanged and is documented in nnsight `docs/reference/api-quick-reference.md`; this page covers only what nnter adds. Signatures are taken from the source; the value rows are what `Standard.values()` reports on each host class.
+
+## Canonical pattern
+
+```python
+import torch
+from nnter import StandardizedTransformer
+
+model = StandardizedTransformer("openai-community/gpt2", dispatch=True, attn_implementation="eager")
+
+print(model.family.__name__)                  # nnter.families.gpt2
+print(model.status())                         # {value: None | {layer: reason}}; nothing runs
+
+with model.trace("The Eiffel Tower is in"):
+    x = model.layers[3].input.save()
+    pattern = model.layers[3].self_attn.attention_probabilities.save()   # inside the attention: before its output
+    attn = model.layers[3].self_attn.attention_output.save()
+    mlp = model.layers[3].mlp.mlp_output.save()
+    resid = model.layers[3].layer_output.save()
+    logits = model.logits.save()
+
+torch.testing.assert_close(x + attn + mlp, resid)    # the contribution identity, on every family
+print(pattern.shape)                                 # [batch, heads, query, key]
+```
+
+Reads within one trace follow the forward: the pattern is produced inside block 3's attention, so it is read before `attention_output`, which is read before `mlp_output`, which is read before `layer_output`.
+
+## Top-level names
+
+`from nnter import ...` exports exactly these (`nnter.__all__`):
+
+| Name | What it is |
+|---|---|
+| `StandardizedTransformer` | The model class: a `TransformersModel` renamed to the standard vocabulary and wrapped in the family's envoys. |
+| `Layer`, `Attention`, `Mlp`, `LinearAttention` | The base envoys a family subclasses; the hosts of the standard values. |
+| `Standard` | The envoy base of the four, with `values()` and `status()`. |
+| `EProperty`, `SourceEProperty`, `RelativeEProperty`, `DerivedEProperty` | The descriptors a value is made of. |
+| `unavailable`, `branched`, `route_delta_rule` | A value a family lacks; an op picked by the forward's own branch; the DeltaNet kernel switch. |
+| `Unavailable`, `UnsupportedFamily` | The two exceptions nnter raises itself. |
+
+`nnter.families`, `nnter.components`, `nnter.prompt_utils` and `nnter.nnsight_utils` are imported as modules.
+
+## `StandardizedTransformer`
+
+### Constructor
+
+```python
+StandardizedTransformer(repo_id, *args, rename=None, envoys=None, tokenizer_kwargs=None, **kwargs)
+```
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `repo_id` | `str` or `torch.nn.Module` | A Hub repo id, or an already-loaded module (its own `config` is read). |
+| `rename` | `dict[str, str \| list[str]] \| None` | Extra nnsight aliases, merged over the family's `RENAME`; a key given here wins. |
+| `envoys` | `dict \| None` | Extra `envoys=` entries, merged over the family's `ENVOYS` (and nnsight's tensor-parallel envoys on a sharded load); a key given here wins. Keys are module types or native paths, never aliases. |
+| `tokenizer_kwargs` | `dict \| None` | Attributes set on the loaded tokenizer: `{"padding_side": "left"}`, a `pad_token`. |
+| `**kwargs` | | Passed to `TransformersModel`: `dispatch=True`, `attn_implementation="eager"`, `dtype=`, `device_map=`, `revision=`, `trust_remote_code=`. `task` defaults to `"text-generation"`. |
+
+The constructor reads the checkpoint's config first (`AutoConfig`; a multimodal config's `text_config`), looks up `config.model_type` in `nnter.families`, and raises `UnsupportedFamily` before any weights load when no family covers it. `attn_implementation` is not forced: the checkpoint's own default (`sdpa` on most) stays, and the interior attention values then report unavailable in `status()`.
+
+### Root values, inside a trace
+
+Every row is an `EProperty` on the root, listed in `repr(model)` with its description and reported by `status()`.
+
+| Value | Layout (`.dims`) | Assignable | Description (as the repr shows it) |
+|---|---|---|---|
+| `model.logits` | `batch seq vocab` | yes: replaces `output.logits` | The model's final logits, softcapping applied (Gemma-2); `model.lm_head.output` is the raw projection. |
+| `model.token_embeddings` | `batch seq hidden` | yes | The token embeddings entering the first block: `embed_tokens.output`, before positional embeddings and embedding norms. A `RelativeEProperty`. |
+| `model.next_token_probs` | `batch vocab` | no (`AttributeError`: assign `logits`) | `logits[:, -1].softmax(-1)`; the last position is every row's last token only under left padding. |
+| `model.input_ids` | `batch seq` | yes: the model runs on the ids you set | The token ids the model was called with. |
+| `model.attention_mask` | `batch seq` | yes | The attention mask the model was called with; zeros are padding. |
+| `model.input_size` | none (a `torch.Size`) | no (`AttributeError`: assign `input_ids`) | `[batch, seq]` of the current call. |
+
+`input_ids`, `attention_mask` and `input_size` are served at the model's input, the first location of a run: read them before any block's value in the same trace.
+
+### Methods
+
+| Method | Signature | Where | What |
+|---|---|---|---|
+| `skip_layers` | `skip_layers(start: int, end: int, skip_with: Tensor \| None = None) -> None` | inside a trace, before block `start` runs | Blocks `start..end` inclusive do not run; block `start`'s input (or `skip_with`) becomes each one's `layer_output`, packed as the family's block returns it (`Layer.skip_with`). Negative indices count from the end. |
+| `steer` | `steer(layers: int \| list[int], vector: Tensor, factor: float = 1.0, token_positions: int \| list[int] \| slice \| None = None, batch_index: int \| None = None) -> None` | inside a trace, `layers` ascending | Adds `factor * vector` in place to `layer_output` of each block, at the given positions and row (default all). |
+| `project_on_vocab` | `project_on_vocab(hidden: Tensor) -> Tensor` | inside (on a live value) or outside (on a saved one) | The logit lens: `lm_head(norm(hidden))` with the model's softcapping. On the last block's `layer_output` it equals `logits`. |
+| `get_topk_closest_tokens` | `get_topk_closest_tokens(hidden: Tensor, k: int = 5) -> list[dict[str, float]]` | outside, on a saved `[..., hidden]` tensor | `project_on_vocab` then softmax; one `{token: probability}` per position, row-major over the leading axes. Takes a residual-stream tensor, not logits. |
+| `probs_to_dict` | `probs_to_dict(probs: Tensor, k: int = 5) -> dict[str, float]` | outside | The `k` most likely tokens of one `[vocab]` distribution. |
+| `status` | `status(layer: int \| None = None) -> dict[str, Any]` | outside; nothing runs | Without `layer`: every root value and every block value, `None` when available on every block, else `{layer: reason}`. With `layer`: that block's values by dotted name (`"self_attn.attention_probabilities"`), `None` or the reason, including `"no <module> module on this block"`. The keys come from the tree: every `Standard` child of any block, under its standard name, so a value added through `envoys=` is listed as `self_attn.<name>`, a module some blocks lack (a hybrid's `self_attn`) is reported missing on those, and a module no block has (OPT's `mlp`) has no key. |
+
+### Sizes, outside a trace
+
+Plain properties read off the config, with the fallbacks older configs need.
+
+| Property | Rule |
+|---|---|
+| `num_layers` | `len(model.layers)` |
+| `hidden_size` | `config.hidden_size` |
+| `vocab_size` | `config.vocab_size` |
+| `num_heads` | `config.num_attention_heads` |
+| `num_kv_heads` | `config.num_key_value_heads`; else `config.num_kv_heads` under Falcon's `new_decoder_architecture`; else `1` under `multi_query`; else `num_heads`. |
+| `head_dim` | `config.v_head_dim` (multi-head latent attention), else `config.head_dim` when the config says (Qwen3, Gemma), else `hidden_size // num_heads`. |
+| `qk_head_dim` | `qk_nope_head_dim + qk_rope_head_dim` under latent attention, else `head_dim`. |
+| `intermediate_size` | `config.n_inner` (or `4 * hidden_size` when `None`) on a GPT-2-style config, else `config.intermediate_size`, else `config.ffn_dim` (OPT), else `hidden_size * expansion_ratio` (MPT; `4` on BLOOM and Falcon). A mixture of experts' experts are `config.moe_intermediate_size` wide instead. |
+
+### Other attributes
+
+| Attribute | What it is |
+|---|---|
+| `model.family` | The family module the checkpoint resolved to (`nnter.families.llama`); what `route_delta_rule` takes. |
+| `model.layers` | The decoder blocks, `Sequence[Layer]` of the family's `Layer`. |
+| `model.embed_tokens`, `model.norm`, `model.lm_head` | The embedding, the final norm, the unembedding, as envoys. |
+| `model.layers[i].self_attn`, `.mlp`, `.linear_attn` | The family's `Attention`, `Mlp`, `LinearAttention`; `linear_attn` on a hybrid's DeltaNet blocks only, `mlp` absent on OPT. |
+| `model.layers[i].input_layernorm`, `.post_attention_layernorm` | Aliases of the block's norms where the family has them; their meaning varies by family (see [families.md](families.md)). |
+| `model.add_prefix_false_tokenizer` | The checkpoint's tokenizer loaded with `add_prefix_space=False`, so `"word"` and `" word"` differ; loaded on first use. |
+| `model.tokenizer`, `model.config` | nnsight's, unchanged. |
+
+## `Layer`
+
+The decoder block. `Layer.returns_tuple` (class attribute, default `False`) says whether the block returns `(hidden_states, ...)`; GPT-J, BLOOM, MPT and Falcon set it.
+
+| Value | Layout | Assignable | Description |
+|---|---|---|---|
+| `layer_output` | `batch seq hidden` | yes; in-place edits reach the model | The residual stream leaving the block, a tensor even when the block returns a tuple; assigning to a tuple block keeps the other elements. An `EProperty` over `.output`. |
+
+| Method | Signature | What |
+|---|---|---|
+| `skip_with` | `skip_with(hidden: Tensor) -> None` | Skip this block; `hidden` takes the place of its `layer_output`, as `(hidden, None)` when `returns_tuple`. Inside a trace, before the block runs. |
+
+## `Attention`
+
+A softmax-attention module. The base class reads everything but `attention_output` inside transformers' shared eager attention forward, reached through the module's `attention_interface` call (`INTERFACE = "attention_interface_1"`). GPT-J, BLOOM, MPT and Falcon relocate the same names onto their own operations; [families.md](families.md) has the ops.
+
+| Value | Layout | Base location | Assignable | Availability |
+|---|---|---|---|---|
+| `attention_output` | `batch seq hidden` | the module's `.output`, first tensor | yes; in place reaches the model | always |
+| `attention_queries` | `batch heads seq qk_head_dim` | argument 1 of `attention_interface_1`, after RoPE | assign; in place except on GPT-2 (split views) and MPT (`chunk`) | `interface_reason` |
+| `attention_keys` | `batch kv_heads seq qk_head_dim` | argument 2, before `repeat_kv` | as above | `interface_reason` |
+| `attention_values` | `batch kv_heads seq head_dim` | argument 3, before `repeat_kv` | as above | `interface_reason` |
+| `attention_scores` | `batch heads query key` | the input of `nn_functional_softmax_0` inside the interface: scaled and masked | yes; in place reaches the model | `interface_reason` |
+| `attention_probabilities` | `batch heads query key` | the output of `nn_functional_dropout_0` inside the interface: after the softmax, in the model dtype, a sink column dropped | yes; in place reaches the model | `interface_reason` |
+| `attention_head_outputs` | `batch seq heads head_dim` | return 0 of `attention_interface_1`, before the output projection | yes; in place reaches the model | `interface_reason` |
+
+The layouts are what each descriptor's `.dims` reports. `qk_head_dim` differs from `head_dim` only under multi-head latent attention (DeepSeek: 192 against 128 on the pinned V3 checkpoint).
+
+`interface_reason(envoy)` calls `envoy.off_interface()`, and the base `off_interface()` is `needs_eager`: `"read inside the eager attention forward, but this model runs 'sdpa'; load with attn_implementation='eager'"`. A family overrides `off_interface` to add its own reason (GPT-2's `reorder_and_upcast_attn`).
+
+| Method / attribute | What |
+|---|---|
+| `off_interface() -> str \| None` | Why the shared interface does not run on this module, or `None`. |
+| `SINK` | `True` on a family whose pattern rows sum to less than one (GPT-OSS). |
+
+## `Mlp`
+
+| Value | Layout | Base location | Assignable | Availability |
+|---|---|---|---|---|
+| `mlp_output` | `batch seq hidden` | the module's `.output`, first tensor (a mixture of experts returns router scores beside it) | yes; in place reaches the model (Falcon: through a transform, on a copy) | always where the block has an MLP module; OPT has none, so `status()` lists no `mlp.*` key |
+
+## `LinearAttention`
+
+A hybrid's gated DeltaNet mixer (`layers[i].linear_attn`). Everything but `attention_output` is read at the delta-rule kernel call, whichever fires on this step.
+
+| Constant | Value | What |
+|---|---|---|
+| `CHUNK_KERNEL` | `"torch_chunk_gated_delta_rule_0"` | The call a prompt runs through. |
+| `RECURRENT_KERNEL` | `"torch_recurrent_gated_delta_rule_0"` | The call each decode step of `generate` runs through. |
+| `KERNEL` | `branched("use_precomputed_states_0", {False: CHUNK_KERNEL, True: RECURRENT_KERNEL})` | Whichever fires on this call, read off the forward's own branch variable. |
+| `STATE_OP` | `"last_recurrent_state_3"` | Inside the token-by-token kernel, the binding of the state after each token. |
+
+| Value | Layout | Location | Assignable | Availability |
+|---|---|---|---|---|
+| `attention_output` | `batch seq hidden` | the module's `.output`, first tensor | yes | always |
+| `attention_queries` | `batch seq heads key_dim` | `KERNEL` argument 0 | yes | `needs_torch_kernels` |
+| `attention_keys` | `batch seq heads key_dim` | `KERNEL` argument 1 | yes | `needs_torch_kernels` |
+| `attention_values` | `batch seq heads value_dim` | `KERNEL` argument 2 | yes | `needs_torch_kernels` |
+| `decays` | `batch seq heads` | `KERNEL` keyword `g`; float32, non-positive | yes | `needs_torch_kernels` |
+| `betas` | `batch seq heads` | `KERNEL` keyword `beta`; in `(0, 1)` | yes | `needs_torch_kernels` |
+| `state_input` | `batch heads key_dim value_dim`, or `None` on a fresh prompt | `KERNEL` keyword `initial_state`, read as a clone of the cache's buffer | yes | `needs_torch_kernels` |
+| `attention_head_outputs` | `batch seq heads value_dim` | `KERNEL` return 0, before the gated norm and `out_proj` | yes | `needs_torch_kernels` |
+| `state_output` | `batch heads key_dim value_dim` | `KERNEL` return 1 | yes | `needs_torch_kernels` |
+| `state` | `batch heads key_dim value_dim` | `STATE_OP` inside the token-by-token kernel: one occurrence per token, walked with `tracer.iter` | yes: the following tokens continue from the write | `needs_recurrent_routing` |
+| `states` | `batch seq heads key_dim value_dim` | every occurrence of `STATE_OP` in this call, stacked; a `DerivedEProperty` | no (`AttributeError`; use `set_state_after`) | `needs_recurrent_routing` |
+
+| Method | Signature | What |
+|---|---|---|
+| `state_after` | `state_after(t: int) -> Tensor` | The state after token `t` of this call, counted from the call's own first token. |
+| `set_state_after` | `set_state_after(t: int, value: Tensor) -> None` | Assign `state` at token `t`; positions after `t` continue from `value`. Reads follow the forward: read earlier positions before the write, later ones after, and `states` only before it. |
+
+`heads` on this host is the module's `num_v_heads`, `key_dim` its `head_k_dim` and `value_dim` its `head_v_dim`. On a decode step the sequence axis is 1.
+
+## `Standard`
+
+The base of the four hosts.
+
+| Member | Signature | What |
+|---|---|---|
+| `values` | `classmethod values() -> dict[str, EProperty]` | This class's standard values by name, base classes first. |
+| `status` | `status() -> dict[str, str \| None]` | Each value here: `None` when available on this envoy, else the reason. |
+
+## `nnter.families`
+
+| Name | Signature | What |
+|---|---|---|
+| `lookup` | `lookup(model_type: str) -> ModuleType` | The family for `model_type`: a registered one, else `nnter.families.<model_type>`, imported on first use. Raises `UnsupportedFamily` when there is neither. |
+| `register` | `register(family: ModuleType) -> ModuleType` | Add a family (any module or object with `MODEL_TYPES`, `RENAME`, `ENVOYS`) under its model types; consulted before the shipped modules, so it also overrides a shipped family. Returns `family`. |
+| `known` | `known() -> list[str]` | The shipped families' model types: the module names in the package (31). |
+| `all_families` | `all_families() -> list[ModuleType]` | Every shipped family, imported. For tooling and tests. |
+| `REGISTRY` | `dict[str, ModuleType]` | `model_type -> family` for what `register` added. |
+| `UnsupportedFamily` | `ValueError` subclass | No module of that name and nothing registered. |
+| `nnter.families.<model_type>` | module attribute | The family module, imported on first access (`nnter.families.qwen3_5_text`). |
+
+A family module declares `MODEL_TYPES: tuple[str, ...]`, `RENAME: dict[str, str]`, `Layer`, `Attention`, `Mlp` (and `LinearAttention` on a hybrid) subclassing `nnter.components`'s, and `ENVOYS: dict[type, type]` keying them on its transformers module types.
+
+## `nnter.components`
+
+### Descriptors
+
+| Descriptor | Signature | What |
+|---|---|---|
+| `EProperty` | `EProperty(key=None, description=None, unavailable=None)` | nnsight's `eproperty` plus availability. `unavailable` is a reason string, or a function of the envoy returning one or `None`, checked on every read and write; `reason(obj)` returns it. `key` defaults to the attribute name; `key="output"` is a view over `.output`. |
+| `SourceEProperty` | `SourceEProperty(op, attribute="output", description=None, unavailable=None, select=None)` | A value at an operation under the module's `.source`. `op` is a dotted path with `.source.` between a call and an op inside it (`"attention_interface_1.source.nn_functional_softmax_0"`), or a function of the envoy returning one. `attribute` is `"output"`, `"input"` or `"inputs"`; `select` picks an element (`"inputs"`: an int is a positional argument, a str a keyword; `"output"`: an int indexes the returned tuple). A write with `select` repacks the element and writes the whole value back. Drills into `.source` before every read or write; a missing op raises nnsight's `SourceNotAvailable`. |
+| `RelativeEProperty` | `RelativeEProperty(key, description=None, unavailable=None)` | A value produced by another module named relative to this envoy: `key` is `"<path>.<attribute>"`, resolved through aliases (`"embed_tokens.output"` on the root); a leading `../` steps to the parent by native name (`"../post_attention_layernorm.output"`). |
+| `DerivedEProperty` | `DerivedEProperty(compute, description=None, unavailable=None)` | `compute(envoy)` runs at read time inside the trace over any served values; read-only (assignment raises `AttributeError`). Its layout is read off `compute`'s return annotation. |
+
+Every descriptor exposes `.layout` (the `jaxtyping` type from the defining function's return annotation, or `None`), `.dims` (its axis names as a tuple), `.description`, `.reason(envoy)`.
+
+### Availability predicates and constants
+
+| Name | Signature / value | What |
+|---|---|---|
+| `unavailable` | `unavailable(reason: str) -> EProperty` | A value a family does not have: assign it in the class body in place of the inherited one. The name stays in the tree and the repr (`"Unavailable: <reason>"`), and every access raises `Unavailable`. |
+| `needs_eager` | `needs_eager(envoy) -> str \| None` | The reason when `config._attn_implementation != "eager"`. |
+| `interface_reason` | `interface_reason(envoy) -> str \| None` | `envoy.off_interface()`: the predicate of the base `Attention`'s interior values. |
+| `needs_torch_kernels` | `needs_torch_kernels(envoy) -> str \| None` | The reason when the family's delta-rule names dispatch to an optimized kernel (`flash-linear-attention` / `causal-conv1d`) with no Python source. |
+| `needs_recurrent_routing` | `needs_recurrent_routing(envoy) -> str \| None` | `needs_torch_kernels`, then the reason when the prompt kernel is not the token-by-token loop: call `route_delta_rule`. |
+| `INTERFACE` | `"attention_interface_1"` | The shared attention call every interface family makes. |
+| `NOT_ON_INTERFACE` | `"The attention does its own arithmetic rather than transformers' shared attention interface; not mapped for this family yet"` | The reason for `unavailable(NOT_ON_INTERFACE)` in a family that has not mapped an interior value onto its own arithmetic. No shipped family uses it: all four own-arithmetic families map every interior value. |
+
+### Helpers
+
+| Name | Signature | What |
+|---|---|---|
+| `branched` | `branched(variable: str, ops: dict[Any, str]) -> Callable[[Envoy], str]` | An `op` for `SourceEProperty` chosen by a binding the forward makes before it branches: `ops[value of <variable>]`, decided once per module call (`per_call`). |
+| `per_call` | `per_call(envoy, key: str, compute: Callable[[], Any]) -> Any` | `compute()` once per module call, cached on the envoy under `key`; a call is told apart by the worker's mediator and its step. |
+| `at_occurrence` | `at_occurrence(t: int)` | The `for step in tracer.iter[t]` stretch as an object: one occurrence of a location inside a call. What `states`, `state_after` and `set_state_after` iterate with. |
+| `route_delta_rule` | `route_delta_rule(family, kernel: str = "recurrent") -> None` | Bind a hybrid family's delta-rule names process-wide: `"recurrent"` to transformers' token-by-token torch loop (the only kernel that materializes `state`, `states`, `state_after`, `set_state_after`), `"chunked"` back to what the modeling module bound at import. `family` is `model.family`, `nnter.families.<name>` or the modeling module. Call it before tracing a layer. |
+| `seq_first` | `seq_first(value: Tensor) -> Tensor` | `value.transpose(1, 2)`: `[batch, heads, seq, d]` to `[batch, seq, heads, d]` as a view, and its own inverse. Used by families whose arithmetic keeps heads first. |
+| `first_tensor` | `first_tensor(value) -> Tensor` | The first element of a tuple output, or the tensor itself. |
+| `rewrap` | `rewrap(envoy, value: Tensor) -> Any` | `value` back in the module's current output tuple, if any. |
+
+## `nnter.prompt_utils`
+
+nnterp's prompt helpers on the standard values.
+
+| Name | Signature | What |
+|---|---|---|
+| `get_first_tokens` | `get_first_tokens(words: str \| list[str], model_or_tokenizer, use_hacky_implementation: bool = False) -> list[int]` | The first token of `word` and of `" word"` for each word, deduplicated. Given a model, uses `model.add_prefix_false_tokenizer`; a tokenizer that adds a prefix space falls back to tokenizing `"🍐word"` and dropping the pear, or raises `TokenizationError`. |
+| `Prompt` | `@dataclass Prompt(prompt: str, target_tokens: dict[str, list[int]], target_strings: dict \| None = None)` | A prompt with named sets of target tokens. |
+| `Prompt.from_strings` | `Prompt.from_strings(prompt: str, target_strings: dict[str, str \| list[str]] \| list[str] \| str, model_or_tokenizer) -> Prompt` | Build from words; a string or list is one target named `"target"`. |
+| `Prompt.has_no_collisions` | `has_no_collisions(ignore_targets: str \| list[str] \| None = None) -> bool` | Whether no token id belongs to two targets. |
+| `Prompt.get_target_probs` | `get_target_probs(probs: Tensor, layer: int \| None = None) -> dict[str, Tensor]` | Each target's mass from `probs` of shape `[batch, layers, vocab]`. |
+| `Prompt.run` | `run(model, get_probs: Callable) -> dict[str, Tensor]` | `get_probs(model, prompt)` reduced to each target's mass. |
+| `next_token_probs_unsqueeze` | `next_token_probs_unsqueeze(model, prompt, remote: bool = False, **_) -> Tensor` | `compute_next_token_probs` with a layer axis of one, `[batch, 1, vocab]`; the default `get_probs_func`. |
+| `run_prompts` | `run_prompts(model, prompts: list[Prompt], batch_size: int = 32, get_probs_func: Callable \| None = None, func_kwargs: dict \| None = None, remote: bool = False, tqdm=None) -> dict[str, Tensor]` | Each target's probability mass per prompt, `[num_prompts, layers]`; all prompts must name the same targets. |
+| `TokenizationError` | `Exception` subclass | A word could not be tokenized as a standalone first token. |
+
+## `nnter.nnsight_utils`
+
+nnterp's activation helpers on the standard values. `GetActivations = Callable[[StandardizedTransformer, int], Tensor]`; the default is `layer_output(model, layer)`, the residual stream leaving block `layer`.
+
+| Name | Signature | What |
+|---|---|---|
+| `layer_output` | `layer_output(model, layer: int) -> Tensor` | `model.layers[layer].layer_output`. |
+| `get_token_activations` | `get_token_activations(model, prompts=None, layers=None, get_activations=None, remote=False, idx=None, tracer=None) -> Tensor` | `[num_layers, num_prompts, hidden]` at one position (`idx`, default `-1`) of every prompt; a negative index needs left padding, a positive one right padding. With `tracer`, reads inside the caller's open trace. |
+| `collect_last_token_activations_session` | `collect_last_token_activations_session(model, prompts: list[str], batch_size: int, layers=None, get_activations=None, remote=False, idx=None) -> Tensor` | The same over batches inside one `model.session`, so a remote run is one request. |
+| `collect_token_activations_batched` | `collect_token_activations_batched(model, prompts: list[str], batch_size: int, layers=None, get_activations=None, remote=False, idx=None, tqdm=None, use_session: bool = True) -> Tensor` | The same over batches; a remote run goes through the session variant unless `use_session=False`. |
+| `compute_next_token_probs` | `compute_next_token_probs(model, prompt: str \| list[str], remote: bool = False) -> Tensor` | `model.next_token_probs` per prompt, `[num_prompts, vocab]` on the CPU. |
+
+## Exceptions
+
+| Exception | Raised when |
+|---|---|
+| `nnter.Unavailable` (`RuntimeError`) | A standard value this checkpoint does not have is read or written: `"<path>.<name> is not available: <reason>"`, at that line, before the model runs. `status()` gives the same reason without raising. `hasattr(envoy, name)` also raises it. |
+| `nnter.UnsupportedFamily` (`ValueError`) | The checkpoint's `model_type` has no family module and nothing registered; the message lists the known types. |
+| `nnsight.intervention.source.SourceNotAvailable` | A `SourceEProperty`'s operation is not under `.source` in this run: the forward took a path the family does not expect. |
+| `nnter.prompt_utils.TokenizationError` | A word has no standalone first token under the tokenizer. |
+| `AttributeError` | Assigning a read-only value: `next_token_probs`, `input_size`, `states`, or any `DerivedEProperty`. |
+| `nnsight.intervention.interleaver.OutOfOrderError` | A value is read after the model ran past its location: a block's interior after its output, `input_ids` after a block, Falcon's queries before its values. |
+
+## Gotchas
+
+- Nothing assigned inside a trace survives it unless it is `.save()`d, and the save is bound to a name: `x = model.logits.save()`.
+- Reads follow forward order within one invoke: the model's input (`input_ids`, `attention_mask`, `input_size`) first, a block's interior (`attention_probabilities`, queries, scores) before that block's `attention_output`, block 3 before block 5. On Falcon read `attention_values` before `attention_queries` / `attention_keys`; on DeltaNet read `states` before any state write.
+- Decide which blocks have `self_attn` outside the trace: `[i for i, l in enumerate(model.layers) if getattr(l, "self_attn", None) is not None]`. Compare with `is not None`: an envoy has no truthiness (`getattr(layer, "self_attn", None) or layer.linear_attn` raises `TypeError: object of type 'LlamaAttention' has no len()`), and inside a trace `getattr(envoy, name, None)` can trip a served value.
+- `hasattr(envoy, "attention_probabilities")` raises `Unavailable` when the value is unavailable; ask `status()` instead.
+- The interior attention values need `attn_implementation="eager"`, which the constructor does not force; BLOOM and MPT are the exception (their pattern is their own dropout and carries no `attn_implementation` predicate).
+- `get_topk_closest_tokens(hidden)` takes a residual-stream tensor and projects it itself; passing `project_on_vocab`'s output fails inside `norm` with a shape error.
+- GPT-2's and MPT's queries, keys and values are views of one fused tensor: assign, do not edit in place. Falcon's `mlp_output` is a copy; assignment and in-place edits reach the model through a transform.
+- `model.logits` is the output's `.logits` (softcapped on Gemma-2); `model.lm_head.output` is the raw projection.
+- `next_token_probs`, `input_size` and `states` are read-only.
+- `route_delta_rule(model.family, "recurrent")` before tracing a DeltaNet layer whose `state` you want; a forward `.source` has already instrumented keeps the binding it was compiled with.
+- `import nnter` (or `nnsight`) before any `transformers.models...modeling_*` import; the reverse order segfaults at import on this stack.
+
+## Related
+
+- [families.md](families.md): what each family relocates and what it lacks.
+- [glossary.md](glossary.md): the vocabulary these tables use.
+- [../usage/root-values.md](../usage/root-values.md), [../usage/methods.md](../usage/methods.md), [../usage/availability.md](../usage/availability.md), [../usage/layouts.md](../usage/layouts.md), [../usage/attention-interior.md](../usage/attention-interior.md), [../usage/delta-net.md](../usage/delta-net.md).
+- [../extending/custom-values.md](../extending/custom-values.md) and [../developing/eproperty-internals.md](../developing/eproperty-internals.md) for the descriptors in depth.
+- nnsight `docs/reference/api-quick-reference.md` for `trace`, `generate`, `session`, `tracer.iter`, `.source`, `remote=`.

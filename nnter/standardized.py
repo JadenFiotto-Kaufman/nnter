@@ -233,27 +233,59 @@ class StandardizedTransformer(TransformersModel):
         plus every block value: ``None`` when available on every block, else
         ``{layer: reason}`` for the blocks where it is not, so a hybrid reads
         as a short dict.
+
+        The tree decides what is listed: every child of a block that carries
+        standard values (a `Standard` envoy) is walked under its standard
+        name, so a value added through ``envoys=`` or a registered family
+        appears here as it does in the envoy's own `Standard.status`, and a
+        module no block has (OPT's ``mlp``) has no entry.
         """
+        hosts = self._hosts()
         if layer is not None:
-            return self._layer_status(self.layers[layer])
+            return self._layer_status(self.layers[layer], hosts)
         status: dict[str, Any] = {name: value.reason(self) for name, value in Standard.values.__func__(type(self)).items()}
-        per_layer = [self._layer_status(block) for block in self.layers]
+        per_layer = [self._layer_status(block, hosts) for block in self.layers]
         for name in per_layer[0]:
             missing = {i: reasons[name] for i, reasons in enumerate(per_layer) if reasons[name]}
             status[name] = missing or None
         return status
 
-    def _layer_status(self, block: Any) -> dict[str, str | None]:
+    @staticmethod
+    def _standard_children(block: Envoy) -> dict[str, Standard]:
+        """The block's children that carry standard values, by standard name (the alias where one is bound)."""
+        aliases = {native: alias for alias, native in block._aliases.items()}
+        found = {aliases.get(name, name): child for name, child in block._named_children() if isinstance(child, Standard)}
+        for alias, path in block._aliases.items():
+            if "." in path:  # a mount: the module sits deeper (DBRX's ``norm_attn_norm.attn`` as ``self_attn``)
+                child = block.get(path)
+                if isinstance(child, Standard):
+                    found[alias] = child
+        return found
+
+    def _hosts(self) -> dict[str, list[str]]:
+        """Standard-value hosts across every block: module name -> value names, in first-seen order.
+
+        The union over the blocks, so a hybrid lists both ``self_attn`` and
+        ``linear_attn`` and a block lacking one reports it as missing; a
+        module no block has (OPT's ``mlp``) is not listed.
+        """
+        hosts: dict[str, dict[str, None]] = {}
+        for block in self.layers:
+            for module, child in self._standard_children(block).items():
+                hosts.setdefault(module, {}).update(dict.fromkeys(child.values()))
+        return {module: list(names) for module, names in hosts.items()}
+
+    def _layer_status(self, block: Any, hosts: dict[str, list[str]]) -> dict[str, str | None]:
         status: dict[str, str | None] = dict(block.status())
-        hosts = [("self_attn", self.family.Attention), ("mlp", self.family.Mlp)]
-        if hasattr(self.family, "LinearAttention"):
-            hosts.append(("linear_attn", self.family.LinearAttention))
-        for module, cls in hosts:
-            envoy = getattr(block, module, None)
-            for name in cls.values():
-                status[f"{module}.{name}"] = (
-                    f"no {module} module on this block" if envoy is None else envoy.status()[name]
-                )
+        present = self._standard_children(block)
+        for module, names in hosts.items():
+            envoy = present.get(module)
+            reasons = envoy.status() if envoy is not None else {}
+            for name in names:
+                if envoy is None:
+                    status[f"{module}.{name}"] = f"no {module} module on this block"
+                else:
+                    status[f"{module}.{name}"] = reasons.get(name, f"no {name} value on this block's {module}")
         return status
 
     # -- the input (inside a trace) ----------------------------------------------

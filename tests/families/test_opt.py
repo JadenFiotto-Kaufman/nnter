@@ -11,11 +11,12 @@ class TestOPT(FamilySuite):
     FAMILY = opt
     NATIVE = rows("model.decoder", "layers", "embed_tokens", "final_layer_norm", mlp=None, ln1="self_attn_layer_norm", ln2=None)
     MLP_NORM = "final_layer_norm"            # the block's own, native name (the decoder's has the same name)
-    EXPECTED_UNAVAILABLE = {"mlp.mlp_output": "no mlp module"}
 
     def test_no_mlp_module(self, model):
+        """No block has an MLP module, so `status()` lists no ``mlp`` value at all."""
         assert not hasattr(model.layers[0], "mlp")
-        assert model.status(layer=0)["mlp.mlp_output"] == "no mlp module on this block"
+        assert not any(name.startswith("mlp.") for name in model.status())
+        assert not any(name.startswith("mlp.") for name in model.status(layer=0))
 
     def test_contribution_identity(self, model):
         """No MLP module, but an MLP path on the block: ``fc2``'s output is what the block adds."""
