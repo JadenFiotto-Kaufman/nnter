@@ -3,8 +3,9 @@
 A family gives its modules standard *values* by wrapping them in `Envoy`
 subclasses (nnsight's ``envoys=``): `Layer` on the decoder block, `Attention`
 on the softmax-attention module, `Mlp` on the feed-forward, and
-`LinearAttention` on a hybrid's gated DeltaNet mixer, a `RecurrentMixer`
-(the mechanism every recurrent mixer shares). The families under
+`LinearAttention` on a hybrid's gated DeltaNet mixer and `StateSpace` on a
+Mamba-2 (SSD) mixer, both `RecurrentMixer`s (the mechanism every recurrent
+mixer shares). The families under
 `nnter.families` subclass these, so a family whose forward is spelled
 differently overrides only what differs, and key them on its own module types
 in its ``ENVOYS``.
@@ -59,11 +60,13 @@ from .recurrent import (
     route_kernels,
 )
 from .standard import Standard, first_tensor, rewrap
+from .state_space import SSDHeadOutputs, SSDKeys, SSDQueries, SSDValues, StateSpace
 
 __all__ = [
     "Attention", "DerivedEProperty", "EProperty", "Gates", "HeadOutputs", "INTERFACE", "Keys", "Layer", "LinearAttention",
     "LinearQK", "LinearV", "Mlp", "Pattern", "Queries", "RecurrentMixer", "Residual", "State", "States", "Values",
-    "NOT_ON_INTERFACE", "Standard", "Unavailable", "at_occurrence",
+    "NOT_ON_INTERFACE", "SSDHeadOutputs", "SSDKeys", "SSDQueries", "SSDValues", "Standard", "StateSpace", "Unavailable",
+    "at_occurrence",
     "branched", "first_tensor", "interface_reason", "needs_eager", "needs_recurrent_routing",
     "needs_torch_kernels", "per_call", "rewrap", "route_delta_rule", "route_kernels", "seq_first", "unavailable",
 ]

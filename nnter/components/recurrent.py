@@ -9,8 +9,8 @@ share is how the call is found, which kernel names must be transformers'
 pure-torch ones for there to be a call to read inside, how the family's
 kernels are rebound (`route_kernels`), and, when the token-by-token kernel
 materializes it, the state after every token. That shared part is
-`RecurrentMixer`; a subclass (`LinearAttention`) names its kernels in four
-class constants and declares its values.
+`RecurrentMixer`; a subclass (`LinearAttention`, `StateSpace`) names its
+kernels in four class constants and declares its values.
 """
 
 from __future__ import annotations

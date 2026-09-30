@@ -2,8 +2,8 @@
 title: Recurrent Mixer Internals
 one_liner: How RecurrentMixer reaches a recurrent mixer's values — the branch-chosen kernel op, the pure-torch kernels .source needs, process-wide kernel routing, and per-token state through occurrence arithmetic — and how LinearAttention (gated DeltaNet) sits on it.
 tags: [developing, internals, hybrids, deltanet, linear-attention, recurrent, occurrences]
-related: [docs/developing/eproperty-internals.md, docs/developing/architecture.md, docs/developing/gotchas.md, docs/usage/delta-net.md]
-sources: [nnter/components/recurrent.py, nnter/components/linear_attention.py, nnter/components/eproperty.py, nnter/families/qwen3_5_text.py, tests/families/test_qwen3_5_text.py, tests/test_base.py, nnsight src/nnsight/intervention/interleaver.py, nnsight src/nnsight/intervention/iterator.py]
+related: [docs/developing/eproperty-internals.md, docs/developing/architecture.md, docs/developing/gotchas.md, docs/usage/delta-net.md, docs/usage/state-space.md]
+sources: [nnter/components/recurrent.py, nnter/components/linear_attention.py, nnter/components/state_space.py, nnter/components/layer.py, nnter/families/nemotron_h.py, tests/families/ssd.py, nnter/components/eproperty.py, nnter/families/qwen3_5_text.py, tests/families/test_qwen3_5_text.py, tests/test_base.py, nnsight src/nnsight/intervention/interleaver.py, nnsight src/nnsight/intervention/iterator.py]
 ---
 
 # Recurrent Mixer Internals
@@ -284,14 +284,87 @@ before it and positions after it come after; `states` reads every position,
 so it goes in its own trace
 (`test_qwen3_5_text.py:133-144`).
 
+## The state-space mixer: `StateSpace`
+
+`StateSpace` (`nnter/components/state_space.py`) is the Mamba-2 (SSD)
+mixer on `mamba2`, `nemotron_h`, `bamba` and `falcon_h1`. Every one of these
+modeling files carries the same copy of transformers' Mamba-2 code, so one
+class serves them. Its forward differs from the DeltaNet's in four ways, and
+each is handled in the subclass, not the base:
+
+- **The branch is compound.** The forward decodes through
+  `mamba2_selective_state_update` when `use_precomputed_states and seq_len ==
+  1` and runs `mamba2_chunk_scan` otherwise, so a cached call over several
+  tokens takes the chunk scan. `StateSpace` sets `KERNEL` itself
+  (`_kernel`): the binding `use_precomputed_states_0` and, over a cached
+  state, the call's length off `SEQ_OP` (`apply_mask_to_padding_states_0`,
+  the first op after the binding on both paths), read once per call. The
+  length is read inside the forward, not off the mixer's `.input`, so a user's
+  read of `linear_attn.input` earlier in the step is not passed. The decision
+  is one record per call (`_this_call`) that later reads add to (the call's
+  arguments). `per_call` alone tells a new step only by the step's pinned
+  first read; when that first read is something else (`linear_attn.input`)
+  the pin is relaxed before the first kernel value, and `per_call` would hand
+  back the previous step's record. So the record also stores how many of the
+  mixer's calls had returned when it was made
+  (`Mediator.occurrence("<mixer>.output")`, which moves only when a call
+  returns) and is made again when that count differs
+  (`tests/families/ssd.py::test_mixer_input_before_the_kernel_values`).
+- **The kernels take their arguments in different places.** The scan is
+  `(hidden_states, dt, A, B, C, chunk_size=, D=, dt_bias=, initial_states=)`,
+  the update `(state, hidden_states, dt, A, B, C, D, dt_bias=)`.
+  `CHUNK_ARGUMENTS` / `RECURRENT_ARGUMENTS` map each name to its position or
+  keyword at the call site, and each value is declared with
+  `select=argument(name)`: `EProperty.select` may be a function of the host,
+  resolved at each access before the served read (so it may itself read an
+  earlier value of the call, as the chunk scan's output select reads
+  `return_final_states`).
+- **The update has no sequence axis.** Its tensors are `[batch, heads,
+  head_dim]` and `[batch, groups, state_dim]`, and `dt`, `A`, `D`, `dt_bias`
+  are expanded over `head_dim` (and `state_dim` for `A`). The preprocess of
+  each value adds a sequence axis of 1 on a decode step and the postprocess
+  removes it; `betas` and `decays` are `DerivedEProperty` values that take
+  element `[..., 0]` of the expanded `dt` and `A` there.
+- **The update returns only `y`.** It writes the new state into the cache's
+  buffer (`state.copy_(ssm_states)`), so a decode step's `state_output` is
+  read inside the kernel at `UPDATED_STATE = "ssm_states_0"`, the binding
+  both the copy and the output read: a write there reaches the cache and
+  `y`. On a prompt the scan returns `(y, final_state)` when the call has a
+  cache and `y` alone without one, so `attention_head_outputs` selects `0`
+  or the whole return and `state_output` raises `Unavailable` at the read
+  without a cache.
+
+The state is `[batch, heads, head_dim, state_dim]` in the kernels; both
+state values are served transposed, `[batch, heads, state_dim, head_dim]`,
+so the shared `State` layout (key side first) holds, and transposed back on
+assignment. `STATE_OP` is `None`: the scan carries the state per chunk and
+the update runs one token, so the per-token state is unavailable with the
+base's reason, and `route_kernels(family, "torch")` binds each kernel name to
+its own `torch_function` (the dispatcher's closure is the one the DeltaNet
+kernels use, `use_kernel_func_from_hub_with_fallback` over `mamba_ssm`; the
+routing needed no change). The tests are `tests/families/ssd.py`, mixed into
+each family's suite: the shapes, the writes, the hand-off under `generate`
+with SSD's recurrence checked on every decode step, the unavailable per-token
+state and the optimized-kernel reason.
+
+Nemotron-H needs a block-level name choice, since each block holds one
+`mixer` of four classes. `Layer.child_aliases()` returns native child name
+-> alias per block; `Layer.__init__` and `_update` bind it as a `RENAME`
+alias would (`object.__setattr__` on the block, recorded in `_aliases`, so
+`status()`'s `_standard_children` reads it), after nnsight's own
+`_bind_aliases`. Mamba-2 uses it too, because a `RENAME` key `norm` would
+also bind inside the mixer, whose gated norm is called `norm`.
+
 ## Adding a recurrent mixer
 
 A new mixer subclasses `RecurrentMixer`, sets `CHUNK_KERNEL` and
 `RECURRENT_KERNEL` (and `BRANCH`, or `KERNEL` itself, when its forward
-branches on something else), sets `STATE_OP` only when a kernel updates the
+branches on something else, as `StateSpace` does), sets `STATE_OP` only when a kernel updates the
 state once per token in a binding, and declares its values at
 `kernel("inputs")` / `kernel("output")` with
-`unavailable=needs_torch_kernels`. `route_kernels`, the predicates,
+`unavailable=needs_torch_kernels`; when the two kernels take an argument in
+different places, `select` is a function of the host (`StateSpace`'s
+`argument(name)`). `route_kernels`, the predicates,
 `attention_output` and the per-token state come from the base; a kernel
 whose tensors are not `[batch, seq, ...]` overrides `_seq`.
 

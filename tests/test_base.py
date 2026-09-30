@@ -73,6 +73,10 @@ def gpt2_paths():
         def scaling(self, value) -> float:
             return value
 
+        @EProperty(lambda self: "source.attention_interface_1.inputs", select=lambda self: "scaling", description="A select function")
+        def scaling_selected(self, value) -> float:
+            return value
+
         @EProperty("source.attention_interface_1.source.nn_functional_softmax_0.input", description="A call's first argument")
         def scores(self, value) -> Pattern:
             return value
@@ -104,6 +108,63 @@ def test_eproperty_paths_resolve_and_write(gpt2_paths):
         pattern = attn.softmax.save()
     causal = torch.ones_like(pattern).tril()                 # with no scaling every score is 0: uniform over the causal keys
     assert torch.allclose(pattern, causal / causal.sum(-1, keepdim=True))
+
+
+def test_select_function_picks_the_element_per_access(gpt2_paths):
+    """A `select` that is a function of the host picks the element at each read and write (`StateSpace`'s two kernels)."""
+    model, Paths = gpt2_paths
+    attn = model.layers[0].self_attn
+    with model.trace("Hello world"):
+        by_function = attn.scaling_selected.save()
+    assert by_function == attn._module.head_dim ** -0.5
+    with model.trace("Hello world"):
+        attn.scaling_selected = 0.0
+        pattern = attn.softmax.save()
+    causal = torch.ones_like(pattern).tril()
+    assert torch.allclose(pattern, causal / causal.sum(-1, keepdim=True))
+
+
+def test_child_aliases_bind_per_block():
+    """`Layer.child_aliases` names a block's children per block, as `rename` would, and survives dispatch."""
+    from transformers.models.llama.modeling_llama import LlamaDecoderLayer
+
+    class Every(Layer):
+        def child_aliases(self):
+            return {"mlp": "feed_forward"} if self.path.endswith(".0") else {}
+
+    model = StandardizedTransformer("hf-internal-testing/tiny-random-LlamaForCausalLM", envoys={LlamaDecoderLayer: Every})
+    first, second = model.layers[0], model.layers[1]
+    assert first.feed_forward is first.mlp and first._aliases["feed_forward"] == "mlp"
+    assert getattr(second, "feed_forward", None) is None
+    with model.trace("Hello world"):                     # dispatches: real weights replace meta ones, the alias is rebound
+        out = first.feed_forward.output.save()
+    assert first.feed_forward is first.mlp and out.shape[-1] == model.hidden_size
+
+    class Shadowing(Layer):
+        def child_aliases(self):
+            return {"mlp": "self_attn"}
+
+    with pytest.raises(ValueError, match="would shadow"):
+        StandardizedTransformer("hf-internal-testing/tiny-random-LlamaForCausalLM", envoys={LlamaDecoderLayer: Shadowing})
+
+
+def test_route_kernels_binds_each_state_space_kernel_to_its_own_torch_function():
+    """A mixer with no per-token state (`StateSpace`) keeps its prompt kernel: each name gets its own pure-torch function."""
+    import sys
+
+    from nnter import StateSpace, route_kernels
+    from nnter.families import mamba2
+
+    module = sys.modules[mamba2.Mamba2Mixer.__module__]
+    names = [StateSpace.CHUNK_KERNEL.rsplit("_", 1)[0], StateSpace.RECURRENT_KERNEL.rsplit("_", 1)[0]]
+    before = {name: getattr(module, name) for name in names}
+    try:
+        route_kernels(mamba2, "torch")
+        assert all(getattr(module, name) is before[name].__wrapped__ for name in names)
+        route_kernels(mamba2, "default")
+        assert {name: getattr(module, name) for name in names} == before
+    finally:
+        route_kernels(mamba2, "default")
 
 
 def test_recurrent_mixer_without_a_state_op_reports_the_state_unavailable():
