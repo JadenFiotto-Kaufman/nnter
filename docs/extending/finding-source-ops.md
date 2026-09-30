@@ -222,6 +222,12 @@ address can read a perfectly good tensor nothing downstream uses.
   instruments it up front, and `sourced = True` on a `Standard` subclass does that at
   build, for a value in its forward that is read after the call has begun (Llama 4's
   `Layer`, whose `mlp_output` follows `attention_output`).
+- **Drill into a call on step 0 if you will read inside it with `tracer.iter`.** Occurrences
+  of an operation inside a called function are counted from the first `op.source` drill of
+  the run, not from the run's start. Under `generate`, a call first drilled on step 1 has
+  that step as its occurrence 0, so a later `tracer.iter[1]` read inside it returns step
+  2's value, without an error. Touch `op.source` before the first step, or read it on
+  every step from 0.
 - **Sourcing a module costs a little on every forward afterwards**, trace or not
   (nnsight docs/usage/source.md quotes about 6% for all of GPT-2's blocks); a family
   value instruments only the modules it is read on.
