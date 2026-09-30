@@ -53,8 +53,8 @@ class StandardizedCapability:
     """A method of the model that a family may define instead.
 
     `StandardizedProperty` for a method: on attribute access, a function of
-    the same name in the model's family module (``def finish_logits(model,
-    raw): ...`` in ``cohere.py``) is bound in place of the standard
+    the same name in the model's family module (``def project_on_vocab(model,
+    hidden): ...`` in ``cohere.py``) is bound in place of the standard
     implementation, so a family whose model does something of its own keeps
     that beside its names and values, and the implementation here stays the
     plain case.
@@ -114,7 +114,7 @@ class StandardizedTransformer(TransformersModel):
     sizes ``num_layers``, ``num_heads``, ``num_kv_heads``, ``head_dim``,
     ``qk_head_dim``, ``hidden_size``, ``intermediate_size`` and ``vocab_size``,
     read off the config, each a `StandardizedProperty` the family can define
-    instead; `finish_logits` is a `StandardizedCapability`, a method the family
+    instead; `project_on_vocab` is a `StandardizedCapability`, a method the family
     can define the same way.
 
     Attributes:
@@ -256,28 +256,24 @@ class StandardizedTransformer(TransformersModel):
             out = self.layers[i].layer_output
             out[rows, cols] += factor * vector.to(out)
 
+    @StandardizedCapability
     def project_on_vocab(self, hidden: torch.Tensor) -> torch.Tensor:
-        """Logits for a residual-stream tensor: the final norm, ``lm_head``, then `finish_logits`.
+        """Logits for a residual-stream tensor: the final norm, ``lm_head``, and what the model does after the head.
 
         The logit lens: applied to a block's ``layer_output`` it reads that
         layer's prediction; applied to the last block's, it is `logits`.
         Works inside a trace on a live value and outside on a saved one.
+        After the head the plain case is the text config's
+        ``final_logit_softcapping``, when set (Gemma-2's own config; a
+        multimodal checkpoint's ``text_config``). A family whose model does
+        something else there (Cohere multiplies by ``logit_scale``, Granite
+        divides by ``logits_scaling``) defines
+        ``def project_on_vocab(model, hidden)`` in its module, which is bound
+        in this one's place (`StandardizedCapability`).
         """
-        return self.finish_logits(self.lm_head(self.norm(hidden)))
-
-    @StandardizedCapability
-    def finish_logits(self, raw: torch.Tensor) -> torch.Tensor:
-        """What the model does to ``lm_head``'s output to make its logits: the final softcapping, if any.
-
-        The cap is ``final_logit_softcapping`` on the text config (Gemma-2's
-        own config; a multimodal checkpoint's ``text_config``). A family whose
-        model does something else after the head (Cohere multiplies by
-        ``logit_scale``, Granite divides by ``logits_scaling``) defines
-        ``def finish_logits(model, raw)`` in its module, which is bound in
-        its place (`StandardizedCapability`).
-        """
+        logits = self.lm_head(self.norm(hidden))
         cap = getattr(self.config.get_text_config(), "final_logit_softcapping", None)
-        return cap * torch.tanh(raw / cap) if cap else raw
+        return cap * torch.tanh(logits / cap) if cap else logits
 
     def probs_to_dict(self, probs: torch.Tensor, k: int = 5) -> dict[str, float]:
         """The ``k`` most likely tokens of one ``[vocab]`` distribution, as ``{token: probability}``."""

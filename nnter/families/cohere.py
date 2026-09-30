@@ -9,8 +9,8 @@ an optional per-head ``q_norm`` / ``k_norm`` (``use_qk_norm``) and an
 interleaved rotary.
 
 The model multiplies the head's output by ``config.logit_scale`` to make the
-logits, so the family defines `finish_logits` and ``project_on_vocab`` stays
-the logit lens.
+logits, so the family defines ``project_on_vocab`` with that step, and the
+logit lens on the last block equals ``logits``.
 """
 
 from typing import TYPE_CHECKING
@@ -48,6 +48,6 @@ class Mlp(Mlp):
 ENVOYS = {CohereDecoderLayer: Layer, CohereAttention: Attention, CohereMLP: Mlp}
 
 
-def finish_logits(model: "StandardizedTransformer", raw: torch.Tensor) -> torch.Tensor:
-    """The logits are ``lm_head``'s output times ``logit_scale``."""
-    return raw * model.config.logit_scale
+def project_on_vocab(model: "StandardizedTransformer", hidden: torch.Tensor) -> torch.Tensor:
+    """The logit lens as the model makes its logits: the final norm, ``lm_head``, then times ``logit_scale``."""
+    return model.lm_head(model.norm(hidden)) * model.config.logit_scale

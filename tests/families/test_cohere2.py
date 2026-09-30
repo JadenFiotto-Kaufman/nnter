@@ -30,4 +30,4 @@ class TestCohere2(FamilySuite):
         assert not torch.allclose(*projected[sliding])
 
     def test_logits_scale_is_cohere_s(self, model):
-        assert model.family.finish_logits is cohere.finish_logits
+        assert model.family.project_on_vocab is cohere.project_on_vocab

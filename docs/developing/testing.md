@@ -156,7 +156,7 @@ hybrid and drops `mlp.mlp_output` when no block has an MLP module (OPT). `VALUES
 
 | method | asserts |
 |---|---|
-| `test_logits_are_the_models_output` | `logits` equals `model.output.logits`, and `model.finish_logits(lm_head.output)` (the softcap, or the family's own step) |
+| `test_logits_are_the_models_output` | `logits` equals `model.output.logits`, and `model.project_on_vocab(layers[-1].layer_output)` (the softcap, or the family's own step) |
 | `test_assigning_logits_replaces_the_result` | `logits = logits * 0` zeros `tracer.result.logits` |
 | `test_token_embeddings_are_the_embedding_output` | equals `embed_tokens.output`; assigning it moves the logits |
 | `test_next_token_probs` | equals `logits[:, -1].softmax(-1)`, prints in the repr, assignment raises `AttributeError` |

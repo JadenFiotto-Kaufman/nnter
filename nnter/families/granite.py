@@ -14,7 +14,8 @@ Llama's tree and names, with four scalars from the config applied around it:
   assignment, and a transform divides an edited copy back into the module's
   output so in-place edits reach the model.
 - ``logits_scaling``: the model divides the head's output by it, so the family
-  defines `finish_logits` and ``project_on_vocab`` stays the logit lens.
+  defines ``project_on_vocab`` with that step and the logit lens on the last
+  block equals ``logits``.
 """
 
 from typing import TYPE_CHECKING
@@ -96,6 +97,6 @@ class Mlp(Mlp):
 ENVOYS = {GraniteDecoderLayer: Layer, GraniteAttention: Attention, GraniteMLP: Mlp}
 
 
-def finish_logits(model: "StandardizedTransformer", raw: torch.Tensor) -> torch.Tensor:
-    """The logits are ``lm_head``'s output divided by ``logits_scaling``."""
-    return raw / model.config.logits_scaling
+def project_on_vocab(model: "StandardizedTransformer", hidden: torch.Tensor) -> torch.Tensor:
+    """The logit lens as the model makes its logits: the final norm, ``lm_head``, then divided by ``logits_scaling``."""
+    return model.lm_head(model.norm(hidden)) / model.config.logits_scaling

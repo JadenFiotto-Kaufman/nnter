@@ -120,7 +120,7 @@ ENVOYS = {GPT2Block: Layer, GPT2Attention: Attention, GPT2MLP: Mlp}
 5. Key them in `ENVOYS` on the transformers module classes.
 6. Define `def <size>(model)` for any root size the config spells its own way
    (`intermediate_size` on a config with `n_inner` or `ffn_dim`); leave the rest to the
-   root ([Sizes](#sizes) below). Define `def finish_logits(model, raw)` if the model
+   root ([Sizes](#sizes) below). Define `def project_on_vocab(model, hidden)` if the model
    scales the head's output ([The logits](#the-logits)).
 7. Add `tests/families/test_<model_type>.py` and run it.
 
@@ -232,24 +232,25 @@ unused by the model (an all-MoE family's experts).
 
 ### The logits
 
-`project_on_vocab` is `finish_logits(lm_head(norm(hidden)))`, and the root's
-`finish_logits(raw)` applies the text config's `final_logit_softcapping` when it is set.
-A family whose model does something else to the head's output defines
-`def finish_logits(model, raw)` in its module, which is bound in the root's place the way a
-size function is (`finish_logits` is a `StandardizedCapability`, `StandardizedProperty` for a
-method), so the logit lens on the last block still equals `logits`:
+`project_on_vocab(hidden)` is `lm_head(norm(hidden))`, then what the model does after the
+head: the root's applies the text config's `final_logit_softcapping` when it is set. A family
+whose model does something else to the head's output defines
+`def project_on_vocab(model, hidden)` in its module, which is bound in the root's place the
+way a size function is (`project_on_vocab` is a `StandardizedCapability`,
+`StandardizedProperty` for a method), so the logit lens on the last block still equals
+`logits`:
 
 ```python
 # nnter/families/cohere.py
 
-def finish_logits(model: "StandardizedTransformer", raw: torch.Tensor) -> torch.Tensor:
-    """The logits are ``lm_head``'s output times ``logit_scale``."""
-    return raw * model.config.logit_scale
+def project_on_vocab(model: "StandardizedTransformer", hidden: torch.Tensor) -> torch.Tensor:
+    """The logit lens as the model makes its logits: the final norm, ``lm_head``, then times ``logit_scale``."""
+    return model.lm_head(model.norm(hidden)) * model.config.logit_scale
 ```
 
 Granite's divides by `logits_scaling`; Cohere-2 imports Cohere's. The suite's
-`test_logits_are_the_models_output` checks `finish_logits(lm_head.output) == logits`, and
-`test_project_on_vocab_is_the_logit_lens` the lens, so a missing or wrong one fails there.
+`test_logits_are_the_models_output` and `test_project_on_vocab_is_the_logit_lens` both check
+`project_on_vocab(layers[-1].layer_output) == logits`, so a missing or wrong one fails there.
 
 ## A complete template
 

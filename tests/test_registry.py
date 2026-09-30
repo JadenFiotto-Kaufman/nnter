@@ -132,10 +132,13 @@ def test_family_defines_a_size_instead_of_the_root():
     assert StandardizedTransformer(GPT2).hidden_size == StandardizedTransformer(GPT2).config.hidden_size
 
 
-def test_family_defines_finish_logits_instead_of_the_softcap():
-    """A `finish_logits(model, raw)` in the family module replaces the root's softcap, and `project_on_vocab` runs it."""
+def test_family_defines_project_on_vocab_instead_of_the_softcap():
+    """A `project_on_vocab(model, hidden)` in the family module is bound in the root's place; the root's applies the softcap."""
+    from nnter.standardized import StandardizedCapability
+
     custom = types.SimpleNamespace(
-        MODEL_TYPES=("gpt2",), RENAME=gpt2.RENAME, ENVOYS=gpt2.ENVOYS, finish_logits=lambda model, raw: raw * 2,
+        MODEL_TYPES=("gpt2",), RENAME=gpt2.RENAME, ENVOYS=gpt2.ENVOYS,
+        project_on_vocab=lambda model, hidden: model.lm_head(model.norm(hidden)) * 2,
     )
     try:
         families.register(custom)
@@ -143,16 +146,15 @@ def test_family_defines_finish_logits_instead_of_the_softcap():
     finally:
         del families.REGISTRY["gpt2"]
     plain = StandardizedTransformer(GPT2, dispatch=True)
-    raw = torch.randn(1, 3, plain.vocab_size)
     hidden = torch.randn(1, 3, plain.hidden_size).to(plain.lm_head.weight)
-    from nnter.standardized import StandardizedCapability
-
-    assert isinstance(StandardizedTransformer.finish_logits, StandardizedCapability)
-    assert torch.equal(model.finish_logits(raw), raw * 2)
+    assert isinstance(StandardizedTransformer.project_on_vocab, StandardizedCapability)
     torch.testing.assert_close(model.project_on_vocab(hidden), plain.project_on_vocab(hidden) * 2)
-    assert torch.equal(plain.finish_logits(raw), raw)  # no cap on GPT-2's config: the head's output as is
-    plain.config.final_logit_softcapping = 2.0  # read off the text config, which is the config itself here
-    torch.testing.assert_close(plain.finish_logits(raw), 2.0 * torch.tanh(raw / 2.0))
+    plain.config.final_logit_softcapping = 2.0
+    try:
+        raw = plain.lm_head(plain.norm(hidden))
+        torch.testing.assert_close(plain.project_on_vocab(hidden), 2.0 * torch.tanh(raw / 2.0))
+    finally:
+        plain.config.final_logit_softcapping = None
 
 
 def test_sizes_are_read_only():

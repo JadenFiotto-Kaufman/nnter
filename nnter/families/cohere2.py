@@ -8,13 +8,13 @@ interior value resolves on every block, and on a full layer
 ``attention_queries`` / ``attention_keys`` are the unrotated projections.
 
 The model multiplies the head's output by ``config.logit_scale``, as Cohere's
-does, so the family takes Cohere's `finish_logits`.
+does, so the family takes Cohere's ``project_on_vocab``.
 """
 
 from transformers.models.cohere2.modeling_cohere2 import Cohere2Attention, Cohere2DecoderLayer, Cohere2MLP
 
 from ..components import Attention, Layer, Mlp
-from .cohere import finish_logits  # noqa: F401  the same head: the same logit_scale
+from .cohere import project_on_vocab  # noqa: F401  the same head: the same logit_scale
 
 MODEL_TYPES = ("cohere2",)
 

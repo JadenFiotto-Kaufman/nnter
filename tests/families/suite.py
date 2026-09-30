@@ -519,11 +519,11 @@ class FamilySuite:
 
     def test_logits_are_the_models_output(self, model):
         with model.trace(PROMPT):
-            raw = model.lm_head.output.save()
+            last = model.layers[-1].layer_output.save()
             logits = model.logits.save()
             result = model.output.logits.save()
         assert torch.equal(logits, result) and logits.shape[-1] == model.vocab_size
-        torch.testing.assert_close(logits, model.finish_logits(raw))  # the family's own step after the head
+        torch.testing.assert_close(logits, model.project_on_vocab(last))  # the lens on the last block is the model's own step after the head
 
     def test_assigning_logits_replaces_the_result(self, model):
         with model.trace(PROMPT) as tracer:
