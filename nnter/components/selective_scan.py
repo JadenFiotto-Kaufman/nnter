@@ -12,7 +12,7 @@ from jaxtyping import Float
 from torch import Tensor
 
 from .eproperty import DerivedEProperty, EProperty
-from .recurrent import RecurrentMixer, _dispatch, _modeling_module, _name, kernel, needs_recurrent_routing, needs_torch_kernels, per_call
+from .recurrent import RecurrentMixer, _dispatch, _modeling_module, _name, kernel, needs_recurrent_routing, needs_torch_kernels
 
 #: The layouts at the scan, tokens before channels. ``B`` and ``C`` are one ``state_dim`` vector per token,
 #: shared by every channel: one group. The input, the step sizes and the read are one number per channel; the
@@ -161,18 +161,6 @@ class SelectiveScan(RecurrentMixer):
     READ_OPS = ("scan_output_5", "out_1")
     #: Each argument's position (or keyword) in the prompt's and the decode step's kernel.
     ARGUMENTS = {"x": (0, 1), "dt": (1, 2), "A": (2, 3), "B": (3, 4), "C": (4, 5), "dt_bias": ("delta_bias", "dt_bias")}
-
-    @staticmethod
-    def KERNEL(envoy: Envoy) -> str:
-        """The decode kernel on a cached one-token call, the scan otherwise: the forward's own condition."""
-        cls = type(envoy)
-
-        def choose() -> str:
-            seq = envoy.source.seq_len_0.output  # bound before the branch variable: read in forward order
-            cached = envoy.source.use_precomputed_states_0.output
-            return cls.RECURRENT_KERNEL if cached and seq == 1 else cls.CHUNK_KERNEL
-
-        return per_call(envoy, "branch:selective_scan", choose)
 
     # -- layout: the kernel's channel-first tensors as tokens-first views ----------
 

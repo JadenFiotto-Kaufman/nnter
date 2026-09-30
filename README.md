@@ -200,10 +200,10 @@ A block has either `self_attn` or `linear_attn`, so `status()` reports each
 The values are read at the delta-rule kernel call. A prompt runs the chunked
 kernel and each decode step of `generate` the recurrent one, two different
 operations in the forward; the forward binds `use_precomputed_states` before
-it branches, and the values read that binding to name the call that fires on
-this step (`nnter.components.branched`), so the same value works in a `trace` and at
-every step of `tracer.iter`, and the state hands off from one step to the
-next. They need transformers' pure-torch kernels: with
+it branches, and the values read that binding and the call's length to name
+the call that fires on this step (`RecurrentMixer.KERNEL`), so the same value
+works in a `trace` and at every step of `tracer.iter`, and the state hands
+off from one step to the next. They need transformers' pure-torch kernels: with
 `flash-linear-attention` or `causal-conv1d` installed the kernel has no Python
 source, and `status()` says so.
 

@@ -55,7 +55,7 @@ from .layer import Layer, Residual
 from .linear_attention import Gates, LinearAttention, LinearQK, LinearV
 from .mlp import Mlp
 from .recurrent import (
-    RecurrentMixer, State, States, at_occurrence, branched, needs_recurrent_routing, needs_torch_kernels, per_call,
+    RecurrentMixer, State, States, needs_recurrent_routing, needs_torch_kernels, per_call, pinned,
     route_delta_rule, route_kernels,
 )
 from .selective_scan import (
@@ -72,7 +72,7 @@ __all__ = [
     "LinearQK", "LinearV", "Mlp", "Pattern", "Queries", "RecurrentMixer", "Residual", "ScanDecays", "ScanQK", "ScanState",
     "ScanStates", "ScanSteps", "ScanValues", "SelectiveScan", "State", "States", "Values",
     "NOT_ON_INTERFACE", "SSDHeadOutputs", "SSDKeys", "SSDQueries", "SSDValues", "Standard", "StateSpace", "Unavailable",
-    "at_occurrence", "branched", "chunk_per_token", "first_tensor", "interface_reason", "needs_eager",
+    "chunk_per_token", "first_tensor", "interface_reason", "needs_eager",
     "needs_kernel_source", "needs_per_token_chunks", "needs_recurrent_routing", "needs_token_loop", "needs_torch_kernels",
-    "per_call", "rewrap", "route_delta_rule", "route_kernels", "seq_first", "unavailable",
+    "per_call", "pinned", "rewrap", "route_delta_rule", "route_kernels", "seq_first", "unavailable",
 ]

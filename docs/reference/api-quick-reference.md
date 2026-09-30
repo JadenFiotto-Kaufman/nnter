@@ -48,7 +48,7 @@ Reads within one trace follow the forward: the pattern is produced inside block 
 | `RecurrentMixer` | The base of `LinearAttention` and `StateSpace`: how a recurrent mixer's values are reached at its kernel call, the per-token state and the kernel routing. |
 | `Standard` | The envoy base of them all, with `values()`, `status()` and the `sourced` flag. |
 | `EProperty`, `DerivedEProperty` | The descriptors a value is made of: one keyed on a path from the host, one computed. |
-| `unavailable`, `branched`, `route_kernels`, `route_delta_rule` | A value a family lacks; an op picked by the forward's own branch; the recurrent kernel switch, and its DeltaNet spelling. |
+| `unavailable`, `route_kernels`, `route_delta_rule` | A value a family lacks; the recurrent kernel switch, and its DeltaNet spelling. |
 | `chunk_per_token` | A Mamba-2 model's chunk scan with a chunk size of 1, so `StateSpace.states` reads the state after every token. |
 | `Unavailable`, `UnsupportedFamily` | The two exceptions nnter raises itself. |
 
@@ -116,7 +116,7 @@ Each is a `StandardizedProperty`: it reads the config by the plain rule unless t
 | Name | Signature | What |
 |---|---|---|
 | `StandardizedProperty` | `nnter.standardized.StandardizedProperty(fget)` | The descriptor each size is. `__get__` calls `getattr(model.family, <name>)(model)` when the family defines it, else `fget(model)`; on the class it returns itself (`StandardizedTransformer.head_dim`). `__set__` raises `AttributeError("<name> is read off the config; a family defines `def <name>(model)` to say it otherwise")`. Not an `EProperty`: no location, nothing served inside a trace, no entry in the repr or `status()`. |
-| `StandardizedCapability` | `nnter.standardized.StandardizedCapability(func)` | `StandardizedProperty` for a method: on attribute access it binds `getattr(model.family, <name>)` to the model when the family defines it, else `func`; on the class it returns itself (`StandardizedTransformer.project_on_vocab`). `project_on_vocab` is the one today. |
+| `StandardizedCapability` | `nnter.standardized.StandardizedCapability(fget)` | `StandardizedProperty` for a method, and its subclass: on attribute access it binds `getattr(model.family, <name>)` to the model when the family defines it, else `fget`; on the class it returns itself (`StandardizedTransformer.project_on_vocab`). `project_on_vocab` is the one today. |
 
 ### Other attributes
 
@@ -177,12 +177,13 @@ The base of a recurrent mixer's envoy (`nnter/components/recurrent.py`): how its
 
 | Constant | Default | What |
 |---|---|---|
-| `BRANCH` | `"use_precomputed_states_0"` | The binding the forward makes before it branches: `False` on a prompt, `True` on a decode step. |
+| `BRANCH` | `"use_precomputed_states_0"` | The binding the forward makes before it branches: `True` when the call continues from a cached state. |
+| `SEQ_OP` | `"apply_mask_to_padding_states_0"` | The forward's masking of its input, once per call on every mixer: `[batch, seq, ...]`, the call's length. |
 | `CHUNK_KERNEL` | `None` | The call a prompt runs through. |
 | `RECURRENT_KERNEL` | `None` | The call each decode step of `generate` runs through. |
 | `STATE_OP` | `None` | Inside the token-by-token kernel, the binding of the state after each token's update; `None` when the kernels do not materialize it, and then `state`, `states`, `state_after` and `set_state_after` are unavailable. |
 | `STEP_STATE_OP` | `None` | Set when the decode kernel is a single-step update rather than the token loop (Mamba-1): the binding of the new state inside it. The prompt's kernel is then the token loop, and `route_kernels(..., "torch")` binds each name to its own pure-torch function. |
-| `KERNEL` | built in `__init_subclass__` | `branched(BRANCH, {False: CHUNK_KERNEL, True: RECURRENT_KERNEL})`: whichever kernel fires on this call. A subclass whose branch is not one boolean sets it itself. |
+| `KERNEL` | a `staticmethod` of the base | Whichever kernel fires on this call, by the forward's own test (`use_precomputed_states and seq_len == 1`), decided once per call (`per_call`): `RECURRENT_KERNEL` when `BRANCH` is true and the sequence axis at `SEQ_OP` is 1, `CHUNK_KERNEL` otherwise, a prompt or several tokens over a cached state. The two bindings are read in the order the forward makes them. |
 
 | Value | Layout | Location | Assignable | Availability |
 |---|---|---|---|---|
@@ -224,7 +225,7 @@ The base's methods, on every `RecurrentMixer`:
 
 ## `SelectiveScan`
 
-A Mamba-1 mixer (`layers[i].linear_attn` on Mamba, Falcon-Mamba and Jamba's Mamba blocks), a `RecurrentMixer` over `mamba_selective_scan` (a prompt) and `mamba_selective_state_update` (a decode step). The kernel's tensors are channel-first; each value is a tokens-first view of its argument, a write laid back out. `KERNEL` is its own: the decode kernel when the call is cached and one token long (`use_precomputed_states_0` and `seq_len_0`, the forward's condition), the scan otherwise.
+A Mamba-1 mixer (`layers[i].linear_attn` on Mamba, Falcon-Mamba and Jamba's Mamba blocks), a `RecurrentMixer` over `mamba_selective_scan` (a prompt) and `mamba_selective_state_update` (a decode step). The kernel's tensors are channel-first; each value is a tokens-first view of its argument, a write laid back out. `KERNEL` is the base's: the decode kernel when the call is cached and one token long (the forward's condition), the scan otherwise.
 
 | Constant | Value | What |
 |---|---|---|
@@ -258,7 +259,6 @@ A Mamba-2 (SSD) mixer (`layers[i].linear_attn` on Mamba-2, Nemotron-H, Bamba and
 | `RECURRENT_KERNEL` | `"mamba2_selective_state_update_0"` | The call a decode step runs through. |
 | `STATE_OP` | `None` | Neither kernel binds the state once per token: `state` (a per-occurrence value) is unavailable. |
 | `CHUNK_STATES` | `"new_states_0"` | Inside the chunk scan, the state at every chunk boundary, `[batch, chunks + 1, heads, head_dim, state_dim]`: what `states` reads under `chunk_per_token`. |
-| `KERNEL` | set directly | The update when `use_precomputed_states` and the call is one token, the chunk scan otherwise: the binding and, over a cached state, the length off `SEQ_OP` (`apply_mask_to_padding_states_0`), read once per call. |
 | `UPDATED_STATE` | `"ssm_states_0"` | Inside the update, the new state before it is copied into the cache. |
 | `CHUNK_ARGUMENTS`, `RECURRENT_ARGUMENTS` | name -> position or keyword | Where each kernel's call site passes `hidden_states`, `dt`, `A`, `B`, `C`, `dt_bias` and the state. |
 
@@ -276,7 +276,7 @@ A Mamba-2 (SSD) mixer (`layers[i].linear_attn` on Mamba-2, Nemotron-H, Bamba and
 | `state` | | `unavailable(...)`: the scan has no per-token occurrence of the state | no | never: `"the chunk scan computes every token's state in one tensor per call, ..."` |
 | `set_state_after` | | `unavailable(...)` in place of the base's method, so `status()` lists it | no | never: `"the chunk scan computes every boundary state in one cumulative step from the initial state, ..."` |
 
-`state_after(t)` is `states[:, t]`, and raises `Unavailable` with `needs_per_token_chunks`' reason without `chunk_per_token`. The values of one call are served from a per-call record of what the mixer's own forward served (`_serve` / `_swap`, which `EProperty` asks the host for): the kernel's arguments are read from the model once per call, so any forward-order combination of values reads in one trace, and a value that needs another argument (`betas` needs `dt_bias`) finds it after the model has moved into the kernel.
+`state_after(t)` is `states[:, t]`, and raises `Unavailable` with `needs_per_token_chunks`' reason without `chunk_per_token`. `KERNEL` is the base's: the update when the call is cached and one token long, the chunk scan otherwise. The kernel's arguments are read from the model once per call (`_arguments`, through `per_call`), on the call's first need, so any forward-order combination of values reads in one trace, and a value that needs another argument (`betas` needs `dt_bias`) finds it after the model has moved into the kernel.
 
 `heads` is the module's `num_heads`, `groups` its `n_groups`, `head_dim` its `head_dim`, `state_dim` (the state's `key_dim`) its `ssm_state_size`; the state's `value_dim` is `head_dim`.
 
@@ -310,7 +310,7 @@ A family module declares `MODEL_TYPES: tuple[str, ...]`, `RENAME: dict[str, str]
 
 | Descriptor | Signature | What |
 |---|---|---|
-| `EProperty` | `EProperty(key=None, description=None, unavailable=None, select=None)` | nnsight's `eproperty` plus availability and a path for a key. `key` is a path from the host envoy, dotted segments ending in `output`, `input` or `inputs`: `"output"` is the host's own output; a leading `../` (repeatable) steps to the parent by native name; another segment is a child module (aliases included) or, after a `source` segment, an operation; `source` drills into the current module's or operation's forward, instrumenting it for this run (`"source.attention_interface_1.source.nn_functional_softmax_0.output"`, `"../post_attention_layernorm.output"`, `"embed_tokens.output"`, `"../source.hidden_states_view_0.output"`). A function of the envoy returning such a path is allowed (`branched`, Falcon's `by_alibi`). `None` means the attribute name. `select` picks an element: with `inputs` an int is a positional argument and a str a keyword, with `output` an int indexes the returned tuple; `input` is the call's first argument; a function of the envoy returning one of those (or `None`, the whole value) selects per access, before the served read (`SelectiveScan`'s `_argument(name)` and `StateSpace`'s `argument(name)`, whose two kernels take an argument in different places). A write with `select` (or on `input`) repacks the element and writes the whole value back. `unavailable` is a reason string, or a function of the envoy returning one or `None`, checked on every read and write; `reason(obj)` returns it. `path(obj)` and `inside_forward(obj=None)` describe the key. A path is walked before every read or write; a missing op raises nnsight's `SourceNotAvailable`. A host that defines `_serve(location)` / `_swap(location, value)` answers the value's reads and writes itself (`StateSpace`'s per-call record). |
+| `EProperty` | `EProperty(key=None, description=None, unavailable=None, select=None)` | nnsight's `eproperty` plus availability and a path for a key. `key` is a path from the host envoy, dotted segments ending in `output`, `input` or `inputs`: `"output"` is the host's own output; a leading `../` (repeatable) steps to the parent by native name; another segment is a child module (aliases included) or, after a `source` segment, an operation; `source` drills into the current module's or operation's forward, instrumenting it for this run (`"source.attention_interface_1.source.nn_functional_softmax_0.output"`, `"../post_attention_layernorm.output"`, `"embed_tokens.output"`, `"../source.hidden_states_view_0.output"`). A function of the envoy returning such a path is allowed (a `RecurrentMixer`'s `kernel("inputs")`, Falcon's `by_alibi`). `None` means the attribute name. `select` picks an element: with `inputs` an int is a positional argument and a str a keyword, with `output` an int indexes the returned tuple; `input` is the call's first argument; a function of the envoy returning one of those (or `None`, the whole value) selects per access, before the served read (`SelectiveScan`'s `_argument(name)` and `StateSpace`'s `argument(name)`, whose two kernels take an argument in different places). A write with `select` (or on `input`) repacks the element and writes the whole value back. `unavailable` is a reason string, or a function of the envoy returning one or `None`, checked on every read and write; `reason(obj)` returns it. `path(obj)` and `inside_forward()` describe the key. A path is walked before every read or write; a missing op raises nnsight's `SourceNotAvailable`. |
 | `DerivedEProperty` | `DerivedEProperty(compute, description=None, unavailable=None)` | `compute(envoy)` runs at read time inside the trace over any served values; read-only (assignment raises `AttributeError`). Its layout is read off `compute`'s return annotation. |
 
 Every descriptor exposes `.layout` (the layout alias the defining function's return annotation names, or `None`), `.dims` (its axis names as a tuple), `.description`, `.reason(envoy)`.
@@ -365,9 +365,8 @@ The axis names are the same on every layout (`batch` axis 0 everywhere, `seq` th
 
 | Name | Signature | What |
 |---|---|---|
-| `branched` | `branched(variable: str, ops: dict[Any, str]) -> Callable[[Envoy], str]` | A key function for `EProperty` whose op is chosen by a binding the forward makes before it branches: `ops[value of <variable>]`, decided once per module call (`per_call`). Defined in `nnter.components.recurrent`; also exported from `nnter`. |
-| `per_call` | `per_call(envoy, key: str, compute: Callable[[], Any]) -> Any` | `compute()` once per call of the envoy's module, cached on the envoy under `key` as `(mediator, call, value)`. One rule names the call: the step a read is pinned to by `tracer.iter`, and, relaxed, on step 0 or outside `tracer.iter`, how many times the module's `.output` has been passed (inside call c that is c; between calls, the one about to start). Another mediator is another run. Defined in `nnter.components.recurrent`. |
-| `at_occurrence` | `at_occurrence(t: int)` | The `for step in tracer.iter[t]` stretch as an object: one occurrence of a location inside a call. What `states`, `state_after` and `set_state_after` iterate with. |
+| `per_call` | `per_call(envoy, key: str, compute: Callable[[], Any]) -> Any` | `compute()` once per call of the envoy's module. The record, `(call, value)` per `(envoy.path, key)`, lives on the worker (the greenlet running the intervention code): each run of each invoke has its own, a replayed `model.edit` included, and nothing stays on the envoy. One rule names the call: the step a read is pinned to by `tracer.iter`, and, relaxed, on step 0 or outside `tracer.iter`, how many times the module's `.output` has been passed (inside call c that is c; between calls, the one about to start). Defined in `nnter.components.recurrent`. |
+| `pinned` | `pinned(n: int \| None)` | A context manager that pins the worker's reads to occurrence `n` of their location, as `tracer.iter[n]` does (`None` relaxes the pin), and restores the pin the worker had on the way out. A pinned read relaxes the pin, so one read per `with`. What `states`, `state_after` and `set_state_after` read each token with. Defined in `nnter.components.recurrent`. |
 | `route_kernels` | `route_kernels(family, kernel: str = "torch") -> None` | Bind a family's recurrent kernel names process-wide: `"torch"` to transformers' pure-torch kernels (on a mixer with a `STATE_OP`, the prompt's name to the token-by-token loop, the only kernel that materializes `state`, `states`, `state_after`, `set_state_after`: the decode kernel's function on a gated DeltaNet, so both names; the scan's own on Mamba-1, where each name keeps its own), `"default"` back to what the modeling module bound at import. `family` is `model.family`, `nnter.families.<name>` or the modeling module. Call it before tracing a layer. |
 | `route_delta_rule` | `route_delta_rule(family, kernel: str = "recurrent") -> None` | `route_kernels` in the delta rule's words: `"recurrent"` is `"torch"`, `"chunked"` is `"default"`. |
 | `chunk_per_token` | `chunk_per_token(model, enabled: bool = True) -> None` | Set every `StateSpace` mixer's module `chunk_size` to 1, so the chunk scan's boundaries are the tokens and `states` / `state_after` read the state after each; `enabled=False` restores the chunk size each mixer was built with (`config.chunk_size`, or `mamba_chunk_size`). Per model, unlike `route_kernels`; slower on long prompts (the inter-chunk recurrence is quadratic in the number of chunks). `ValueError` on a model with no `StateSpace`. |

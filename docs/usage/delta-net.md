@@ -86,10 +86,11 @@ trace ends.
 
 A prompt runs `torch_chunk_gated_delta_rule`, and each decode step of
 `generate` runs `torch_recurrent_gated_delta_rule`: two different operations
-in the forward, chosen by the binding `use_precomputed_states`. The values
-read that binding and name the call that fires on this step
-(`nnter.components.branched("use_precomputed_states_0", {False: chunked, True:
-recurrent})`), so the same value works in a `trace` and at every step of
+in the forward, chosen by the forward's test `use_precomputed_states and
+seq_len == 1`. The values read that binding and the call's length and name
+the call that fires on this step (`RecurrentMixer.KERNEL`: the recurrent
+kernel for one token over a cached state, the chunked one otherwise), so
+the same value works in a `trace` and at every step of
 `tracer.iter`, and the state hands off from one step to the next:
 
 ```python

@@ -12,18 +12,18 @@ Status legend: **same** (name and semantics), **renamed** (same semantics, new s
 
 | nnterp | nnter equivalent | status | note |
 |---|---|---|---|
-| `StandardizedTransformer` (`__init__.py:5`) | `nnter.StandardizedTransformer` (`S.py:52`) | changed | Same class name; constructor, accessors and validation all differ (rows below). |
-| `StandardizedVLM` (`:5`) | none | missing / dropped | `S.py:118` hardcodes `task="text-generation"`; `contributing.md:194-196` lists VLMs as open. |
+| `StandardizedTransformer` (`__init__.py:5`) | `nnter.StandardizedTransformer` (`S.py:70`) | changed | Same class name; constructor, accessors and validation all differ (rows below). |
+| `StandardizedVLM` (`:5`) | none | missing / dropped | `S.py:137` hardcodes `task="text-generation"`; `contributing.md:194-196` lists VLMs as open. |
 | `load_model(model, use_vllm, allow_experimental_vllm, text_only, **kw)` (`:21-66`) | none | missing | nnter has one entry point, the class. |
-| `detect_automodel(model, trust_remote_code, text_only)` (`utils.py:90-179`) | none | missing | nnter reads `AutoConfig` in `_read_config` (`S.py:426-442`) only to pick the family. |
+| `detect_automodel(model, trust_remote_code, text_only)` (`utils.py:90-179`) | none | missing | nnter reads `AutoConfig` in `_read_config` (`S.py:450-466`) only to pick the family. |
 | `get_rename_dict(rename_config)` (`ru.py:239-269`) | `family.RENAME` (`fam/*.py`), `nnter.families.lookup(model_type)` (`fam/__init__.py:44`) | changed | One dict per family, not one global list. |
 | `ModuleAccessor(model, rename_config, rename)` (`nnsight_utils.py:203-256`) | none | missing | Raw-`nn.Module` access by standard name has no nnter counterpart. |
 
 ### 1b. Constructor kwargs
 
-| nnterp `StandardizedTransformer(...)` (`st.py:675-687`) | nnter (`S.py:109-117`) | status | note |
+| nnterp `StandardizedTransformer(...)` (`st.py:675-687`) | nnter (`S.py:128-136`) | status | note |
 |---|---|---|---|
-| `model: str \| Module` | `repo_id: Any` (str or Module; `S.py:434-435`) | same | Positional name differs. |
+| `model: str \| Module` | `repo_id: Any` (str or Module; `S.py:458-459`) | same | Positional name differs. |
 | `check_renaming=True` | none | dropped | Nothing runs at construction (`contributing.md:174-175`). |
 | `remote=False` (sets `allow_dispatch=False`, scan-only checks; `st.py:168-176`) | not a nnter kwarg; `**kwargs` passes it to nnsight, which accepts it and keeps the model on meta *(ran: `dispatched=False`)* | changed | No nnter-side behavior attaches to it; `remote=True` on `trace()` is the contract (`docs/usage/remote.md`). |
 | `allow_dispatch=True` | none | dropped | No scan/trace fallback machinery. |
@@ -32,20 +32,20 @@ Status legend: **same** (name and semantics), **renamed** (same semantics, new s
 | `rename_config: RenameConfig` (`ru.py:53-156`) | `rename=`, `envoys=`, `nnter.families.register()` | changed | See `RenameConfig` rows in §1h. |
 | `automodel=None` | none | missing | |
 | `text_only=False` | none | missing | |
-| `tokenizer_kwargs=None` (`st.py:717-718`) | `tokenizer_kwargs=None` (`S.py:135-136`) | same | setattr on the tokenizer, both. |
-| `rename=` via `**kwargs` (`st.py:326`) | `rename=` (`S.py:113`, merged over `family.RENAME` `:127`) | same | |
+| `tokenizer_kwargs=None` (`st.py:717-718`) | `tokenizer_kwargs=None` (`S.py:154-155`) | same | setattr on the tokenizer, both. |
+| `rename=` via `**kwargs` (`st.py:326`) | `rename=` (`S.py:132`, merged over `family.RENAME` `:146`) | same | |
 | `device_map="auto"` default (`st.py:316`) | none: nnsight's default | changed | Pass `device_map="auto"` explicitly. `contributing.md:216`. |
-| `**kwargs` → `TransformersModel` with `task="text-generation"` (`st.py:710-716`) | same, `task` defaults to `"text-generation"` (`S.py:118`) | same | |
-| — | `envoys=` (`S.py:114`, merged over `family.ENVOYS` and tp envoys `:128-132`) | new | |
+| `**kwargs` → `TransformersModel` with `task="text-generation"` (`st.py:710-716`) | same, `task` defaults to `"text-generation"` (`S.py:137`) | same | |
+| — | `envoys=` (`S.py:133`, merged over `family.ENVOYS` and tp envoys `:147-151`) | new | |
 
 ### 1c. Published ints / model attributes
 
 | nnterp (`st.py:111-127`, set `:220-252`) | nnter | status | note |
 |---|---|---|---|
-| `num_layers` | `num_layers` (`S.py:375-377`) | same | |
+| `num_layers` | `num_layers` (`S.py:399-401`) | same | |
 | `attention_layers: list[int]` (`ru.py:428-439`) | none | missing | `[i for i,l in enumerate(model.layers) if getattr(l,"self_attn",None) is not None]` (`api-quick-reference.md:329`); `contributing.md:216-218` marks trivial. |
 | `linear_attention_layers: list[int]` | none | missing | as above with `linear_attn`. |
-| `num_heads` (keys `n_heads/num_attention_heads/n_head/num_heads`, `ru.py:175-176`) | `num_heads` = `config.num_attention_heads` (`S.py:387-389`) | same | transformers' `attribute_map` covers GPT-2/BLOOM/MPT/DBRX *(ran)*. |
+| `num_heads` (keys `n_heads/num_attention_heads/n_head/num_heads`, `ru.py:175-176`) | `num_heads` = `config.num_attention_heads` (`S.py:411-413`) | same | transformers' `attribute_map` covers GPT-2/BLOOM/MPT/DBRX *(ran)*. |
 | `hidden_size` (`hidden_size/d_model/n_embd`) | `hidden_size` = `config.hidden_size` (`:379-381`) | same | *(ran)* on GPT-2, DBRX, MPT, BLOOM. |
 | `vocab_size` (`vocab_size/n_vocab`) | `vocab_size` = `config.vocab_size` (`:383-385`) | same | |
 | `head_dim` (`v_head_dim` → `head_dim` → `hidden//heads`, `ru.py:353-363`) | `head_dim` (`:396-399`) + `fam/deepseek_v2.py:44-46` override | same | Same result; DeepSeek rule is in the family, not the root. |
@@ -53,13 +53,13 @@ Status legend: **same** (name and semantics), **renamed** (same semantics, new s
 | `num_kv_heads` (`multi_query`→1; `num_key_value_heads/num_kv_heads/n_head_kv`; `ru.py:375-385`) | `num_kv_heads` (`:391-394`) + `fam/falcon.py:157-162` | same | Neither reads MPT/DBRX `attn_config.kv_n_heads`; both return `num_heads` there. Not verified against those modules' real head counts. |
 | `intermediate_size` (`n_inner` first, then `intermediate_size/ffn_hidden_size/ffn_dim`, DBRX `ffn_config`, MPT `expansion_ratio`, BLOOM 4×; `ru.py:388-409`) | `intermediate_size` = `config.intermediate_size` (`:406-409`) + family functions in `gpt2/gptj/falcon/opt/mpt/bloom.py` | changed | **DBRX has no family function and no `config.intermediate_size`: `model.intermediate_size` raises `AttributeError`** *(ran on `yujiepan/dbrx-tiny256-random`)*. `families.md:96` documents the width but no code publishes it. |
 | `linear_num_value_heads`, `linear_key_head_dim`, `linear_value_head_dim` (`st.py:245-248`) | none; the suite reads `module.num_v_heads/head_k_dim/head_v_dim` (`suite.py:455`) | missing | |
-| `linear_attention_kernels: dict` (`st.py:252`, `ru.py:1047-1099`) | none; `route_kernels` / `route_delta_rule` rebind module globals instead (`comp/recurrent.py:92-140`) | changed | See §3.9. |
+| `linear_attention_kernels: dict` (`st.py:252`, `ru.py:1047-1099`) | none; `route_kernels` / `route_delta_rule` rebind module globals instead (`comp/recurrent.py:95-143`) | changed | See §3.9. |
 | `block_structure: str` (`ru.py:1515-1532`) | none | missing | `contributing.md:217-218` marks trivial. |
 | `is_vllm: bool` | none | missing | No vLLM path. |
 | `remote: bool` | none | missing | |
-| `internals: Internals` (`internals.py:14`) | `model.status()` (`S.py:260-286`), `Standard.values()` (`comp/standard.py:52-60`) | changed | No forward-order `rank` (`internals.py:59-70`); `contributing.md:181-184` open. |
-| — | `model.family: ModuleType` (`S.py:103`, `:123`) | new | |
-| — | `model.embed_tokens`, `model.norm`, `model.lm_head` typed attrs (`S.py:105-107`) | renamed | nnterp: `model.embed_tokens`, `model.ln_final`, `model.lm_head`; nnterp containers stay under `model.model` (`ru.py:159`), nnter lifts them to the root (`README.md:23-24`). |
+| `internals: Internals` (`internals.py:14`) | `model.status()` (`S.py:287-313`), `Standard.values()` (`comp/standard.py:62-65`) | changed | No forward-order `rank` (`internals.py:59-70`); `contributing.md:181-184` open. |
+| — | `model.family: ModuleType` (`S.py:122`, `:142`) | new | |
+| — | `model.embed_tokens`, `model.norm`, `model.lm_head` typed attrs (`S.py:124-126`) | renamed | nnterp: `model.embed_tokens`, `model.ln_final`, `model.lm_head`; nnterp containers stay under `model.model` (`ru.py:159`), nnter lifts them to the root (`README.md:23-24`). |
 
 ### 1d. Accessors (per-layer rows of nnterp's address table, `ru.py:1198-1291`, `:1319-1373`, `:1422-1512`)
 
@@ -68,10 +68,10 @@ nnterp spelling is `model.<row>[i]` (read) / `model.<row>[i] = v` (write); whole
 | nnterp | nnter equivalent | status | note |
 |---|---|---|---|
 | `embeddings_input()` (`:1203`) | `model.embed_tokens.input` (plain nnsight) | renamed | |
-| `embeddings_output()` (`:1204`) / `token_embeddings` | `model.token_embeddings` (`S.py:167-175`) or `embed_tokens.output` | same | |
+| `embeddings_output()` (`:1204`) / `token_embeddings` | `model.token_embeddings` (`S.py:186-194`) or `embed_tokens.output` | same | |
 | `ln_final_output()` (`:1205`) | `model.norm.output` | renamed | |
 | `lm_head_output()` (`:1206`) | `model.lm_head.output` | renamed | |
-| `logits()` row (`:1210`) / `model.logits` (`st.py:738-743`) | `model.logits` (`S.py:151-165`) | same | Both read `output.logits` (softcapped on Gemma-2); nnter is assignable. |
+| `logits()` row (`:1210`) / `model.logits` (`st.py:738-743`) | `model.logits` (`S.py:170-184`) | same | Both read `output.logits` (softcapped on Gemma-2); nnter is assignable. |
 | `layers_input[i]` (`:1211`) | `model.layers[i].input` | renamed | |
 | `attentions[i]` (`:1212`) | `model.layers[i].self_attn` | renamed | On DBRX nnterp's `self_attn` is `norm_attn_norm` (the container, `ru.py:203`); nnter's is `norm_attn_norm.attn` (`fam/dbrx.py:24`), so `attentions_input[i]` (pre-norm block input) ≠ nnter `self_attn.input` (normed) there. |
 | `attentions_input[i]` (`:1213`) | `model.layers[i].self_attn.input` | renamed | DBRX caveat above. |
@@ -101,7 +101,7 @@ nnterp spelling is `model.<row>[i]` (read) / `model.<row>[i] = v` (write); whole
 | `linear_attention_head_outputs[i]` (`:1279`) | `linear_attn.attention_head_outputs` (`:208`) | renamed | |
 | `linear_attentions_state_output[i]` (`:1282-1289`, input of `cache_params_update_recurrent_state_0`, with `.scan`) | `linear_attn.state_output` (`:213-216`, kernel return 1) | renamed | `.scan(layer, cuts, edit)` → `state`/`states`/`state_after`/`set_state_after` (§3.9). |
 | `linear_attentions_output[i]` (`:1290`) | `linear_attn.attention_output` (`:163-170`) | renamed | |
-| — | `linear_attn.state`, `.states`, `.state_after(t)`, `.set_state_after(t, v)` (`comp/recurrent.py:338-443`) | new | Per-token state via `tracer.iter`; needs `route_kernels(family, "torch")`. |
+| — | `linear_attn.state`, `.states`, `.state_after(t)`, `.set_state_after(t, v)` (`comp/recurrent.py:352-446`) | new | Per-token state via `tracer.iter`; needs `route_kernels(family, "torch")`. |
 
 ### 1e. Properties and methods on the model
 
@@ -131,7 +131,7 @@ nnterp spelling is `model.<row>[i]` (read) / `model.<row>[i] = v` (write); whole
 
 | nnterp | nnter | status | note |
 |---|---|---|---|
-| `StandardizedVLM(model, check_renaming, remote, allow_dispatch, enable_attention_probs, check_attn_probs_with_trace, allow_multimodal, rename_config, tokenizer_kwargs, **kw)`; `task="image-text-to-text"`; `trace(prompt, images=...)` | none | missing | `S.py:123` does read `text_config.model_type`, so a multimodal config resolves its text family, but `task` is text-generation and no `language_model` lift exists (`contributing.md:194-196`). |
+| `StandardizedVLM(model, check_renaming, remote, allow_dispatch, enable_attention_probs, check_attn_probs_with_trace, allow_multimodal, rename_config, tokenizer_kwargs, **kw)`; `task="image-text-to-text"`; `trace(prompt, images=...)` | none | missing | `S.py:142` does read `text_config.model_type`, so a multimodal config resolves its text family, but `task` is text-generation and no `language_model` lift exists (`contributing.md:194-196`). |
 | `allow_multimodal` (heterogeneous layer classes; `ru.py:1902-1912`) | none | missing | nnter's `ENVOYS` is class-keyed; a cross-attention block would be a plain `Envoy` with no `layer_output` (`contributing.md:185-189`). |
 | `StandardizedVLLM(...)` (`standardized_vllm.py:13-166`): experimental gate `:81-97`, `tensor_parallel_size` default `:98-101`, prefix-cache refusal `:102-112`, `trace()` `max_tokens=1` `:131-143`, `generate()` `:145-156`, HF→vLLM kwargs `:158-166`, `hf_kwargs_to_vllm_kwargs` (`ru.py:1946-1964`) | none | missing | Not listed in `contributing.md` at all. |
 
@@ -166,32 +166,32 @@ nnterp spelling is `model.<row>[i]` (read) / `model.<row>[i] = v` (write); whole
 | nnterp | nnter | status | note |
 |---|---|---|---|
 | `RenamingError` (`ru.py:34`) | `Unavailable` (`comp/eproperty.py:21`, `RuntimeError`), `UnsupportedFamily` (`fam/__init__.py:35`, `ValueError`), nnsight `SourceNotAvailable` for a moved op | changed | Three typed errors replace one. |
-| `AttnProbFunction` (`:38-50`) / `RenameConfig.attn_prob_source` | `EProperty(key=callable)`, a key function returning a path (`comp/eproperty.py:91-101`, `:159-161`), e.g. `fam/falcon.py:51-58`, `comp/recurrent.py:249-256`, `:310-315` | changed | |
+| `AttnProbFunction` (`:38-50`) / `RenameConfig.attn_prob_source` | `EProperty(key=callable)`, a key function returning a path (`comp/eproperty.py:86-96`, `:154-156`), e.g. `fam/falcon.py:51-58`, `comp/recurrent.py:247-254`, `:311-329` | changed | |
 | `RenameConfig(attn_name, mlp_name, ln_final_name, lm_head_name, model_name, layers_name, ...)` (`:142-147`) | `rename=` kwarg / `family.RENAME` | changed | |
 | `RenameConfig.ignore_mlp / ignore_attn` (`:149-150`) | none; a family simply omits the `Mlp` key (`fam/opt.py:44`) | changed | |
-| `RenameConfig.attn_head_config_key / hidden_size_config_key / vocab_size_config_key` (`:151-153`) | `def <size>(model)` in the family module (`S.py:25-49`; `fam/gpt2.py:63-65`) | changed | Via `families.register()` for a user family. |
+| `RenameConfig.attn_head_config_key / hidden_size_config_key / vocab_size_config_key` (`:151-153`) | `def <size>(model)` in the family module (`S.py:26-50`; `fam/gpt2.py:63-65`) | changed | Via `families.register()` for a user family. |
 | `RenameConfig.attn_output_source / mlp_output_source` (`:154-155`) | override `attention_output` / `mlp_output` on an `Attention`/`Mlp` subclass, passed via `envoys=` (`docs/extending/overriding-values.md`) | changed | |
 | `RenameConfig.addresses: dict[str, Address]` (`:156`) | a new `EProperty` on an envoy subclass via `envoys=` (`test_registry.py:106-118`) | changed | |
 | `MODEL_NAMES`, `ATTENTION_NAMES`, `LINEAR_ATTENTION_NAME`, `LAYER_NAMES`, `LN_NAMES`, `LM_HEAD_NAMES`, `MLP_NAMES`, `EMBED_TOKENS_NAMES` (`:159-236`) | per-family `RENAME` | dropped | "No Llama-like fallback" (`contributing.md:161-166`). |
 | `bloom_slow_but_exact` (`:187-195`) + `_NO_CONTRIBUTION` disable (`:1453-1458`) | none needed: `dropout_add_0` input is read on that path too *(ran, identity holds)* | changed (better) | |
-| `text_config(model)` (`:272-276`) | `_read_config` picks `text_config.model_type` (`S.py:123`); sizes read `model.config` directly | changed | On a VLM config nnter's `hidden_size` would read the top-level config; untested since nnter does not load VLMs. |
-| `get_num_attention_heads/get_hidden_size/get_vocab_size/get_head_dim/get_qk_head_dim/get_num_kv_heads/get_intermediate_size(model)` (`:279-409`) | the `StandardizedProperty` rows (`S.py:375-409`) | renamed | Free functions on a raw model are gone. |
-| `IOType {INPUT, INPUTS, OUTPUT}` (`:412-425`) | the last segment of an `EProperty` path, `input`\|`inputs`\|`output` (`comp/eproperty.py:171-206`) | renamed | |
+| `text_config(model)` (`:272-276`) | `_read_config` picks `text_config.model_type` (`S.py:142`); sizes read `model.config` directly | changed | On a VLM config nnter's `hidden_size` would read the top-level config; untested since nnter does not load VLMs. |
+| `get_num_attention_heads/get_hidden_size/get_vocab_size/get_head_dim/get_qk_head_dim/get_num_kv_heads/get_intermediate_size(model)` (`:279-409`) | the `StandardizedProperty` rows (`S.py:399-433`) | renamed | Free functions on a raw model are gone. |
+| `IOType {INPUT, INPUTS, OUTPUT}` (`:412-425`) | the last segment of an `EProperty` path, `input`\|`inputs`\|`output` (`comp/eproperty.py:162-191`) | renamed | |
 | `get_attention_layers(layers)` (`:428-439`), `linear_attention_error` (`:442-447`) | none | missing | |
-| `Selection`, `Index(*steps)`, `Copied()`, `FirstIfTuple()` (`:450-513`) | `select: int \| str` (one step only, `comp/eproperty.py:210-238`); `first_tensor`/`rewrap` (`comp/standard.py:13-21`); a `preprocess` that clones (`linear_attention.py:76-85`) | changed | No multi-step `Index(0, 1)`; nnter uses `"source.attention_interface_1.inputs", select=1`. |
+| `Selection`, `Index(*steps)`, `Copied()`, `FirstIfTuple()` (`:450-513`) | `select: int \| str` (one step only, `comp/eproperty.py:195-223`); `first_tensor`/`rewrap` (`comp/standard.py:13-21`); a `preprocess` that clones (`linear_attention.py:76-85`) | changed | No multi-step `Index(0, 1)`; nnter uses `"source.attention_interface_1.inputs", select=1`. |
 | `Address(module, io, op, select, order, unavailable, tags, per_layer, seq_axis, width, heads, keys, needs, scan)` (`:516-631`) | `EProperty(key, description, unavailable, select)` with a path for a key (`"output"`, `"../norm.output"`, `"source.<op>.inputs"`), `DerivedEProperty(compute, ...)` (`comp/eproperty.py`) | changed | Lost: `order`, `tags`, `seq_axis`, `width`, `heads`, `keys`, `needs`, `scan`. Gained: `.layout`/`.dims` (`:122-145`), `description` in the repr. |
 | `LayerAccessor.unavailable_on(layer)` (`:700-723`) | `EProperty.reason(envoy)` (`:103-105`), `Standard.status()` | renamed | |
 | `LayerAccessor.num_heads`, `.width` (`:734-752`) | none; `.dims` names axes but not sizes | missing | |
 | `LayerAccessor.scan(layer, cuts, edit)` (`:754-778`) | `LinearAttention.states/state_after/set_state_after` (§3.9) | changed | |
 | `LayerAccessor.disable(reason)` (`:780-786`) | none; `unavailable=` is declared on the class | missing | No runtime disabling. |
 | `LayerAccessor.get_module(layer)` (`:788-795`) | `envoy.get(path)` (nnsight) | renamed | |
-| `LayerAccessor.get_operation(layer, containing_source)` (`:797-820`) | `EProperty._resolve` / `_drill` (private, `:170-189`, `:261-278`) | missing | No public op accessor; error lists what `.source` has. |
+| `LayerAccessor.get_operation(layer, containing_source)` (`:797-820`) | `EProperty._resolve` (private, `comp/eproperty.py:162-191`) | missing | No public op accessor; error lists what `.source` has. |
 | `LayerAccessor.returns_tuple(layer)` (`:866-873`) | `Layer.returns_tuple` class attr (`comp/layer.py:45`) | changed | Declared, not detected. |
 | `LayerAccessor.print_source(layer)` (`:875-902`) | `print(envoy.source)` (`docs/extending/finding-source-ops.md`) | renamed | |
 | `check_attention_probabilities(model, layer, allow_dispatch, use_trace)` (`:905-986`) | `suite.py:275-289`, `:303-317` (tests only) | dropped | |
 | `_INTERFACE`/`INTERFACE_ROWS` (`:996-1001`) | `INTERFACE` (`comp/attention.py:28`); `INTERIOR` in `suite.py:26` | renamed | |
-| `delta_rule_call(mixer)` (`:1003-1044`, step-0 = chunked) | `RecurrentMixer.KERNEL = branched(BRANCH, ...)` (`recurrent.py:310-315`) | changed | nnter reads the forward's own branch variable, so a warm-cache single-token trace resolves; nnterp documents it as unsupported (`:1023-1029`). |
-| `pin_linear_attention_kernels(model)` (`:1047-1099`) | `route_kernels(family, "torch"\|"default")` / `route_delta_rule` (`recurrent.py:92-140`) + `needs_torch_kernels` (`:143-157`) | changed | §3.9. |
+| `delta_rule_call(mixer)` (`:1003-1044`, step-0 = chunked) | `RecurrentMixer.KERNEL` (`recurrent.py:311-329`) | changed | nnter applies the forward's own test (`use_precomputed_states and seq_len == 1`) to the bindings the forward makes, so a warm-cache single-token trace resolves and several tokens over a cache read the prompt's kernel; nnterp documents it as unsupported (`:1023-1029`). |
+| `pin_linear_attention_kernels(model)` (`:1047-1099`) | `route_kernels(family, "torch"\|"default")` / `route_delta_rule` (`recurrent.py:95-143`) + `needs_torch_kernels` (`:146-160`) | changed | §3.9. |
 | `delta_rule_scan(accessor, layer, cuts, edit)` (`:1102-1162`) | `states`, `state_after`, `set_state_after` | changed | §3.9. |
 | `DEFAULT_ADDRESSES` (`:1198-1291`) | `comp/layer.py`, `attention.py`, `mlp.py`, `linear_attention.py` base classes | renamed | |
 | `BlockStructure`, `get_block_structure` (`:1293`, `:1515-1532`) | none | missing | |
@@ -201,7 +201,7 @@ nnterp spelling is `model.<row>[i]` (read) / `model.<row>[i] = v` (write); whole
 | `get_ignores`, `check_io`, `_check_has_module`, `_check_attention_layers`, `_warn_heterogeneous_types`, `_check_output_source`, `check_model_renaming` (`:1609-1943`) | none (suite) | dropped | `contributing.md:174-175`, `:185-189`. |
 | `HF_TO_VLLM_KWARGS_MAP`, `hf_kwargs_to_vllm_kwargs` (`:1946-1964`) | none | missing | |
 | `Internals[name]` (`internals.py:34-40`) | `type(envoy).<name>` / `Standard.values()[name]` | changed | |
-| `Internals.status(layer=None)` (`:42-57`): a per-layer row is available if **any** layer has it | `model.status(layer=None)` (`S.py:260-286`): `None` only if available on **every** block, else `{layer: reason}` | changed | Opposite aggregation; keys are dotted (`"self_attn.attention_probabilities"`). |
+| `Internals.status(layer=None)` (`:42-57`): a per-layer row is available if **any** layer has it | `model.status(layer=None)` (`S.py:287-313`): `None` only if available on **every** block, else `{layer: reason}` | changed | Opposite aggregation; keys are dotted (`"self_attn.attention_probabilities"`). |
 | `Internals.rank(name, layer)` (`:59-70`) | none | missing | `contributing.md:181-184` open. |
 
 ### 1j. `interventions.py`, `display.py`, `utils.py`, `logging.py`, `__main__.py`
@@ -284,43 +284,43 @@ nnterp spelling is `model.<row>[i]` (read) / `model.<row>[i] = v` (write); whole
 
 2. **Attention pattern gating.** nnterp: `enable_attention_probs=True` forces eager and runs the causal check; without the flag the row is `disable`d even if you passed `attn_implementation="eager"` yourself (`st.py:277-295`, `:318-324`). nnter: the constructor forces nothing; `needs_eager` (`comp/attention.py:18-23`) reports `sdpa` as the reason, and BLOOM/MPT need no eager at all (`fam/bloom.py:8-9`, `mpt.py:6-8`). Migration: replace `enable_attention_probs=True` with `attn_implementation="eager"`; drop `check_attn_probs_with_trace`.
 
-3. **No load-time validation.** nnterp runs `check_model_renaming` + `check_io` (and the pattern write) on a dummy input at construction (`st.py:264-282`, `ru.py:1892-1943`), so a mis-renamed model fails at load with the fixing argument. nnter runs nothing (`S.py:109-136`); an unknown `model_type` raises `UnsupportedFamily` before any weights load (`fam/__init__.py:58-62`), but a wrong op name surfaces as `SourceNotAvailable` inside the first trace (`comp/eproperty.py:184-188`). Migration: run `model.status()` and one trace of the values you need before an experiment.
+3. **No load-time validation.** nnterp runs `check_model_renaming` + `check_io` (and the pattern write) on a dummy input at construction (`st.py:264-282`, `ru.py:1892-1943`), so a mis-renamed model fails at load with the fixing argument. nnter runs nothing (`S.py:128-155`); an unknown `model_type` raises `UnsupportedFamily` before any weights load (`fam/__init__.py:58-62`), but a wrong op name surfaces as `SourceNotAvailable` inside the first trace (`comp/eproperty.py:186-190`). Migration: run `model.status()` and one trace of the values you need before an experiment.
 
-4. **`status()` shape and aggregation.** nnterp `model.internals.status()` keys are row names and a per-layer row is `None` if *any* layer has it (`internals.py:42-57`). nnter `model.status()` keys are dotted (`"self_attn.attention_probabilities"`), a value is `None` only if available on *every* block, else `{layer: reason}`; `status(layer=i)` is flat (`S.py:260-286`). Migration: `internals.status()["attention_probabilities"] is None` → `model.status()["self_attn.attention_probabilities"] is None`, and expect a dict on hybrids.
+4. **`status()` shape and aggregation.** nnterp `model.internals.status()` keys are row names and a per-layer row is `None` if *any* layer has it (`internals.py:42-57`). nnter `model.status()` keys are dotted (`"self_attn.attention_probabilities"`), a value is `None` only if available on *every* block, else `{layer: reason}`; `status(layer=i)` is flat (`S.py:287-313`). Migration: `internals.status()["attention_probabilities"] is None` → `model.status()["self_attn.attention_probabilities"] is None`, and expect a dict on hybrids.
 
-5. **`hasattr` raises.** nnterp: an accessor is a plain attribute; `hasattr(model, "attention_probabilities")` is `True` and the read raises `RenamingError` (`ru.py:788-791`). nnter: `hasattr(envoy, "attention_probabilities")` raises `Unavailable` *(ran)* (`comp/eproperty.py:30-34`, `:117-118`; `test_base.py:51-52`). Migration: ask `status()`; never `hasattr`/`getattr(..., None)` on a value.
+5. **`hasattr` raises.** nnterp: an accessor is a plain attribute; `hasattr(model, "attention_probabilities")` is `True` and the read raises `RenamingError` (`ru.py:788-791`). nnter: `hasattr(envoy, "attention_probabilities")` raises `Unavailable` *(ran)* (`comp/eproperty.py:28-32`, `:122-123`; `test_base.py:51-52`). Migration: ask `status()`; never `hasattr`/`getattr(..., None)` on a value.
 
 6. **`attn_probs_available` is gone.** `st.py:370-375` → `model.status()["self_attn.attention_probabilities"] is None`.
 
-7. **Remote contract.** nnterp: `remote=True` at construction sets `allow_dispatch=False`, runs the checks with `scan()` on meta, ships nothing, server needs nnterp at the same version (`st.py:168-176`, CHANGELOG `:160-178`). nnter: `remote=True` on `trace()`; the constructor kwarg is accepted only because nnsight accepts it *(ran)*; the block re-runs against the client's envoy tree, families by reference, server needs nnter at the same version (`S.py:413-422`, `docs/usage/remote.md`). Neither has been exercised against a live NDIF (`contributing.md:197-199`). Migration: drop the constructor `remote=` (harmless) and keep it on `trace()`.
+7. **Remote contract.** nnterp: `remote=True` at construction sets `allow_dispatch=False`, runs the checks with `scan()` on meta, ships nothing, server needs nnterp at the same version (`st.py:168-176`, CHANGELOG `:160-178`). nnter: `remote=True` on `trace()`; the constructor kwarg is accepted only because nnsight accepts it *(ran)*; the block re-runs against the client's envoy tree, families by reference, server needs nnter at the same version (`S.py:437-446`, `docs/usage/remote.md`). Neither has been exercised against a live NDIF (`contributing.md:197-199`). Migration: drop the constructor `remote=` (harmless) and keep it on `trace()`.
 
-8. **Sizes.** Same values on every family checked except DBRX `intermediate_size` (raises in nnter, §2). nnter sizes are read-only descriptors (`S.py:48-49`); nnterp's are plain attributes you could overwrite. nnterp returns `None` where a config key is missing (`st.py:238-242`); nnter raises `AttributeError`. Migration: none, except guard DBRX.
+8. **Sizes.** Same values on every family checked except DBRX `intermediate_size` (raises in nnter, §2). nnter sizes are read-only descriptors (`S.py:49-50`); nnterp's are plain attributes you could overwrite. nnterp returns `None` where a config key is missing (`st.py:238-242`); nnter raises `AttributeError`. Migration: none, except guard DBRX.
 
-9. **DeltaNet API.** nnterp: rows `linear_attention_*[i]` / `linear_attentions_state_{input,output}[i]` on the model; kernels pinned to the PyTorch references at load (`ru.py:1047-1099`), so `fla`/`causal_conv1d` installed still works; the kernel op chosen by nnsight's step (`:1003-1044`); per-position state via `accessor.scan(layer, cuts, edit)` re-running the chunked kernel in pieces (`:1102-1162`); `linear_attention_kernels` dict; a warm-cache single-token trace unsupported. nnter: values on `layers[i].linear_attn` (`comp/linear_attention.py:51-95`); kernel chosen by the forward's `use_precomputed_states_0` binding (`comp/recurrent.py:238-243`); with `fla`/`causal_conv1d` installed every value but `attention_output` is *unavailable* (`needs_torch_kernels`, `recurrent.py:142-156`); per-token `state`/`states`/`state_after`/`set_state_after` exist only after `route_kernels(model.family, "torch")`, a process-wide rebinding of the module's kernel globals that must precede the first trace of a linear block (`recurrent.py:92-139`, `:256-357`). Migration: `linear_attentions_state_output.scan(i, cuts)` → `route_kernels(...)` then `mix.states`/`state_after(t)`; `pin_linear_attention_kernels` has no counterpart — uninstall `fla` or accept unavailability.
+9. **DeltaNet API.** nnterp: rows `linear_attention_*[i]` / `linear_attentions_state_{input,output}[i]` on the model; kernels pinned to the PyTorch references at load (`ru.py:1047-1099`), so `fla`/`causal_conv1d` installed still works; the kernel op chosen by nnsight's step (`:1003-1044`); per-position state via `accessor.scan(layer, cuts, edit)` re-running the chunked kernel in pieces (`:1102-1162`); `linear_attention_kernels` dict; a warm-cache single-token trace unsupported. nnter: values on `layers[i].linear_attn` (`comp/linear_attention.py:51-95`); kernel chosen by the forward's own test, the `use_precomputed_states_0` binding and the call's length (`comp/recurrent.py:311-329`); with `fla`/`causal_conv1d` installed every value but `attention_output` is *unavailable* (`needs_torch_kernels`, `recurrent.py:146-160`); per-token `state`/`states`/`state_after`/`set_state_after` exist only after `route_kernels(model.family, "torch")`, a process-wide rebinding of the module's kernel globals that must precede the first trace of a linear block (`recurrent.py:95-129`, `:352-446`). Migration: `linear_attentions_state_output.scan(i, cuts)` → `route_kernels(...)` then `mix.states`/`state_after(t)`; `pin_linear_attention_kernels` has no counterpart — uninstall `fla` or accept unavailability.
 
-10. **`input_ids` / `input_size` / `attention_mask`.** Same reads (`self.inputs[1][...]`, `st.py:377-402`; `S.py:328-355`). nnter's `input_ids` and `attention_mask` are assignable and re-run the model on the new tensors (`S.py:333-346`); nnterp's are read-only. Both serve at the model input: read before any block.
+10. **`input_ids` / `input_size` / `attention_mask`.** Same reads (`self.inputs[1][...]`, `st.py:377-402`; `S.py:352-379`). nnter's `input_ids` and `attention_mask` are assignable and re-run the model on the new tensors (`S.py:357-370`); nnterp's are read-only. Both serve at the model input: read before any block.
 
-11. **`logits`.** Same: `output.logits`, softcap already applied on Gemma-2 (`st.py:738-743`, `ru.py:1210`; `S.py:151-165`). nnter additionally assignable. `lm_head_output()` → `model.lm_head.output` for the raw projection.
+11. **`logits`.** Same: `output.logits`, softcap already applied on Gemma-2 (`st.py:738-743`, `ru.py:1210`; `S.py:170-184`). nnter additionally assignable. `lm_head_output()` → `model.lm_head.output` for the raw projection.
 
-12. **`token_embeddings`.** Same: `embed_tokens.output` (`st.py:404-413`; `S.py:167-175`).
+12. **`token_embeddings`.** Same: `embed_tokens.output` (`st.py:404-413`; `S.py:186-194`).
 
-13. **`project_on_vocab` applies softcap in nnter** (`S.py:240-242`) and not in nnterp (`st.py:550-551`). On Gemma-2/3 a logit lens from nnterp and nnter differ by `cap·tanh(x/cap)`. Migration: none for other families.
+13. **`project_on_vocab` applies softcap in nnter** (`S.py:267-269`) and not in nnterp (`st.py:550-551`). On Gemma-2/3 a logit lens from nnterp and nnter differ by `cap·tanh(x/cap)`. Migration: none for other families.
 
 14. **`attention_scores` on GPT-OSS.** nnterp reads the softmax input, one key wider than the pattern, tag `sink` (`ru.py:1507-1510`); nnter reads `attn_weights_1`, the masked scores before the sink column, same width as the pattern (`fam/gpt_oss.py:40-42`; `families.md:136`). `softmax(scores)` reproduces the pattern in neither without handling the sink.
 
 15. **Falcon `mlp_output` is a copy** in nnter (`fam/falcon.py:136-148`) because the block adds the attention into the MLP tensor in place; nnterp's `mlps_output[i]` is the live tensor and must be cloned as reached (`test_block_invariants.py:47-50`). Migration: drop the clone.
 
-16. **`skip_layers` signature.** `skip_layers(start, end, skip_with)`; `layer_returns_tuple` gone; negative indices allowed (`S.py:196-210`). Tuple filler is `(hidden, None)` not `(hidden, DummyCache())` (`comp/layer.py:56`). `skip_layer(i)` → `skip_layers(i, i)`.
+16. **`skip_layers` signature.** `skip_layers(start, end, skip_with)`; `layer_returns_tuple` gone; negative indices allowed (`S.py:215-229`). Tuple filler is `(hidden, None)` not `(hidden, DummyCache())` (`comp/layer.py:56`). `skip_layer(i)` → `skip_layers(i, i)`.
 
-17. **`steer` signature.** `steer(layers, vector, factor=1.0, token_positions=None, batch_index=None)`; `positions` gone; `steering_vector` positional name is `vector`; no ascending sort (`S.py:212-231`). Migration: rename the kwarg, pass layers ascending.
+17. **`steer` signature.** `steer(layers, vector, factor=1.0, token_positions=None, batch_index=None)`; `positions` gone; `steering_vector` positional name is `vector`; no ascending sort (`S.py:231-250`). Migration: rename the kwarg, pass layers ascending.
 
-18. **`get_topk_closest_tokens` / `probs_to_dict`.** Return is always `list[dict]` *(ran)*; tokens are `tokenizer.decode(id)` strings rather than `convert_ids_to_tokens` (`S.py:244-256`); `probs_to_dict(probs, k)` replaces `probs_to_dict(tokens, probs)`.
+18. **`get_topk_closest_tokens` / `probs_to_dict`.** Return is always `list[dict]` *(ran)*; tokens are `tokenizer.decode(id)` strings rather than `convert_ids_to_tokens` (`S.py:271-283`); `probs_to_dict(probs, k)` replaces `probs_to_dict(tokens, probs)`.
 
 19. **Tokenizer handling.** `add_prefix_false_tokenizer` and `tokenizer_kwargs` identical. `get_first_tokens` no longer accepts a raw `TransformersModel` and no longer falls back to `model.tokenizer` (`nnter/prompt_utils.py:39-42`).
 
 20. **`run_prompts` progress bar** off by default (`tqdm=None`, `nnter/prompt_utils.py:131`).
 
-21. **Errors.** `RenamingError` → `Unavailable` (declared reason), `UnsupportedFamily` (unknown `model_type`), nnsight `SourceNotAvailable` (op moved), `AttributeError` (read-only assign). An out-of-order read of a source-located value in nnter is a `UserWarning` that cuts the block short, not an error (`docs/developing/gotchas.md`, "An out-of-order read"); nnterp's `Internals.rank` was the tool to avoid this.
+21. **Errors.** `RenamingError` → `Unavailable` (declared reason), `UnsupportedFamily` (unknown `model_type`), nnsight `SourceNotAvailable` (op moved), `AttributeError` (read-only assign). An out-of-order read of a source-located value in nnter is an `OutOfOrderError` naming the call's `.fn`, the drill's location, not the value (`docs/developing/gotchas.md`, "An out-of-order read"); nnterp's `Internals.rank` was the tool to avoid this.
 
 22. **DBRX `self_attn`.** nnterp aliases `norm_attn_norm` (`ru.py:203`) so `attentions[i]`/`attentions_input[i]` are the container and its (pre-norm) input, with `attentions_output` redirected to `self_attn.attn` (`:1476`); nnter aliases `norm_attn_norm.attn` (`fam/dbrx.py:24`) so `self_attn.input` is the normed tensor. Migration: `attentions_input[i]` on DBRX → `layers[i].norm_attn_norm.input`.
 
@@ -329,23 +329,23 @@ nnterp spelling is `model.<row>[i]` (read) / `model.<row>[i] = v` (write); whole
 ## 4. New in nnter (no nnterp counterpart)
 
 - Families registry: one module per `model_type`, lazy import, `nnter.families.{lookup, register, known, all_families, REGISTRY}`, `UnsupportedFamily` (`fam/__init__.py`).
-- `model.status(layer=None)`, `Standard.values()`, `Standard.status()`, per-block dotted keys (`S.py:260-324`, `comp/standard.py`).
-- `Unavailable` and the `unavailable=` predicate on every descriptor; `unavailable("reason")` class-body marker; `needs_eager`, `interface_reason`, `needs_torch_kernels`, `needs_recurrent_routing`, `Attention.off_interface()` (`comp/eproperty.py:21-128`, `attention.py:18-89`, `recurrent.py:143-184`).
-- Layouts: fourteen `jaxtyping` aliases (`Residual`, `Logits`, `NextTokenProbs`, `Tokens`, `Queries`, `Keys`, `Values`, `Pattern`, `HeadOutputs`, `LinearQK`, `LinearV`, `Gates`, `State`, `States`), `value.layout`, `value.dims`, `isinstance(tensor, Pattern)` (`comp/eproperty.py:122-145`; `api-quick-reference.md:239-260`).
-- `StandardizedProperty` sizes a family may define (`S.py:25-49`; `fam/gpt2.py:63`, `falcon.py:157-167`, `deepseek_v2.py:44-51`, `opt.py:49`, `mpt.py:98`, `bloom.py:107`, `gptj.py:90`).
-- Descriptors: one `EProperty(key, description, unavailable, select)` whose key is a path (`"output"`, `"../norm.output"`, `"source.<op>.inputs"`, or a function returning one), `DerivedEProperty`, `seq_first`, `first_tensor`, `rewrap`; `Standard.sourced`, the flag a family sets on an envoy whose forward holds a value read after the call starts (`comp/eproperty.py`, `attention.py:48-57`, `standard.py:24-50`).
-- Keys for a forward that branches: `branched`, `per_call`, `at_occurrence` (`comp/recurrent.py:187-246`).
+- `model.status(layer=None)`, `Standard.values()`, `Standard.status()`, per-block dotted keys (`S.py:287-348`, `comp/standard.py`).
+- `Unavailable` and the `unavailable=` predicate on every descriptor; `unavailable("reason")` class-body marker; `needs_eager`, `interface_reason`, `needs_torch_kernels`, `needs_recurrent_routing`, `Attention.off_interface()` (`comp/eproperty.py:21-123`, `attention.py:18-89`, `recurrent.py:146-187`).
+- Layouts: fourteen `jaxtyping` aliases (`Residual`, `Logits`, `NextTokenProbs`, `Tokens`, `Queries`, `Keys`, `Values`, `Pattern`, `HeadOutputs`, `LinearQK`, `LinearV`, `Gates`, `State`, `States`), `value.layout`, `value.dims`, `isinstance(tensor, Pattern)` (`comp/eproperty.py:127-150`; `api-quick-reference.md:239-260`).
+- `StandardizedProperty` sizes a family may define (`S.py:26-50`; `fam/gpt2.py:63`, `falcon.py:157-167`, `deepseek_v2.py:44-51`, `opt.py:49`, `mpt.py:98`, `bloom.py:107`, `gptj.py:90`).
+- Descriptors: one `EProperty(key, description, unavailable, select)` whose key is a path (`"output"`, `"../norm.output"`, `"source.<op>.inputs"`, or a function returning one), `DerivedEProperty`, `seq_first`, `first_tensor`, `rewrap`; `Standard.sourced`, the flag a family sets on an envoy whose forward holds a value read after the call starts (`comp/eproperty.py`, `attention.py:48-57`, `standard.py:34-60`).
+- Keys for a forward that branches: `RecurrentMixer.KERNEL`, `per_call`, `pinned` (`comp/recurrent.py:190-244`, `:311-329`).
 - `attention_values` on every family (nnterp had queries/keys/scores/head outputs only).
 - Attention interior on GPT-J, BLOOM, MPT, Falcon mapped onto their own ops (`fam/gptj.py:47-77`, `bloom.py:46-86`, `mpt.py:49-78`, `falcon.py:75-124`); nnterp marks those `_no_interface` (`ru.py:1393-1404`, `:1448`, `:1462`, `:1489`, `:1498`).
 - Falcon alibi branch (`by_alibi`, `fam/falcon.py:51-58`) covering queries/keys/values/scores/head outputs; nnterp covered only the pattern on alibi (`ru.py:1491-1494`).
-- DeltaNet per-token state: `state`, `states`, `state_after`, `set_state_after`, `route_kernels` / `route_delta_rule` (`comp/recurrent.py:92-140`, `:338-443`); decode-step kernel chosen by the forward's own branch variable.
-- Assignable `input_ids`, `attention_mask`, `logits` (`S.py:151-165`, `:328-346`).
+- DeltaNet per-token state: `state`, `states`, `state_after`, `set_state_after`, `route_kernels` / `route_delta_rule` (`comp/recurrent.py:95-143`, `:352-446`); decode-step kernel chosen by the forward's own test (`use_precomputed_states and seq_len == 1`).
+- Assignable `input_ids`, `attention_mask`, `logits` (`S.py:170-184`, `:352-370`).
 - `envoys=` extension point; a user `EProperty` appears in `status()` (`test_registry.py:106-118`).
 - `Layer.skip_with(hidden)` (`comp/layer.py:47-56`); `Layer.returns_tuple` declared per family.
 - Falcon `mlp_output` transform-backed copy (`fam/falcon.py:144-148`).
 - Per-family test suite `FamilySuite` (`tests/families/suite.py`, ~35 methods × 32 checkpoints) including contribution identity, renamed-vs-raw equality, causal writes, in-place edits, layout/annotation checks, repr checks; `test_registry.py` (lazy import, refusal, register/override, remote key, sizes read-only); `test_base.py`.
 - Docs tree with a `CLAUDE.md` router, `docs/reference/families.md` sweep table, `docs/developing/transformers-compat.md` upgrade procedure, pattern recipes (`docs/patterns/*.md`).
-- Typing: `layers: Sequence[Layer]`, `self_attn: Attention`, etc. (`S.py:103-107`, `comp/layer.py:36-40`).
+- Typing: `layers: Sequence[Layer]`, `self_attn: Attention`, etc. (`S.py:122-126`, `comp/layer.py:36-40`).
 - Silent load: no logger.
 
 ## 5. Family coverage
@@ -362,7 +362,7 @@ nnterp spelling is `model.<row>[i]` (read) / `model.<row>[i] = v` (write); whole
 
 1. **Op names are a transformers-version fact.** `INTERFACE = "attention_interface_1"` (`comp/attention.py:28`), `nn_functional_softmax_0`, `nn_functional_dropout_0` (`:118`, `:144`), GPT-OSS `attn_weights_1` (`fam/gpt_oss.py:40`), GPT-J `self__attn_0.source.self_attn_dropout_0` (`fam/gptj.py:72`), BLOOM `self__reshape_0`/`F_softmax_0`/`torch_bmm_0`/`dropout_add_0`/`self_attention_dropout_0` (`fam/bloom.py:46-86`), MPT `query_states_0`/`torch_matmul_1`/`F_dropout_0` (`fam/mpt.py:49-88`), Falcon `apply_rotary_pos_emb_0`/`value_layer_0`/`F_softmax_0|1`/`attn_output_1`/`flatten_0`/`self_attention_dropout_0` (`fam/falcon.py:75-124`), DeltaNet `torch_chunk_gated_delta_rule_0`/`torch_recurrent_gated_delta_rule_0`/`use_precomputed_states_0`/`last_recurrent_state_3` (`comp/linear_attention.py:45-49`). nnterp was broken twice this way (`_0`→`_1` under nnsight 0.8; `module_attn_dropout_0`→`nn_functional_dropout_0` under transformers 5; CHANGELOG `:203-217`) and DBRX/Qwen2-MoE moved onto the interface in 5.17 (`:182-187`). Constraint: `suite.py:319-334` must stay in CI for every family on every transformers bump; `docs/developing/transformers-compat.md` is the procedure. `last_recurrent_state_3` is an occurrence count inside the kernel body and will move with any edit to that loop.
 
-2. **`.source` snapshots module globals at first drill.** nnsight builds the instrumented forward over a copy of the globals (nnterp `ru.py:1052-1058`; nnter `gotchas.md` "`.source` snapshots module globals"). Constraint: `route_delta_rule` before the first trace of a linear block (`comp/recurrent.py:92-126`); any other runtime kernel/monkeypatch switch is invisible after the first trace. nnterp pinned at load and re-pinned on `dispatch()`; nnter has no re-pin, which is fine only because `route_kernels` rebinds the module globals themselves rather than swapping and restoring.
+2. **`.source` snapshots module globals at first drill.** nnsight builds the instrumented forward over a copy of the globals (nnterp `ru.py:1052-1058`; nnter `gotchas.md` "`.source` snapshots module globals"). Constraint: `route_delta_rule` before the first trace of a linear block (`comp/recurrent.py:95-129`); any other runtime kernel/monkeypatch switch is invisible after the first trace. nnterp pinned at load and re-pinned on `dispatch()`; nnter has no re-pin, which is fine only because `route_kernels` rebinds the module globals themselves rather than swapping and restoring.
 
 3. **`fla` / `causal_conv1d` installed = no DeltaNet values.** nnter reports them unavailable (`needs_torch_kernels`); nnterp sourced under the reference kernels and restored the globals. Constraint: a hybrid experiment on a GPU box with `fla` installed gets nothing but `attention_output`; `contributing.md:200-203` lists this as open.
 
@@ -372,15 +372,15 @@ nnterp spelling is `model.<row>[i]` (read) / `model.<row>[i] = v` (write); whole
 
 6. **`reorder_and_upcast_attn`** is detected in nnter (`fam/gpt2.py:46-50`) — an improvement over nnterp, which did not detect it. Constraint: it is the only config flag that switches an attention path that nnter checks; `scale_attn_by_inverse_layer_idx` and similar do not change the op path but change what the scores mean.
 
-7. **Layer-0-only assumptions.** `status()` builds its key set from every block (`S.py:300-311`), better than nnterp's probe-layer checks (`ru.py:1682`, `:1931`). But `_hosts` keys on `_standard_children`, which maps by alias/native name; a family whose first block is a different class from the rest (Mllama cross-attention, DeepSeek dense-vs-MoE MLP is handled by keying both classes to `Mlp`, `fam/deepseek_v2.py:39`) would show a `Standard`-less block silently missing values. Constraint: heterogeneous block classes need both classes in `ENVOYS`; nothing refuses a block that is not a `Layer` (`contributing.md:185-189`).
+7. **Layer-0-only assumptions.** `status()` builds its key set from every block (`S.py:324-335`), better than nnterp's probe-layer checks (`ru.py:1682`, `:1931`). But `_hosts` keys on `_standard_children`, which maps by alias/native name; a family whose first block is a different class from the rest (Mllama cross-attention, DeepSeek dense-vs-MoE MLP is handled by keying both classes to `Mlp`, `fam/deepseek_v2.py:39`) would show a `Standard`-less block silently missing values. Constraint: heterogeneous block classes need both classes in `ENVOYS`; nothing refuses a block that is not a `Layer` (`contributing.md:185-189`).
 
 8. **Sizes on non-Llama configs.** `hidden_size`/`num_attention_heads`/`vocab_size` rely on transformers' `attribute_map` aliases (GPT-2 `n_embd`, BLOOM `n_head`, MPT `d_model`, DBRX `d_model`/`n_heads`) *(ran: all resolve)*, but `intermediate_size` does not exist on `DbrxConfig` and raises *(ran)*. Constraint: every family whose config lacks a plain key needs a `def <size>(model)`; the suite's `test_sizes_match_the_model` (`suite.py:557-575`) reads `MLP_WIDTH_KEY` for DBRX/Qwen3-MoE instead of `model.intermediate_size`, so it does not catch this.
 
-9. **Padding-side and last-token assumptions.** `next_token_probs` takes `[:, -1]` (`S.py:185`) and the helpers require left padding for a negative index (`nnter/nnsight_utils.py:25-30`); same as nnterp (`st.py:415-419`, `nnsight_utils.py:291-298`). Constraint: `tokenizer_kwargs={"padding_side": "left"}` for batched prompts on both.
+9. **Padding-side and last-token assumptions.** `next_token_probs` takes `[:, -1]` (`S.py:204`) and the helpers require left padding for a negative index (`nnter/nnsight_utils.py:25-30`); same as nnterp (`st.py:415-419`, `nnsight_utils.py:291-298`). Constraint: `tokenizer_kwargs={"padding_side": "left"}` for batched prompts on both.
 
 10. **Half-precision tolerances.** nnterp's pattern check widens to `atol=1e-2` under bf16 (`ru.py:960`) and its invariant suite loads in fp32 because the Falcon checkpoints are bf16 and the additive identity holds only to one ulp (`test_block_invariants.py:39-42`). nnter's suite loads in the checkpoint dtype with `8*eps` tolerances (`suite.py:219-220`, `:284-288`) and forces fp32 only for DBRX (`families.md:164`). Constraint: on a bf16 checkpoint the contribution identity and the row-sum check are one-ulp statements; a real bf16 Falcon/Gemma checkpoint may need `dtype=torch.float32` for the identity to hold to the suite's tolerance. Neither package handles fp16 NaN patterns (softmax over `-inf` rows under fp16 mask) specially; nnterp has no such handling either.
 
-11. **`branched` caching per call.** `per_call` keys the cached branch on `(mediator, call)` (`comp/recurrent.py:204-239`): the call is the step a read is pinned to by `tracer.iter`, and, relaxed, on step 0 or outside `tracer.iter`, the worker's count of passes of the module's `.output`. A second call of the block has another count and a second invoke another mediator, so the record is made again for each. nnterp's `delta_rule_call` had the mirror-image limit (step 0 = chunked, warm-cache trace unsupported, `ru.py:1023-1029`).
+11. **The kernel choice is cached per call.** `per_call` keeps the choice as `(call, value)` per `(envoy.path, key)` on the worker greenlet (`comp/recurrent.py:190-228`): the call is the step a read is pinned to by `tracer.iter`, and, relaxed, on step 0 or outside `tracer.iter`, the worker's count of passes of the module's `.output`. A second call of the block has another count and a second invoke (or a replayed `model.edit`) another worker, so the record is made again for each. nnterp's `delta_rule_call` had the mirror-image limit (step 0 = chunked, warm-cache trace unsupported, `ru.py:1023-1029`).
 
 12. **`hasattr` raising `Unavailable`** is a known trap (`comp/eproperty.py:28-32` TODO) that also breaks any third-party code doing `getattr(envoy, name, default)` inside a trace; `contributing.md:204-207` lists a `require/available` helper as open.
 

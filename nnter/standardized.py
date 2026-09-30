@@ -14,6 +14,7 @@ from torch import Tensor
 
 from . import families
 from .components import EProperty, Layer, Residual, Standard
+from .components.standard import values
 
 #: The layouts of the root's values: the logits, the next-token distribution at the last position, and one
 #: integer per token (``input_ids``, ``attention_mask``).
@@ -49,7 +50,7 @@ class StandardizedProperty:
         raise AttributeError(f"{self.name} is read off the config; a family defines `def {self.name}(model)` to say it otherwise")
 
 
-class StandardizedCapability:
+class StandardizedCapability(StandardizedProperty):
     """A method of the model that a family may define instead.
 
     `StandardizedProperty` for a method: on attribute access, a function of
@@ -60,18 +61,10 @@ class StandardizedCapability:
     plain case.
     """
 
-    def __init__(self, func: Callable[..., Any]) -> None:
-        self.func = func
-        functools.update_wrapper(self, func)
-
-    def __set_name__(self, owner: type, name: str) -> None:
-        self.name = name
-
     def __get__(self, obj: Any, owner: type | None = None) -> Any:
         if obj is None:
             return self
-        override = getattr(obj.family, self.name, None)
-        return functools.partial(override if override is not None else self.func, obj)
+        return functools.partial(getattr(obj.family, self.name, None) or self.fget, obj)
 
 
 class StandardizedTransformer(TransformersModel):
@@ -312,7 +305,7 @@ class StandardizedTransformer(TransformersModel):
         hosts = self._hosts()
         if layer is not None:
             return self._layer_status(self.layers[layer], hosts)
-        status: dict[str, Any] = {name: value.reason(self) for name, value in Standard.values.__func__(type(self)).items()}
+        status: dict[str, Any] = {name: value.reason(self) for name, value in values(type(self)).items()}
         per_layer = [self._layer_status(block, hosts) for block in self.layers]
         for name in per_layer[0]:
             missing = {i: reasons[name] for i, reasons in enumerate(per_layer) if reasons[name]}
@@ -322,13 +315,10 @@ class StandardizedTransformer(TransformersModel):
     @staticmethod
     def _standard_children(block: Envoy) -> dict[str, Standard]:
         """The block's children that carry standard values, by standard name (the alias where one is bound)."""
-        aliases = {native: alias for alias, native in block._aliases.items()}
-        found = {aliases.get(name, name): child for name, child in block._named_children() if isinstance(child, Standard)}
-        for alias, path in block._aliases.items():
-            if "." in path:  # a mount: the module sits deeper (DBRX's ``norm_attn_norm.attn`` as ``self_attn``)
-                child = block.get(path)
-                if isinstance(child, Standard):
-                    found[alias] = child
+        bound = {alias: block.__dict__[alias] for alias in block._aliases}  # what each alias is bound to, however deep
+        names = {id(child): alias for alias, child in bound.items()}
+        found = {names.get(id(child), name): child for name, child in block._named_children() if isinstance(child, Standard)}
+        found.update((alias, child) for alias, child in bound.items() if isinstance(child, Standard) and alias not in found)
         return found
 
     def _hosts(self) -> dict[str, list[str]]:

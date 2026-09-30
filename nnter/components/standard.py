@@ -21,6 +21,16 @@ def rewrap(envoy: Envoy, value: torch.Tensor) -> Any:
     return (value, *current[1:]) if isinstance(current, tuple) else value
 
 
+def values(cls: type) -> dict[str, EProperty]:
+    """A class's standard values by name, base classes first."""
+    found: dict[str, EProperty] = {}
+    for klass in reversed(cls.__mro__):
+        for name, attr in vars(klass).items():
+            if isinstance(attr, EProperty):
+                found[name] = attr
+    return found
+
+
 class Standard(Envoy):
     """An envoy carrying standard values: what `Layer`, `Attention` and `Mlp` share.
 
@@ -52,12 +62,7 @@ class Standard(Envoy):
     @classmethod
     def values(cls) -> dict[str, EProperty]:
         """This class's standard values by name, base classes first."""
-        found: dict[str, EProperty] = {}
-        for klass in reversed(cls.__mro__):
-            for name, attr in vars(klass).items():
-                if isinstance(attr, EProperty):
-                    found[name] = attr
-        return found
+        return values(cls)
 
     def status(self) -> dict[str, str | None]:
         """Each standard value here -> ``None`` when available, else the reason."""

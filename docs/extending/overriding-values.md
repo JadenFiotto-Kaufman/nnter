@@ -78,8 +78,8 @@ envoy:
   the path ends on: a module or an operation.
 - The key may be a function of the host returning a path, decided at read time inside
   the trace: Falcon's `by_alibi(without, with_alibi, attribute="output")` reads
-  `config.alibi`, `branched(...)` reads a binding the forward makes, and
-  a `RecurrentMixer`'s `kernel("inputs")` names whichever kernel fires on this call
+  `config.alibi`, and a `RecurrentMixer`'s `kernel("inputs")` reads the
+  bindings the forward branches on and names whichever kernel fires on this call
   (`LinearAttention`'s chunked or token-by-token delta rule)
   ([finding-source-ops.md](finding-source-ops.md)).
 - On a `RecurrentMixer` a value that moves is declared at the kernel call; the kernel

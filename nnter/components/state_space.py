@@ -26,43 +26,6 @@ SSDValues = Float[Tensor, "batch seq heads head_dim"]
 SSDHeadOutputs = Float[Tensor, "batch seq heads head_dim"]
 
 
-def _this_call(envoy: Any) -> dict[str, Any]:
-    """What is known about this call, decided at its first read and kept for the call's other reads.
-
-    The kernel that fires, and what each location inside the forward served
-    (`StateSpace._serve`). The record is `per_call`'s, one per call of the
-    mixer; it also carries how many of the mixer's calls had returned when it
-    was made, and one made in an earlier call is made again.
-    """
-    from nnsight.intervention.interleaver import Mediator
-
-    cls = type(envoy)
-    location = f"{envoy.path}.output"  # passed once per call, after every value this record serves
-    record = per_call(envoy, "kernel", dict)
-    mediator = Mediator.current(location)
-    if "kernel" not in record or record["calls"] != mediator.occurrence(location):
-        record.clear()
-        cached = getattr(envoy.source, cls.BRANCH).output
-        # The length only matters over a cached state; read inside the forward, after the binding, so a
-        # read of the mixer's own `.input` earlier in the step is not passed.
-        one = cached and getattr(envoy.source, cls.SEQ_OP).output.shape[1] == 1
-        record["kernel"] = cls.RECURRENT_KERNEL if one else cls.CHUNK_KERNEL
-        record["calls"] = mediator.occurrence(location)
-    return record
-
-
-def _kernel(envoy: Any) -> str:
-    """The scan call that fires on this call: the token-by-token update only for one token over a cached state.
-
-    The forward decodes through ``mamba2_selective_state_update`` when
-    ``use_precomputed_states and seq_len == 1`` and runs ``mamba2_chunk_scan``
-    otherwise (a prompt, or several tokens over a cached state), so the choice
-    reads the binding and, over a cached state, the call's sequence length
-    (`SEQ_OP`), once per call.
-    """
-    return _this_call(envoy)["kernel"]
-
-
 def argument(name: str):
     """A `select` function: where the scan call that fires takes ``name`` (the two kernels' call sites differ)."""
 
@@ -197,7 +160,7 @@ class StateSpace(RecurrentMixer):
 
     Everything but ``attention_output`` is read at the scan call:
     transformers' ``mamba2_chunk_scan`` on a prompt, its
-    ``mamba2_selective_state_update`` on a decode step (`_kernel`). The two
+    ``mamba2_selective_state_update`` on a decode step (`RecurrentMixer.KERNEL`). The two
     take their arguments in different places and the update has no sequence
     axis, so each value selects by the kernel that fires (`argument`) and a
     decode step's tensors are served with a sequence axis of 1, removed again
@@ -217,13 +180,12 @@ class StateSpace(RecurrentMixer):
     source; ``route_kernels(model.family, "torch")`` binds transformers'
     pure-torch ones (`RecurrentMixer`).
 
-    The values of one call are served from a record of what the call's
-    locations served (`_serve`), so the kernel's arguments are read from the
-    model once per call however many values select from them, and a value
-    that needs another argument (``betas`` needs ``dt_bias``, a prompt's
-    ``state_output`` whether the scan returns a state) finds it after the
-    model has moved into the kernel. A value read after the model has moved
-    past its location is still an out-of-order read.
+    A value that needs another argument of the call (``betas`` needs
+    ``dt_bias``, a prompt's ``state_output`` whether the scan returns a
+    state) reads the call's arguments once per call (`_arguments`), at the
+    call's first need, and finds them there after the model has moved into
+    the kernel. A value read after the model has moved past its location is
+    an out-of-order read.
     """
 
     #: The call a prompt runs through: ``mamba2_chunk_scan(hidden_states, dt, A, B, C, chunk_size=, D=, dt_bias=, initial_states=, ...)``.
@@ -234,14 +196,11 @@ class StateSpace(RecurrentMixer):
     STATE_OP = None
     #: Inside the chunk scan, the binding of the state at every chunk boundary: ``[batch, chunks + 1, heads, head_dim, state_dim]``, the state before each chunk and after the last.
     CHUNK_STATES = "new_states_0"
-    #: The first op after `BRANCH` whose output is ``[batch, seq, ...]`` on both paths: the input with padding masked.
-    SEQ_OP = "apply_mask_to_padding_states_0"
     #: Inside the update, the binding of the new state before it is copied into the cache.
     UPDATED_STATE = "ssm_states_0"
     #: Where each kernel's call site passes each argument: a position, or a keyword.
     CHUNK_ARGUMENTS = {"hidden_states": 0, "dt": 1, "A": 2, "B": 3, "C": 4, "dt_bias": "dt_bias", "state": "initial_states"}
     RECURRENT_ARGUMENTS = {"state": 0, "hidden_states": 1, "dt": 2, "A": 3, "B": 4, "C": 5, "dt_bias": "dt_bias"}
-    KERNEL = staticmethod(_kernel)
 
     # -- the call ------------------------------------------------------------------
 
@@ -251,40 +210,10 @@ class StateSpace(RecurrentMixer):
     def _arguments_table(self) -> dict[str, int | str]:
         return self.RECURRENT_ARGUMENTS if self._decoding() else self.CHUNK_ARGUMENTS
 
-    def _serve(self, location: str) -> Any:
-        """The value at ``location`` for this call's values (`EProperty` asks the host): read from the model once per call.
-
-        A location inside the mixer's own forward is kept in the call's
-        record, so a second value there, or `_arguments` after the model has
-        moved on, reads the record. A value asked of a location the call has
-        already moved past is asked of the model, which has run past it: an
-        out-of-order read, as without the record. Any other location (the
-        mixer's output, an op of the block's forward) is served directly.
-        """
-        if not location.startswith(f"{self.path}.source."):
-            return Mediator.value(location)
-        call = _this_call(self)
-        served = call.setdefault("served", {})
-        if location in served and call["at"] == location:
-            return served[location]
-        served[location] = value = Mediator.value(location)
-        call["at"] = location
-        return value
-
-    def _swap(self, location: str, value: Any) -> None:
-        """Write ``value`` at ``location``, and keep it in the call's record so later values read what the model runs with."""
-        Mediator.swap(location, value)
-        if location.startswith(f"{self.path}.source."):
-            call = _this_call(self)
-            call.setdefault("served", {})[location] = value
-            call["at"] = location
-
     def _arguments(self) -> dict[str, Any]:
-        """This call's scan arguments by name, from the call's record (read from the model on the call's first need)."""
-        call = _this_call(self)
-        location = f"{getattr(self.source, call['kernel']).path}.input"
-        served = call.get("served", {})
-        args, kwargs = served[location] if location in served else self._serve(location)
+        """This call's scan arguments by name, read from the model once per call, on the call's first need."""
+        location = f"{getattr(self.source, type(self).KERNEL(self)).path}.input"
+        args, kwargs = per_call(self, "arguments", lambda: Mediator.value(location))
         named = {name: kwargs.get(at) if isinstance(at, str) else args[at] for name, at in self._arguments_table().items()}
         named["dt_softplus"] = kwargs.get("dt_softplus", False)
         named["dt_limit"] = kwargs.get("dt_limit")
@@ -440,7 +369,7 @@ class StateSpace(RecurrentMixer):
     def _states(self) -> States:
         if self._decoding():
             return self.state_output.unsqueeze(1)
-        self._arguments()  # recorded before the read inside the scan, for the values read after it
+        self._arguments()  # read before the read inside the scan, for the values read after it
         return _chunk_states.__get__(self)
 
     #: The state after each token of this call, from the chunk scan's boundaries (``chunk_size`` 1).

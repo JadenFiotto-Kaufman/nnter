@@ -179,7 +179,7 @@ def test_recurrent_mixer_without_a_state_op_reports_the_state_unavailable():
         def state_output(self, value):
             return value
 
-    assert NoState.STATE_OP is None and NoState.KERNEL.__name__ == "branched(use_precomputed_states_0)"
+    assert NoState.STATE_OP is None and NoState.KERNEL is RecurrentMixer.KERNEL
     model = StandardizedTransformer("yujiepan/qwen3.5-tiny-random", dispatch=True, envoys={Qwen3_5GatedDeltaNet: NoState})
     mix = model.layers[0].linear_attn
     assert type(mix) is NoState
@@ -270,3 +270,84 @@ def test_decode_step_whose_first_read_is_relaxed_takes_its_own_branch():
         assert keys[1].shape[1] == 1 and keys[2].shape[1] == 1
     finally:
         route_kernels(qwen3_5_text, "default")
+
+
+def _mamba2():
+    from nnter import route_kernels
+    from nnter.families import mamba2
+
+    route_kernels(mamba2, "torch")
+    return StandardizedTransformer("yujiepan/mamba2-tiny-random", dispatch=True)
+
+
+@pytest.mark.parametrize("second", ["attention_keys", "state_output"])
+def test_two_invokes_read_one_mixers_values(second):
+    """Each invoke's worker keeps its own per-call records, so two invokes reading one mixer do not share a kernel choice."""
+    import warnings
+
+    deltanet = StandardizedTransformer("yujiepan/qwen3.5-tiny-random", dispatch=True)
+    for model in (deltanet, _mamba2()):
+        mix = next(block.linear_attn for block in model.layers if hasattr(block._module, "linear_attn") or hasattr(block._module, "mixer"))
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            with model.trace() as tracer:
+                with tracer.invoke("Hello world there"):
+                    queries_a = mix.attention_queries.save()
+                    second_a = getattr(mix, second).save()
+                with tracer.invoke("Another prompt here ok"):
+                    queries_b = mix.attention_queries.save()
+                    second_b = getattr(mix, second).save()
+        assert queries_a.shape[0] == queries_b.shape[0] == 1
+        assert second_a.shape[0] == second_b.shape[0] == 1
+        assert "_per_call" not in mix.__dict__  # the records are the worker's, freed with it
+
+
+def test_edit_on_a_kernel_value_replays_on_another_prompt():
+    """A ``model.edit`` replay runs on a fresh worker, so it reads the new call's arguments, not the first run's."""
+    model = _mamba2()
+    mix = model.layers[0].linear_attn
+    with model.edit() as (tracer, edited):
+        gate = edited.layers[0].linear_attn
+        gate.betas = gate.betas * 0.5
+    prompts = ("Hello world there", "A much longer prompt than the first one was")
+    changed = []
+    for prompt in prompts:  # back to back: nothing else touches the mixer between the replays
+        with edited.trace(prompt):
+            changed.append(edited.logits.save())
+    for prompt, logits in zip(prompts, changed):
+        with model.trace(prompt):
+            betas = mix.betas.save()
+            clean = model.logits.save()
+        assert logits.shape == clean.shape and logits.shape[1] == betas.shape[1]
+        assert not torch.equal(logits, clean)
+
+
+def test_cached_call_with_several_tokens_reads_the_prompts_kernel():
+    """Several tokens over a cached state run the prompt's kernel (the forward decodes only one token at a time); `KERNEL` follows."""
+    import warnings
+
+    model = StandardizedTransformer("yujiepan/qwen3.5-tiny-random", dispatch=True)
+    mix = next(block.linear_attn for block in model.layers if hasattr(block._module, "linear_attn"))
+    ids = model.tokenizer("Hello world there", return_tensors="pt").input_ids.to(model._module.device)
+    with torch.no_grad():
+        cache = model._module(ids, use_cache=True).past_key_values
+    more = ids[:, :2]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with model.trace(more, past_key_values=cache, use_cache=True):
+            queries = mix.attention_queries.save()
+            carried = mix.state_input.save()
+    assert queries.shape[1] == 2 and carried is not None
+
+
+def test_status_with_a_module_another_block_owns():
+    """A block holding a module owned by another block (shared weights): its aliases are read off their own bindings."""
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    repo = "hf-internal-testing/tiny-random-gpt2"
+    raw = AutoModelForCausalLM.from_pretrained(repo)
+    raw.transformer.h[1].shared_mlp = raw.transformer.h[0].mlp
+    model = StandardizedTransformer(raw, tokenizer=AutoTokenizer.from_pretrained(repo))
+    status = model.status(layer=1)
+    assert status["mlp.mlp_output"] is None and status["layer_output"] is None
+    assert model.status()["mlp.mlp_output"] is None

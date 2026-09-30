@@ -2,8 +2,8 @@
 
 A recurrent mixer (a gated DeltaNet, a state-space layer) runs its sequence
 through a kernel function the modeling module calls: one kernel for a prompt,
-another for a decode step of ``generate``, picked by a variable the forward
-binds before it branches. Its values are the arguments and results of that
+another for a one-token step over a cached state (a decode step of
+``generate``), picked by what the forward binds before it branches. Its values are the arguments and results of that
 call. What differs between mixers is which arguments mean what; what they
 share is how the call is found, which kernel names must be transformers'
 pure-torch ones for there to be a call to read inside, how the family's
@@ -17,10 +17,13 @@ from __future__ import annotations
 
 import inspect
 import sys
+from contextlib import contextmanager
 from typing import Any, Callable
 
 import torch
+from greenlet import getcurrent
 from nnsight.intervention.envoy import Envoy
+from nnsight.intervention.interleaver import Mediator
 from nnsight.intervention.source import SourceEnvoy
 
 from jaxtyping import Float
@@ -184,29 +187,13 @@ def needs_recurrent_routing(envoy: Envoy) -> str | None:
     return None
 
 
-def branched(variable: str, ops: dict[Any, str]) -> Callable[[Envoy], str]:
-    """An op name a forward's own branch variable picks, for a key function (see `EProperty`).
-
-    ``variable`` names a binding the forward makes before it branches (a
-    binding is an operation, so its value is served like any other), and
-    ``ops`` maps that value to the op that fires on that branch. The model
-    serves the binding once per call, so the choice is made once per call
-    (`per_call`) and every value read in that call reuses it.
-    """
-
-    def choose(envoy: Envoy) -> str:
-        return per_call(envoy, f"branch:{variable}", lambda: ops[getattr(envoy.source, variable).output])
-
-    choose.__name__ = f"branched({variable})"
-    return choose
-
-
 def per_call(envoy: Envoy, key: str, compute: Callable[[], Any]) -> Any:
-    """``compute()`` once per call of the envoy's module, cached on the envoy under ``key``.
+    """``compute()`` once per call of the envoy's module, under ``key``.
 
     For something several values in one call depend on and the model serves
-    once: the branch a forward takes, a call's sequence length. The record is
-    kept until the worker is in another call of the module, or another run.
+    once: the kernel a forward branches to, a call's arguments, its sequence
+    length. The record is kept until the worker is in another call of the
+    module.
 
     Which call that is comes from two facts nnsight keeps. A read pinned by
     ``tracer.iter`` to step k is served at the k-th occurrence of its
@@ -216,34 +203,45 @@ def per_call(envoy: Envoy, key: str, compute: Callable[[], Any]) -> Any:
     times the module's ``.output`` has been passed, which nnsight counts for
     every location whether or not it was read: inside call c that many have
     returned, and between calls it names the one about to start.
+
+    The records live on the worker, the greenlet running this intervention
+    code. Every run of every invoke has its own (a replayed ``model.edit``
+    too), so two invokes reading one mixer never share a record, a record
+    never outlives its run, and the tensors in it are freed with the worker.
     """
-    from nnsight.intervention.interleaver import Mediator
-
-    # The worker's mediator: one per run, so a record from an earlier trace is never reused.
-    mediator = Mediator.current(key)
-
     # The index of the module call the next read lands in (see the docstring).
     # `iteration` is the pinned step, `None` once relaxed, and 0 both for step 0
     # and for no `tracer.iter` at all, which is why 0 falls through to the count.
+    mediator = Mediator.current(key)
     call = mediator.iteration or mediator.occurrence(f"{envoy.path}.output")
 
-    # One record per key, on the envoy itself: (run, call, value).
-    cache = envoy.__dict__.setdefault("_per_call", {})
-    cached = cache.get(key)
+    # One record per (module, key) on this worker: (call, value).
+    records = getcurrent().__dict__.setdefault("_nnter_per_call", {})
+    slot = (envoy.path, key)
+    cached = records.get(slot)
 
-    # Compute on the first use, in a new run, or in a new call of the module.
-    # `compute()` may park the worker until the model reaches what it reads;
-    # the record is filed under the call decided above, the one that read lands in.
-    if cached is None or cached[0] is not mediator or cached[1] != call:
-        cache[key] = cached = (mediator, call, compute())
-    return cached[2]
+    # Compute on the first use, or in a new call of the module. `compute()` may
+    # park the worker until the model reaches what it reads; the record is
+    # filed under the call decided above, the one that read lands in.
+    if cached is None or cached[0] != call:
+        records[slot] = cached = (call, compute())
+    return cached[1]
 
 
-def at_occurrence(t: int):
-    """The ``for step in tracer.iter[t]`` stretch, for one occurrence of a location inside a call."""
-    from nnsight.intervention.iterator import Iterations
+@contextmanager
+def pinned(n: int | None):
+    """Pin this worker's reads to occurrence ``n`` of their location, as ``tracer.iter[n]`` does; ``None`` relaxes the pin.
 
-    return Iterations()[t : t + 1]
+    A pinned read is served at the n-th occurrence of its location and
+    relaxes the pin, so one read per ``with``. The pin the worker had is
+    restored on the way out.
+    """
+    mediator = Mediator.current("pinned")
+    previous, mediator.iteration = mediator.iteration, n
+    try:
+        yield
+    finally:
+        mediator.iteration = previous
 
 
 def kernel(attribute: str) -> Callable[[Envoy], str]:
@@ -260,11 +258,11 @@ class RecurrentMixer(Standard):
     """A sequence mixer with a recurrent state, read at the kernel call its forward makes.
 
     The mechanism every recurrent mixer shares, apart from what its values
-    are. A subclass names its kernels in four class constants and declares
+    are. A subclass names its kernels in class constants and declares
     its values at ``kernel("inputs")`` / ``kernel("output")``:
 
     * `BRANCH`: the binding the forward makes before it picks a kernel,
-      ``False`` on a prompt and ``True`` on a decode step.
+      ``True`` when the call continues from a cached state.
     * `CHUNK_KERNEL`: the call a prompt runs through.
     * `RECURRENT_KERNEL`: the call each decode step of ``generate`` runs
       through.
@@ -275,8 +273,11 @@ class RecurrentMixer(Standard):
       rather than the token loop (Mamba-1): the binding of the new state
       inside it. The prompt's kernel is then the token loop.
 
-    `KERNEL` reads `BRANCH` once per call and names the call that fires on
-    this step, so the same values work in a ``trace`` and at every step of
+    `KERNEL` names the call that fires on this call of the mixer, decided
+    once per call by the forward's own test: `RECURRENT_KERNEL` for one token
+    over a cached state (`BRANCH` true and a sequence axis of 1 at `SEQ_OP`),
+    `CHUNK_KERNEL` otherwise, a prompt or several tokens over a cached state.
+    So the same values work in a ``trace`` and at every step of
     ``tracer.iter``. The kernels have to be transformers' pure-torch ones
     for there to be a call to read inside (`needs_torch_kernels`).
 
@@ -292,7 +293,7 @@ class RecurrentMixer(Standard):
     reads `states` off the chunk scan's boundaries).
     """
 
-    #: The binding the forward makes before it branches: ``False`` on a prompt, ``True`` on a decode step.
+    #: The binding the forward makes before it branches: ``True`` when the call continues from a cached state.
     BRANCH = "use_precomputed_states_0"
     #: The call a prompt runs through.
     CHUNK_KERNEL: str | None = None
@@ -304,15 +305,28 @@ class RecurrentMixer(Standard):
     #: new state; ``None`` when the decode kernel is the token loop and binds `STATE_OP`. Set, the prompt's
     #: kernel is the token loop (Mamba-1's pure-torch selective scan).
     STEP_STATE_OP: str | None = None
-    #: Whichever kernel fires on this call, chosen by `BRANCH`; built from the constants.
-    KERNEL: Callable[[Envoy], str]
+    #: The forward's masking of its input, once per call on every mixer: ``[batch, seq, ...]``, the call's length.
+    SEQ_OP = "apply_mask_to_padding_states_0"
 
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        super().__init_subclass__(**kwargs)
-        declared = vars(cls)
-        if "KERNEL" not in declared and any(name in declared for name in ("BRANCH", "CHUNK_KERNEL", "RECURRENT_KERNEL")):
-            if cls.CHUNK_KERNEL and cls.RECURRENT_KERNEL:
-                cls.KERNEL = staticmethod(branched(cls.BRANCH, {False: cls.CHUNK_KERNEL, True: cls.RECURRENT_KERNEL}))
+    @staticmethod
+    def KERNEL(envoy: Envoy) -> str:
+        """The kernel call that fires on this call of the mixer, decided once per call (`per_call`).
+
+        The forward's own test, ``use_precomputed_states and seq_len == 1``:
+        the token-by-token update for one token over a cached state, the
+        prompt's kernel for everything else. The two bindings are read in the
+        order the forward makes them, which differs between mixers.
+        """
+        cls = type(envoy)
+
+        def choose() -> str:
+            source = envoy.source
+            ops = sorted((getattr(source, cls.BRANCH), getattr(source, cls.SEQ_OP)), key=lambda op: op.line)
+            served = {op.name: op.output for op in ops}
+            one = served[cls.BRANCH] and served[cls.SEQ_OP].shape[1] == 1
+            return cls.RECURRENT_KERNEL if one else cls.CHUNK_KERNEL
+
+        return per_call(envoy, "kernel", choose)
 
     @classmethod
     def _loop_kernel(cls) -> str:
@@ -337,16 +351,14 @@ class RecurrentMixer(Standard):
 
     @staticmethod
     def _token_state_op(envoy: Envoy) -> str:
-        # Unpinned, or pinned to index 0, a read decides the kernel like every
-        # other value (once per call, cached), so a call-level value read after
-        # a token loop still finds the branch decided. Pinned to a later token
-        # index it cannot read the branch variable — that fires once per call —
-        # so it takes the prompt's kernel, the one a token loop walks.
-        from nnsight.intervention.interleaver import Mediator
-
+        # Under `tracer.iter` the pin here is a token index, and the kernel
+        # call fires once per forward: the call's kernel is decided (once per
+        # call, cached) and drilled into with the pin relaxed, then the pinned
+        # read that follows asks for that token's occurrence of the state op.
         cls = type(envoy)
-        step = Mediator.current("state").iteration
-        kernel = cls.KERNEL(envoy) if step in (None, 0) else cls.CHUNK_KERNEL
+        with pinned(None):
+            kernel = cls.KERNEL(envoy)
+            getattr(envoy.source, kernel).source
         return f"source.{kernel}.source.{cls._state_op(kernel)}.output"
 
     @EProperty(_token_state_op, description="The recurrent state after one token of the prompt; iterate it with tracer.iter; needs route_kernels(family, 'torch')", unavailable=needs_recurrent_routing)
@@ -368,43 +380,35 @@ class RecurrentMixer(Standard):
         """This call's number of tokens, read off the kernel call (the queries' sequence axis on a DeltaNet)."""
         return self.attention_queries.shape[1]
 
-    def _call(self) -> tuple[int, int]:
-        """This call's sequence length and the occurrence its first token is, decided once per call.
+    def _token_op(self) -> tuple[SourceEnvoy, int, int]:
+        """This call's state-update op, the occurrence its first token is, and its sequence length, decided once per call.
 
         The kernel's arguments are served once per call: reading them parks
         the worker at the call's start, which is the one moment the state
         op's occurrence count is the number of tokens *earlier* calls put
-        through it. Occurrences are counted per location over the whole run,
-        so a decode step's single token is not occurrence 0 once an earlier
-        step has fired the recurrent kernel's op. Whichever per-token read
-        comes first in the call takes both numbers; the rest reuse them.
+        through it. Occurrences are counted per location since the op was
+        drilled into this run, so a decode step's single token is not
+        occurrence 0 once an earlier step has fired the recurrent kernel's
+        op. Whichever per-token read comes first in the call takes all three;
+        the rest reuse them.
         """
-        from nnsight.intervention.interleaver import Mediator
 
-        def compute():
+        def compute() -> tuple[SourceEnvoy, int, int]:
             seq = self._seq()
             kernel = type(self).KERNEL(self)
             op = getattr(getattr(self.source, kernel).source, self._state_op(kernel))
             location = f"{op.path}.output"
-            return seq, Mediator.current(location).occurrence(location)
+            return op, Mediator.current(location).occurrence(location), seq
 
         return per_call(self, "call", compute)
-
-    def _token_op(self) -> tuple[SourceEnvoy, int]:
-        """This call's state-update op and the occurrence its first token is (see `_call`)."""
-        _, first = self._call()
-        kernel = type(self).KERNEL(self)
-        op = getattr(getattr(self.source, kernel).source, self._state_op(kernel))
-        return op, first
 
     def _states(self) -> States:
         # Through whichever kernel call fires on this step, so a decode step's
         # one-token call answers too; `state` alone is the prompt's location.
-        seq, _ = self._call()
-        op, first = self._token_op()
+        op, first, seq = self._token_op()
         states = []
         for t in range(seq):
-            for _ in at_occurrence(first + t):
+            with pinned(first + t):
                 states.append(op.output)
         return torch.stack(states, dim=1)
 
@@ -425,10 +429,9 @@ class RecurrentMixer(Standard):
     def state_after(self, t: int) -> torch.Tensor:
         """The state after token ``t`` of this call: ``for _ in tracer.iter[t]: mix.state`` on a prompt, as a call that also counts from the call's own first token on a decode step."""
         self._require_state("state_after")
-        op, first = self._token_op()
-        for _ in at_occurrence(first + t):
+        op, first, _ = self._token_op()
+        with pinned(first + t):
             return op.output
-        raise RuntimeError(f"this call had no token {t}")
 
     def set_state_after(self, t: int, value: torch.Tensor) -> None:
         """Assign `state` at token ``t``: the tokens after it continue from ``value``.
@@ -438,6 +441,6 @@ class RecurrentMixer(Standard):
         after it afterwards; `states` (every position) only before it.
         """
         self._require_state("set_state_after")
-        op, first = self._token_op()
-        for _ in at_occurrence(first + t):
+        op, first, _ = self._token_op()
+        with pinned(first + t):
             op.output = value
