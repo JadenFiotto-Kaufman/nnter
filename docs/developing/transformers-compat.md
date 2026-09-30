@@ -73,7 +73,7 @@ The module binds `attention_interface = ALL_ATTENTION_FUNCTIONS.get_interface(..
 (`modeling_llama.py:191-209`) the pattern is `nn.functional.softmax(...)`
 then `nn.functional.dropout(...)`: `nn_functional_softmax_0` (its `.input`
 is `attention_scores`) and `nn_functional_dropout_0` (its `.output` is
-`attention_probabilities`, `attention.py:105`, `:130-132`). The interface's
+`attention_probabilities`, `attention.py:154`, `:179-181`). The interface's
 `inputs` positions 1, 2, 3 are queries, keys, values, and `output[0]` is the
 head outputs (`:74-103`, `:149`).
 
@@ -125,7 +125,7 @@ keys, and nnsight binds whichever resolves (`gpt_neox.py:17-20`).
 `tests/families/suite.py` runs on every family's pinned checkpoint
 ([testing.md](testing.md)):
 
-- `test_every_source_value_resolves_on_every_layer` (`suite.py:319-334`):
+- `test_every_source_value_resolves_on_every_layer` (`suite.py:320-335`):
   every available value on the family's `Attention` whose path is inside a
   forward reads a tensor on every attention block. A renamed op fails here
   with `SourceNotAvailable` naming the missing op and the ops that exist

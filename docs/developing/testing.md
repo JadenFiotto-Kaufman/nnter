@@ -53,11 +53,11 @@ order hold in every process pytest starts.
 
 A family's test file subclasses `FamilySuite`, sets the class attributes,
 and inherits every method. Two class-scoped fixtures load the checkpoint
-once per class: `model` (`suite.py:87-91`), a `StandardizedTransformer` with
+once per class: `model` (`suite.py:88-92`), a `StandardizedTransformer` with
 `dispatch=True, attn_implementation="eager"` plus `LOAD_KWARGS`, and
 `raw_model` (`:93-97`), the same checkpoint as a plain `TransformersModel`.
 
-### Class attributes (`suite.py:60-85`)
+### Class attributes (`suite.py:61-86`)
 
 | attribute | meaning |
 |---|---|
@@ -84,7 +84,7 @@ hybrid and drops `mlp.mlp_output` when no block has an MLP module (OPT). `VALUES
 
 ### The test methods, by what they assert
 
-**Names** (`suite.py:114-154`)
+**Names** (`suite.py:115-155`)
 
 | method | asserts |
 |---|---|
@@ -162,6 +162,7 @@ hybrid and drops `mlp.mlp_output` when no block has an MLP module (OPT). `VALUES
 | `test_token_embeddings_are_the_embedding_output` | equals `embed_tokens.output`; assigning it moves the logits |
 | `test_next_token_probs` | equals `logits[:, -1].softmax(-1)`, prints in the repr, assignment raises `AttributeError` |
 | `test_sizes_match_the_model` | `num_layers`, `num_heads` against the pattern, `hidden_size` against the stream, `1 <= num_kv_heads <= num_heads`, `q_proj`/`o_proj` widths, and the MLP width appears in some block parameter's shape |
+| `test_per_module_sizes_match_each_block` | each attention block's `self_attn.num_heads`, `num_kv_heads`, `head_dim`, `qk_head_dim` against its `q_proj`/`k_proj`/`v_proj`/output projection widths, and against the queries, keys, values, pattern and head outputs of one block of each kind (module type and parameter shapes); each `mlp.intermediate_size` is an axis of its own (routed experts') weights, the root's on a dense block, `MLP_WIDTH_KEY` on the first MLP block where set |
 | `test_repr_lists_the_values` | the block repr lists `layer_output`, `attention_output`, `attention_probabilities`, `attention_queries`, `attention_head_outputs`, and `mlp_output` when there is an MLP |
 
 ## How a family file adds specifics
@@ -286,7 +287,7 @@ session collector agrees; `compute_next_token_probs` rows sum to one.
 
 - Names bound inside a `with model.trace(...)` block do not survive it;
   the suite pre-binds containers (`read = {}`, `saved = None`) outside the
-  block (`suite.py:197`, `:472`). A plain list built inside the block needs
+  block (`suite.py:198`, `:472`). A plain list built inside the block needs
   `.save()` too.
 - Reads in one trace follow the forward: the suite reads one interior value
   per trace (`:327`, `:340`) because families bind them at different points.

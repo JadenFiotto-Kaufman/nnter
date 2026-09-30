@@ -100,7 +100,7 @@ Every row is an `EProperty` on the root, listed in `repr(model)` with its descri
 
 ### Sizes, outside a trace
 
-Each is a `StandardizedProperty`: it reads the config by the plain rule unless the model's family module defines a function of the same name (`def intermediate_size(model)` in `gpt2.py`), which then answers. What each family reads is in [../usage/root-values.md](../usage/root-values.md#sizes).
+Each is a `StandardizedProperty`: it reads the config by the plain rule unless the model's family module defines a function of the same name (`def intermediate_size(model)` in `gpt2.py`), which then answers. What each family reads is in [../usage/root-values.md](../usage/root-values.md#sizes). A root size is the config's value, equal to every block's where the blocks agree; on Gemma-4 and MiMo-V2-Flash, whose blocks differ, each block's own is on its [`Attention`](#attention) and [`Mlp`](#mlp).
 
 | Property | Plain rule | Family spellings |
 |---|---|---|
@@ -164,12 +164,20 @@ Each layout is the alias `.layout` returns (`Attention.attention_keys.layout is 
 |---|---|
 | `off_interface() -> str \| None` | Why the shared interface does not run on this module, or `None`. |
 | `SINK` | `True` on a family whose pattern rows sum to less than one (GPT-OSS). |
+| `num_heads` | This block's query heads: the module's `num_heads` / `num_attention_heads` / `n_heads` / `n_head`, else the output projection's input width over `head_dim`. |
+| `num_kv_heads` | This block's key/value heads as projected: the module's `num_key_value_heads` / `num_kv_heads` / `kv_heads`, else `num_heads // num_key_value_groups`, else `k_proj`'s width over `qk_head_dim`, else `num_heads`. |
+| `head_dim` | This block's value and head-output width: the module's `v_head_dim`, else `head_dim` / `head_size`. |
+| `qk_head_dim` | This block's query and key width: the module's `qk_head_dim`, else `head_dim` / `head_size`. |
+
+The four sizes are plain read-only properties, read off the module outside or inside a trace (`model.layers[i].self_attn.num_heads`), so they are the block's own on a model whose blocks differ. A family whose module spells a size another way overrides the property on its subclass; a module the base cannot read raises `NotImplementedError` naming the size.
 
 ## `Mlp`
 
 | Value | Layout | Base location | Assignable | Availability |
 |---|---|---|---|---|
 | `mlp_output` | `Residual` | the module's `.output`, first tensor (a mixture of experts returns router scores beside it) | yes; in place reaches the model (Falcon: through a transform, on a copy) | always where the block has an MLP module; OPT has none, so `status()` lists no `mlp.*` key |
+
+`intermediate_size`, a plain read-only property, is this block's hidden width, one routed expert's on a mixture of experts: the module's `experts.intermediate_dim` / `expert_dim` / `intermediate_size` / `ffn_hidden_size`, else its own `intermediate_size` / `ffn_dim`, else the input width of `down_proj` / `c_proj` / `dense_4h_to_h` / `fc2` / `fc_out` / `w2`. JetMoE's `Mlp` overrides it (`hidden_size` on its module is the experts' width).
 
 ## `RecurrentMixer`
 
@@ -373,6 +381,7 @@ The axis names are the same on every layout (`batch` axis 0 everywhere, `seq` th
 | `seq_first` | `seq_first(value: Tensor) -> Tensor` | `value.transpose(1, 2)`: `[batch, heads, seq, d]` to `[batch, seq, heads, d]` as a view, and its own inverse. Used by families whose arithmetic keeps heads first. |
 | `first_tensor` | `first_tensor(value) -> Tensor` | The first element of a tuple output, or the tensor itself. |
 | `rewrap` | `rewrap(envoy, value: Tensor) -> Any` | `value` back in the module's current output tuple, if any. |
+| `module_int`, `in_width` | `module_int(module, *names) -> int \| None`, `in_width(module, *names) -> int \| None` | The first of `names` the module holds as an integer; the input width of the first of `names` it has as a projection (`nn.Linear` or `Conv1D`). What the per-module sizes read with. Defined in `nnter.components.standard`. |
 
 ## `nnter.prompt_utils`
 

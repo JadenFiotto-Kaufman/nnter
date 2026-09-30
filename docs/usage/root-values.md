@@ -1,9 +1,9 @@
 ---
 title: Root values and sizes
-one_liner: "The model answers for the whole run — `logits`, `token_embeddings`, `next_token_probs`, `input_ids`, `attention_mask`, `input_size` — and for its sizes from the config."
+one_liner: "The model answers for the whole run — `logits`, `token_embeddings`, `next_token_probs`, `input_ids`, `attention_mask`, `input_size` — and for its sizes from the config; each block's own sizes are on its attention and MLP."
 tags: [usage, logits, token_embeddings, next_token_probs, input_ids, sizes, config]
 related: [docs/usage/residual-stream.md, docs/usage/methods.md, docs/usage/layouts.md, docs/usage/availability.md, docs/extending/adding-a-family.md]
-sources: [nnter/standardized.py, nnter/components/eproperty.py, nnter/families/falcon.py, nnter/families/deepseek_v2.py, nnter/families/gpt2.py]
+sources: [nnter/standardized.py, nnter/components/eproperty.py, nnter/components/attention.py, nnter/components/mlp.py, nnter/families/falcon.py, nnter/families/deepseek_v2.py, nnter/families/gpt2.py]
 ---
 
 # Root values and sizes
@@ -140,6 +140,21 @@ which case that function answers. The plain rule is what a Llama-style config ne
 family whose config spells a size its own way keeps that spelling beside its names and
 values, and anything the family does not define falls to the plain rule.
 
+A root size is the config's value, equal to every block's on the families where the
+blocks agree. Some sizes belong to one attention or MLP module, and on a family whose
+blocks differ (Gemma-4, MiMo-V2-Flash) the root reports the config's top-level value
+while each block's own is on `layers[i].self_attn` (`num_heads`, `num_kv_heads`,
+`head_dim`, `qk_head_dim`) and `layers[i].mlp` (`intermediate_size`, one routed expert's
+on a mixture of experts). Those are read off the module itself, outside or inside a
+trace:
+
+```python
+model = StandardizedTransformer("hf-tiny-v2/tiny-random-MiMoV2FlashForCausalLM")
+model.num_kv_heads                                         # 2: the config's
+[layer.self_attn.num_kv_heads for layer in model.layers]   # [2, 4]: the sliding block has twice
+[layer.mlp.intermediate_size for layer in model.layers]    # [64, 16]: the dense MLP, then one expert
+```
+
 | size | the plain rule |
 | --- | --- |
 | `num_layers` | `len(model.layers)` |
@@ -164,7 +179,7 @@ The families whose configs say it otherwise:
 | `opt` | `intermediate_size` | `config.ffn_dim` |
 | `mpt` | `intermediate_size` | `config.expansion_ratio * hidden_size` |
 | `bloom` | `intermediate_size` | `4 * hidden_size`; the config has no key for it |
-| `gemma4_text`, `gemma4_unified_text` | `head_dim`, `num_kv_heads` | the config's top-level `head_dim` / `num_key_value_heads`, the sliding blocks'. transformers marks both per-layer and refuses a plain `config.head_dim`; the full blocks' (512-wide heads, often fewer key/value heads) are `config.get_text_config().per_layer_config[i]` and the shapes of their tensors. |
+| `gemma4_text`, `gemma4_unified_text` | `head_dim`, `num_kv_heads` | the config's top-level `head_dim` / `num_key_value_heads` as stored, the sliding blocks'. transformers marks both per-layer and refuses a plain `config.head_dim`; the full blocks' (512-wide heads, often fewer key/value heads) are on `layers[i].self_attn`. |
 
 On the tiny checkpoints:
 
@@ -182,15 +197,19 @@ a Qwen3 checkpoint with `hidden_size=8`, `num_heads=4` and `head_dim=128` has 12
 heads. On DeepSeek-V3 `head_dim` (values, 128) and `qk_head_dim` (queries and keys, 192)
 differ; see [layouts](layouts.md), which also names each root value's layout (`Logits`,
 `Residual`, `NextTokenProbs`, `Tokens`). A mixture of experts' experts are
-`config.moe_intermediate_size` wide, not `intermediate_size`.
+`config.moe_intermediate_size` wide, not `intermediate_size`; `layers[i].mlp.intermediate_size`
+is the block's own.
 
 A family of your own, shipped or passed to `nnter.families.register()`, defines a size the
 same way: [adding-a-family](../extending/adding-a-family.md#sizes).
 
 ## Gotchas
 
-- **On Gemma-4 the sizes are the sliding blocks'.** A full-attention block's `head_dim` and
-  key/value heads differ; read them off its tensors.
+- **On Gemma-4 and MiMo-V2-Flash the root's sizes are the config's top-level ones.** A
+  Gemma-4 full-attention block's `head_dim` and key/value heads differ, a MiMo-V2-Flash
+  sliding block has twice the key/value heads, and Gemma-4 E2B's KV-sharing blocks have a
+  double-width MLP: read `layers[i].self_attn.head_dim`, `.num_kv_heads` and
+  `layers[i].mlp.intermediate_size`.
 - **`logits` is not `lm_head.output` on Gemma-2, Gemma-4, Cohere or Granite.** Use `logits` for the
   model's prediction and `lm_head.output` only when you want the raw projection.
 - **`next_token_probs` and `input_size` are read-only.** Assign `logits` or `input_ids`.
@@ -200,7 +219,7 @@ same way: [adding-a-family](../extending/adding-a-family.md#sizes).
 - **Assigning `input_ids` does not resize the mask.** Assign `attention_mask` to match when
   the new ids have another length.
 - **`intermediate_size` is the dense MLP's width.** For an all-MoE family read
-  `config.moe_intermediate_size`.
+  `config.moe_intermediate_size`, or a block's `layers[i].mlp.intermediate_size`.
 - **A size is read-only.** `model.hidden_size = 5` raises `AttributeError: hidden_size is
   read off the config; a family defines `def hidden_size(model)` to say it otherwise`. The
   family module is the one place a size is said.

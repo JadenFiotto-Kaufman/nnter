@@ -125,10 +125,10 @@ from the host envoy:
 |---|---|---|
 | `output` (last) | the current node's output | `"output"`: `Layer.layer_output` (`layer.py:58`), a view over the same location as `.output` |
 | `input` (last) | the first argument of the current node's call (fact 6) | `"source.dropout_add_0.input"`: BLOOM's contribution (`families/bloom.py:73-78`) |
-| `inputs` (last) | the `(args, kwargs)` pair, one element of it with `select` | `"inputs"` on the root: `input_ids` (`standardized.py:352-360`); `"source.attention_interface_1.inputs"` with `select=1`: `attention_queries` (`attention.py:91`) |
+| `inputs` (last) | the `(args, kwargs)` pair, one element of it with `select` | `"inputs"` on the root: `input_ids` (`standardized.py:352-360`); `"source.attention_interface_1.inputs"` with `select=1`: `attention_queries` (`attention.py:140`) |
 | `../` (leading, repeatable) | the parent module, by native name | `"../post_attention_layernorm.output"`: Gemma-2's `attention_output` (`families/gemma2.py:30-36`) |
 | a name | a child module of the current node, aliases included; under a `source`, an operation | `"embed_tokens.output"`: `token_embeddings` (`standardized.py:186-194`) |
-| `source` | the current module's or operation's forward, instrumented for this run | `"source.attention_interface_1.source.nn_functional_dropout_0.output"`: `attention_probabilities` (`attention.py:147-153`); `"../source.hidden_states_view_0.output"`: Llama 4's `mlp_output` (`families/llama4_text.py:106-112`) |
+| `source` | the current module's or operation's forward, instrumented for this run | `"source.attention_interface_1.source.nn_functional_dropout_0.output"`: `attention_probabilities` (`attention.py:196-202`); `"../source.hidden_states_view_0.output"`: Llama 4's `mlp_output` (`families/llama4_text.py:106-112`) |
 | a function of the host | returns a path, at read time, inside the trace | Falcon's `by_alibi(without, with_alibi, attribute)` (`families/falcon.py:51-58`), a `RecurrentMixer`'s `kernel("inputs")` (`recurrent.py:247-254`), which names the call `RecurrentMixer.KERNEL` picks (`:311-329`) |
 
 ### `_resolve`: the walk
@@ -208,12 +208,12 @@ value and `_put(attribute, current, element)` (`:209-223`) puts one back;
   with the call's other arguments intact. Nothing is destructured in the
   stub.
 - `inputs` with an int `select` is `args[n]`, with a str `kwargs[name]`
-  (`attention_queries` is `select=1`, `attention.py:91`; a DeltaNet `decays`
+  (`attention_queries` is `select=1`, `attention.py:140`; a DeltaNet `decays`
   is `select="g"`, `linear_attention.py:66`); with no `select` it is the
   pair (the root's `input_ids`, whose stub takes `kwargs["input_ids"]` and
   whose postprocess puts it back, `standardized.py:352-360`).
 - `output` with an int `select` is one element of the returned tuple
-  (`attention_head_outputs` is `select=0`, `attention.py:166`); with no
+  (`attention_head_outputs` is `select=0`, `attention.py:215`); with no
   `select` it is the value as returned.
 
 A write that selects (a `select`, or an `input` attribute, `:257`)
@@ -254,7 +254,7 @@ what a tuple-returning module would need to rebuild its container
   the tree names an operation). So `"source.dropout_add_0.input"` and
   `"../source.hidden_states_view_0.output"` both answer `True`, and
   `"../post_attention_layernorm.output"` `False`. The suite uses it to pick
-  the interior values of a family's `Attention` (`tests/families/suite.py:319-334`).
+  the interior values of a family's `Attention` (`tests/families/suite.py:320-335`).
   It says where a value is, not when its forward has to be instrumented;
   that is the host's `sourced` flag, below.
 
@@ -299,7 +299,7 @@ block.
 
 ## `Standard`: the `sourced` flag
 
-`Standard` (`components/standard.py:34-69`) is the envoy every component
+`Standard` (`components/standard.py:61-96`) is the envoy every component
 derives from, and it carries one flag about forwards. A value that is an
 operation inside a forward is served only on a call whose forward was
 instrumented before the call began. The drill at read time (fact 5) is

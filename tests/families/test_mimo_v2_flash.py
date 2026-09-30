@@ -38,7 +38,7 @@ class TestMiMoV2Flash(FamilySuite):
             keys = sliding.attention_keys.save()
         with model.trace(PROMPT):
             probs = sliding.attention_probabilities.save()
-        assert keys.shape[1] == 2 * model.num_kv_heads
+        assert keys.shape[1] == sliding.num_kv_heads == 2 * model.num_kv_heads
         sums = probs.sum(-1)
         assert (sums < 1).all() and (sums > 0).all()
         torch.testing.assert_close(with_sink(scores, sliding._module.sinks), probs)

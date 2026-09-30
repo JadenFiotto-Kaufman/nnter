@@ -115,7 +115,7 @@ the ones that matter most here:
   axis against the model's sizes. A new shape is a new name defined beside the
   envoy that serves it, with a comment above it, and exported from
   `nnter.components`. Axis names are the shared set in those comments and in
-  `suite.py:447-453`.
+  `suite.py:448-454`.
 - **Every source-located value has an `unavailable=` predicate** (`needs_eager`,
   `interface_reason`, `needs_torch_kernels`, or a family's own), so `status()`
   can answer before a trace runs and a read raises `Unavailable` rather than

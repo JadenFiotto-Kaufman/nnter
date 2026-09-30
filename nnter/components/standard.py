@@ -21,6 +21,33 @@ def rewrap(envoy: Envoy, value: torch.Tensor) -> Any:
     return (value, *current[1:]) if isinstance(current, tuple) else value
 
 
+def module_int(module: Any, *names: str) -> int | None:
+    """The first of ``names`` the module holds as an integer, or ``None``."""
+    for name in names:
+        value = getattr(module, name, None)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    return None
+
+
+def in_width(module: Any, *names: str) -> int | None:
+    """The input width of the first of ``names`` the module has as a projection (``nn.Linear``, or transformers' ``Conv1D``), or ``None``."""
+    for name in names:
+        projection = getattr(module, name, None)
+        width = getattr(projection, "in_features", None) or getattr(projection, "nx", None)
+        if isinstance(width, int):
+            return width
+    return None
+
+
+def unsized(envoy: Envoy, name: str) -> NotImplementedError:
+    """The error a size raises when the module spells it no way the base reads."""
+    return NotImplementedError(
+        f"{type(envoy._module).__name__} holds no {name} under a name {type(envoy).__name__} reads; "
+        f"the family's {type(envoy).__name__} subclass overrides `{name}`"
+    )
+
+
 def values(cls: type) -> dict[str, EProperty]:
     """A class's standard values by name, base classes first."""
     found: dict[str, EProperty] = {}

@@ -241,6 +241,12 @@ qk_rope_head_dim`; DeepSeek-V3 imports both from `deepseek_v2`), GPT-2 and GPT-J
 fails there; `MLP_WIDTH_KEY` is for a family whose `intermediate_size` is right but
 unused by the model (an all-MoE family's experts).
 
+Each block's own sizes (`self_attn.num_heads`, `.num_kv_heads`, `.head_dim`,
+`.qk_head_dim`, `mlp.intermediate_size`) are read off the module by the base `Attention`
+and `Mlp`. A module that keeps a size under another name overrides the property on the
+family's subclass (JetMoE's `Mlp` returns its module's `hidden_size`);
+`test_per_module_sizes_match_each_block` fails when one is wrong.
+
 ### The logits
 
 `project_on_vocab(hidden)` is `lm_head(norm(hidden))`, then what the model does after the

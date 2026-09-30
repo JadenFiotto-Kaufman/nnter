@@ -16,6 +16,7 @@ from nnter import StandardizedTransformer, Unavailable
 from nnter.components import (
     Attention, EProperty, Layer, LinearAttention, Mlp, RecurrentMixer, SelectiveScan, Standard, StateSpace,
 )
+from nnter.components.standard import in_width
 
 PROMPT = "Hello world there"
 
@@ -629,6 +630,60 @@ class FamilySuite:
         assert isinstance(model.intermediate_size, int)  # resolves on every family, whatever the config calls it
         width = getattr(model.config.get_text_config(), self.MLP_WIDTH_KEY) if self.MLP_WIDTH_KEY else model.intermediate_size
         assert width in dims, (self.MLP_WIDTH_KEY or "intermediate_size", width, dims)
+
+    def test_per_module_sizes_match_each_block(self, model):
+        """Each block's attention and MLP report the sizes of their own tensors.
+
+        Outside a trace against every block's projections; inside one against
+        the interior of one block of each kind (module type and parameter
+        shapes), where the served values are available.
+        """
+        kinds = {}
+        for layer in self.attn_blocks(model):
+            attn, module = layer.self_attn, layer.self_attn._module
+            heads, kv, head_dim, qk = attn.num_heads, attn.num_kv_heads, attn.head_dim, attn.qk_head_dim
+            assert all(isinstance(size, int) and size > 0 for size in (heads, kv, head_dim, qk)), layer.path
+            assert heads % kv == 0, (layer.path, heads, kv)
+            out = in_width(module, "o_proj", "out_proj", "dense", "c_proj", "wo")
+            assert out in (None, heads * head_dim), (layer.path, out, heads, head_dim)
+            for name, width in (("q_proj", heads * qk * (2 if self.QUERY_GATED else 1)), ("k_proj", kv * qk), ("v_proj", kv * head_dim)):
+                projection = getattr(module, name, None)
+                if isinstance(projection, torch.nn.Linear):
+                    assert projection.out_features == width, (layer.path, name, projection.out_features, width)
+            kinds.setdefault((type(module), tuple(tuple(p.shape) for p in module.parameters())), layer)
+        for layer in kinds.values():
+            attn = layer.self_attn
+            status = attn.status()
+            kv = attn.num_heads if self.KV_HEADS_EXPANDED else attn.num_kv_heads
+            widths = (attn.head_dim, attn.qk_head_dim) if self.KV_HEADS_EXPANDED else (attn.head_dim,)  # latent attention may pad values
+            expected = {
+                "attention_queries": lambda t: t.shape[1] == attn.num_heads and t.shape[3] == attn.qk_head_dim,
+                "attention_keys": lambda t: t.shape[1] == kv and t.shape[3] == attn.qk_head_dim,
+                "attention_values": lambda t: t.shape[1] == kv and t.shape[3] in widths,
+                "attention_probabilities": lambda t: t.shape[1] == attn.num_heads,
+                "attention_head_outputs": lambda t: t.shape[2] == attn.num_heads and t.shape[3] in widths,
+            }
+            for name, check in expected.items():
+                if status[name] is not None:
+                    continue
+                with model.trace(PROMPT):  # one trace each: families bind these at different points of the forward
+                    tensor = getattr(attn, name).save()
+                assert check(tensor), (layer.path, name, tuple(tensor.shape), attn.num_heads, kv, attn.head_dim, attn.qk_head_dim)
+        # The MLP's width is an axis of its own weights (its routed experts', on a
+        # mixture, flattened over the experts on DBRX); the root's on a dense block;
+        # the family's MLP_WIDTH_KEY on the first MLP block where the suite names one.
+        mlps = [layer.mlp for layer in model.layers if getattr(layer, "mlp", None) is not None]
+        for mlp in mlps:
+            width = mlp.intermediate_size
+            experts = getattr(mlp._module, "experts", None)
+            params = list((experts if experts is not None else mlp._module).parameters())
+            count = getattr(experts, "num_experts", None) or 1
+            dims = {d for p in params for d in p.shape} | {d // count for p in params for d in p.shape if d % count == 0}
+            assert width in dims, (mlp.path, width, dims)
+            if experts is None:
+                assert width == model.intermediate_size, (mlp.path, width, model.intermediate_size)
+        if mlps and self.MLP_WIDTH_KEY:
+            assert mlps[0].intermediate_size == getattr(model.config.get_text_config(), self.MLP_WIDTH_KEY)
 
     def test_repr_lists_the_values(self, model):
         blocks = self.attn_blocks(model)

@@ -41,7 +41,12 @@ class Attention(Attention):
 
 
 class Mlp(Mlp):
-    """A mixture of experts: the module returns the routed hidden states (plus its bias) as a bare tensor, so the base holds."""
+    """A mixture of experts: the module returns the routed hidden states (plus its bias) as a bare tensor, so the base `mlp_output` holds; the width is spelled its own way."""
+
+    @property
+    def intermediate_size(self) -> int:
+        """One expert's width: the module calls it ``hidden_size`` (its ``input_size`` is the model's)."""
+        return self._module.hidden_size
 
 
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.
