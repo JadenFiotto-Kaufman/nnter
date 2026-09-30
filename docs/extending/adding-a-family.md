@@ -3,7 +3,7 @@ title: Adding a Family
 one_liner: Write one module named after `config.model_type` with `MODEL_TYPES`, `RENAME`, three envoy subclasses and `ENVOYS`, a `def <size>(model)` for any root size the config spells its own way, plus one test file subclassing `FamilySuite`.
 tags: [extending, families, rename, envoys, tests]
 related: [docs/extending/overriding-values.md, docs/extending/custom-values.md, docs/extending/finding-source-ops.md, docs/extending/registering.md]
-sources: [nnter/families/__init__.py, nnter/families/llama.py, nnter/families/gpt2.py, nnter/families/falcon.py, nnter/components/__init__.py, nnter/components/layer.py, nnter/standardized.py, tests/families/suite.py, tests/families/test_llama.py, tests/families/test_gpt2.py]
+sources: [nnter/families/__init__.py, nnter/families/llama.py, nnter/families/gpt2.py, nnter/families/falcon.py, nnter/families/cohere.py, nnter/components/__init__.py, nnter/components/layer.py, nnter/standardized.py, tests/families/suite.py, tests/families/test_llama.py, tests/families/test_gpt2.py]
 ---
 
 # Adding a Family
@@ -120,7 +120,8 @@ ENVOYS = {GPT2Block: Layer, GPT2Attention: Attention, GPT2MLP: Mlp}
 5. Key them in `ENVOYS` on the transformers module classes.
 6. Define `def <size>(model)` for any root size the config spells its own way
    (`intermediate_size` on a config with `n_inner` or `ffn_dim`); leave the rest to the
-   root ([Sizes](#sizes) below).
+   root ([Sizes](#sizes) below). Define `def project_on_vocab(model, hidden)` if the model
+   scales the head's output ([The logits](#the-logits)).
 7. Add `tests/families/test_<model_type>.py` and run it.
 
 ### `RENAME`
@@ -228,6 +229,28 @@ qk_rope_head_dim`; DeepSeek-V3 imports both from `deepseek_v2`), GPT-2 and GPT-J
 `test_sizes_match_the_model` checks each size against the weights, so a wrong spelling
 fails there; `MLP_WIDTH_KEY` is for a family whose `intermediate_size` is right but
 unused by the model (an all-MoE family's experts).
+
+### The logits
+
+`project_on_vocab(hidden)` is `lm_head(norm(hidden))`, then what the model does after the
+head: the root's applies the text config's `final_logit_softcapping` when it is set. A family
+whose model does something else to the head's output defines
+`def project_on_vocab(model, hidden)` in its module, which is bound in the root's place the
+way a size function is (`project_on_vocab` is a `StandardizedCapability`,
+`StandardizedProperty` for a method), so the logit lens on the last block still equals
+`logits`:
+
+```python
+# nnter/families/cohere.py
+
+def project_on_vocab(model: "StandardizedTransformer", hidden: torch.Tensor) -> torch.Tensor:
+    """The logit lens as the model makes its logits: the final norm, ``lm_head``, then times ``logit_scale``."""
+    return model.lm_head(model.norm(hidden)) * model.config.logit_scale
+```
+
+Granite's divides by `logits_scaling`; Cohere-2 imports Cohere's. The suite's
+`test_logits_are_the_models_output` and `test_project_on_vocab_is_the_logit_lens` both check
+`project_on_vocab(layers[-1].layer_output) == logits`, so a missing or wrong one fails there.
 
 ## A complete template
 

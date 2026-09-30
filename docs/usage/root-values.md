@@ -49,6 +49,11 @@ torch.equal(logits, raw)                          # False on Gemma-2, True on GP
 torch.allclose(logits, cap * torch.tanh(raw / cap))   # True
 ```
 
+`model.project_on_vocab(hidden)` ends with that step on any family: the softcap by default,
+and the family's own where the model does something else after the head (Cohere multiplies
+by `logit_scale`, Granite divides by `logits_scaling`), so `project_on_vocab` of the last
+block's `layer_output` equals `logits` everywhere ([methods.md](methods.md#project_on_vocabhidden)).
+
 Assigning replaces the logits in the model's output, so `tracer.result.logits` is what you
 set:
 
@@ -182,8 +187,8 @@ same way: [adding-a-family](../extending/adding-a-family.md#sizes).
 
 ## Gotchas
 
-- **`logits` is not `lm_head.output` on Gemma-2.** Use `logits` for the model's prediction
-  and `lm_head.output` only when you want the raw projection.
+- **`logits` is not `lm_head.output` on Gemma-2, Cohere or Granite.** Use `logits` for the
+  model's prediction and `lm_head.output` only when you want the raw projection.
 - **`next_token_probs` and `input_size` are read-only.** Assign `logits` or `input_ids`.
 - **`next_token_probs` assumes the last position is the last token.** Left-pad a batch.
 - **Forward order.** `input_ids` and `token_embeddings` come before any block's value in

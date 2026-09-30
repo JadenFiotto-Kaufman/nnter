@@ -3,6 +3,7 @@
 import types
 
 import pytest
+import torch
 from nnsight.intervention.envoy import Envoy
 from transformers import AutoModelForCausalLM
 
@@ -129,6 +130,31 @@ def test_family_defines_a_size_instead_of_the_root():
     assert model.hidden_size == 999
     assert model.num_heads == model.config.num_attention_heads  # the rest keep the root's
     assert StandardizedTransformer(GPT2).hidden_size == StandardizedTransformer(GPT2).config.hidden_size
+
+
+def test_family_defines_project_on_vocab_instead_of_the_softcap():
+    """A `project_on_vocab(model, hidden)` in the family module is bound in the root's place; the root's applies the softcap."""
+    from nnter.standardized import StandardizedCapability
+
+    custom = types.SimpleNamespace(
+        MODEL_TYPES=("gpt2",), RENAME=gpt2.RENAME, ENVOYS=gpt2.ENVOYS,
+        project_on_vocab=lambda model, hidden: model.lm_head(model.norm(hidden)) * 2,
+    )
+    try:
+        families.register(custom)
+        model = StandardizedTransformer(GPT2, dispatch=True)
+    finally:
+        del families.REGISTRY["gpt2"]
+    plain = StandardizedTransformer(GPT2, dispatch=True)
+    hidden = torch.randn(1, 3, plain.hidden_size).to(plain.lm_head.weight)
+    assert isinstance(StandardizedTransformer.project_on_vocab, StandardizedCapability)
+    torch.testing.assert_close(model.project_on_vocab(hidden), plain.project_on_vocab(hidden) * 2)
+    plain.config.final_logit_softcapping = 2.0
+    try:
+        raw = plain.lm_head(plain.norm(hidden))
+        torch.testing.assert_close(plain.project_on_vocab(hidden), 2.0 * torch.tanh(raw / 2.0))
+    finally:
+        plain.config.final_logit_softcapping = None
 
 
 def test_sizes_are_read_only():
