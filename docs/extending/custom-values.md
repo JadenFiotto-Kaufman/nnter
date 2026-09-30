@@ -44,7 +44,7 @@ class Attention(gpt2.Attention):
 
     @EProperty(
         "source.attention_interface_1.source.nn_functional_softmax_0.output",
-        description="The softmax output before the dropout, [batch, heads, query, key]",
+        description="The softmax output before the dropout",
         unavailable=interface_reason,
     )
     def attention_softmax(self, value) -> Pattern:
@@ -52,7 +52,7 @@ class Attention(gpt2.Attention):
 
     attention_entropy = DerivedEProperty(
         attention_entropy,
-        description="Per-row entropy of the pattern, [batch, heads, query]",
+        description="Per-row entropy of the pattern",
         unavailable=interface_reason,
     )
 
@@ -71,9 +71,9 @@ with model.trace("The Eiffel Tower is in"):
 The repr of `attn` lists both beside the standard ones:
 
 ```
-(attention_softmax): The softmax output before the dropout, [batch, heads, query, key]
-(attention_entropy): Per-row entropy of the pattern, [batch, heads, query]
-(attention_queries): The queries entering attention, [batch, heads, seq, head_dim]
+(attention_softmax) -> Pattern [batch heads query key]: The softmax output before the dropout
+(attention_entropy) -> Float[Tensor, 'batch heads query'] [batch heads query]: Per-row entropy of the pattern
+(attention_queries) -> Queries [batch heads seq qk_head_dim]: The queries entering attention
 ...
 ```
 

@@ -190,7 +190,7 @@ exists.
 
   ```python
   # nnter/components/attention.py
-  @EProperty(f"source.{INTERFACE}.inputs", select=1, description="The queries entering attention, [batch, heads, seq, head_dim]", unavailable=interface_reason)
+  @EProperty(f"source.{INTERFACE}.inputs", select=1, description="The queries entering attention", unavailable=interface_reason)
   def attention_queries(self, value: torch.Tensor) -> Queries:
       return value
   ```

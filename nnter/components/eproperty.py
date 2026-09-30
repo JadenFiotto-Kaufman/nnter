@@ -135,19 +135,37 @@ class EProperty(eproperty):
         import types
         import typing
 
-        func = self._preprocess
-        if func is None:
-            return None
-        hint = typing.get_type_hints(func, include_extras=True).get("return")
+        hint = self._hint()
         if isinstance(hint, types.UnionType):  # ``State | None``
             hint = next((arg for arg in typing.get_args(hint) if arg is not type(None)), None)
         return hint if hasattr(hint, "dim_str") else None
+
+    def _hint(self) -> Any:
+        """The resolved return annotation of the function that defines the value, or ``None``."""
+        import typing
+
+        func = self._preprocess
+        return typing.get_type_hints(func, include_extras=True).get("return") if func is not None else None
+
+    def _optional(self) -> bool:
+        """Whether the annotation is ``Layout | None``."""
+        import types
+
+        return isinstance(self._hint(), types.UnionType)
 
     @property
     def dims(self) -> tuple[str, ...] | None:
         """The axis names of `layout`: ``("batch", "seq", "hidden")``."""
         layout = self.layout
         return tuple(layout.dim_str.split()) if layout is not None else None
+
+    def __str__(self) -> str:
+        """The repr line: ``(name) -> Layout [axes]: description`` for a value with a layout, else nnsight's line."""
+        layout = self.layout
+        if layout is None:
+            return f"({self.name}): {self.description}"
+        optional = " | None" if self._optional() else ""
+        return f"({self.name}) -> {layout_name(layout)}{optional} [{' '.join(self.dims)}]: {self.description}"
 
     # -- the location -----------------------------------------------------------
 
@@ -257,6 +275,17 @@ class EProperty(eproperty):
         if select is not None or attribute == "input":
             value = self._put(attribute, Mediator.value(location), value, select)
         Mediator.swap(location, value)
+
+
+def layout_name(layout: Any) -> str:
+    """The name a layout alias is exported under (``Residual``, ``Pattern``), else the type's own name."""
+    from .. import components, standardized
+
+    for module in (components, standardized):
+        for name, value in vars(module).items():
+            if value is layout and not name.startswith("_"):
+                return name
+    return getattr(layout, "__name__", repr(layout))
 
 
 def unavailable(reason: str) -> EProperty:

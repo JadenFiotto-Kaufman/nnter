@@ -232,7 +232,7 @@ class StateSpace(RecurrentMixer):
 
     # -- the values at the scan call -------------------------------------------------
 
-    @EProperty(kernel("inputs"), select=argument("C"), description="C, the queries reading the state, [batch, seq, groups, state_dim]", unavailable=needs_torch_kernels)
+    @EProperty(kernel("inputs"), select=argument("C"), description="C, the queries reading the state", unavailable=needs_torch_kernels)
     def attention_queries(self, value: torch.Tensor) -> SSDQueries:
         """``C``: what each token reads the state with, ``[batch, seq, groups, state_dim]``, one per group of heads, after the conv and the activation."""
         return self._with_seq(value)
@@ -241,7 +241,7 @@ class StateSpace(RecurrentMixer):
     def attention_queries(self, value: torch.Tensor) -> torch.Tensor:
         return self._without_seq(value)
 
-    @EProperty(kernel("inputs"), select=argument("B"), description="B, the keys writing into the state, [batch, seq, groups, state_dim]", unavailable=needs_torch_kernels)
+    @EProperty(kernel("inputs"), select=argument("B"), description="B, the keys writing into the state", unavailable=needs_torch_kernels)
     def attention_keys(self, value: torch.Tensor) -> SSDKeys:
         """``B``: where each token writes into the state, ``[batch, seq, groups, state_dim]``, one per group of heads."""
         return self._with_seq(value)
@@ -250,7 +250,7 @@ class StateSpace(RecurrentMixer):
     def attention_keys(self, value: torch.Tensor) -> torch.Tensor:
         return self._without_seq(value)
 
-    @EProperty(kernel("inputs"), select=argument("hidden_states"), description="x, the values written into the state, [batch, seq, heads, head_dim]", unavailable=needs_torch_kernels)
+    @EProperty(kernel("inputs"), select=argument("hidden_states"), description="x, the values written into the state", unavailable=needs_torch_kernels)
     def attention_values(self, value: torch.Tensor) -> SSDValues:
         """``x``: what each token writes into the state, ``[batch, seq, heads, head_dim]``, after the conv and the activation."""
         return self._with_seq(value)
@@ -300,7 +300,7 @@ class StateSpace(RecurrentMixer):
         return A[:, 0, 0] if self._decoding() else A
 
     #: ``dt`` after its bias, softplus and limit: how strongly each token writes into the state.
-    @EProperty(kernel("inputs"), select=argument("dt"), description="dt, the per-token write strength into the state, [batch, seq, heads]", unavailable=needs_torch_kernels)
+    @EProperty(kernel("inputs"), select=argument("dt"), description="dt, the per-token write strength into the state", unavailable=needs_torch_kernels)
     def betas(self, value: torch.Tensor) -> Gates:
         """``dt`` as the kernel uses it, ``[batch, seq, heads]``: ``softplus(dt + dt_bias)``, clamped to ``dt_limit`` on a prompt.
 
@@ -317,7 +317,7 @@ class StateSpace(RecurrentMixer):
         return self._dt_for(value)
 
     #: ``A * dt``: the log of how much of the state each token keeps.
-    @EProperty(kernel("inputs"), select=argument("dt"), description="A * dt, the per-token log decay of the state, [batch, seq, heads]", unavailable=needs_torch_kernels)
+    @EProperty(kernel("inputs"), select=argument("dt"), description="A * dt, the per-token log decay of the state", unavailable=needs_torch_kernels)
     def decays(self, value: torch.Tensor) -> Gates:
         """``A * dt``, ``[batch, seq, heads]``, float32 and non-positive: the log of how much of the state each token keeps.
 
@@ -331,7 +331,7 @@ class StateSpace(RecurrentMixer):
     def decays(self, value: torch.Tensor) -> torch.Tensor:
         return self._dt_for(value.float() / self._A().float())
 
-    @EProperty(kernel("inputs"), select=argument("state"), description="The state entering the layer, [batch, heads, state_dim, head_dim], or None at the start of a prompt (a copy of the cache's buffer)", unavailable=needs_torch_kernels)
+    @EProperty(kernel("inputs"), select=argument("state"), description="The state entering the layer, or None at the start of a prompt (a copy of the cache's buffer)", unavailable=needs_torch_kernels)
     def state_input(self, value: Any) -> State | None:
         """The state this call starts from, key side first: ``None`` on a fresh prompt, the cached state on a decode step.
 
@@ -346,7 +346,7 @@ class StateSpace(RecurrentMixer):
     def state_input(self, value: Any) -> Any:
         return value if value is None else value.transpose(-1, -2)
 
-    @EProperty(kernel("output"), select=_head_outputs_select, description="y, the per-head outputs before the gated norm and the output projection, [batch, seq, heads, head_dim]", unavailable=needs_torch_kernels)
+    @EProperty(kernel("output"), select=_head_outputs_select, description="y, the per-head outputs before the gated norm and the output projection", unavailable=needs_torch_kernels)
     def attention_head_outputs(self, value: torch.Tensor) -> SSDHeadOutputs:
         """``y``: each head's read of the state plus the ``D`` skip, ``[batch, seq, heads, head_dim]``, before the gated norm and ``out_proj``."""
         return self._with_seq(value)
@@ -355,7 +355,7 @@ class StateSpace(RecurrentMixer):
     def attention_head_outputs(self, value: torch.Tensor) -> torch.Tensor:
         return self._without_seq(value)
 
-    @EProperty(_state_output, select=_state_output_select, description="The state leaving the layer, [batch, heads, state_dim, head_dim]", unavailable=needs_torch_kernels)
+    @EProperty(_state_output, select=_state_output_select, description="The state leaving the layer", unavailable=needs_torch_kernels)
     def state_output(self, value: torch.Tensor) -> State:
         """The state after this call's last token, ``[batch, heads, state_dim, head_dim]``: what the next decode step starts from."""
         return value.transpose(-1, -2)
@@ -375,7 +375,7 @@ class StateSpace(RecurrentMixer):
     #: The state after each token of this call, from the chunk scan's boundaries (``chunk_size`` 1).
     states = DerivedEProperty(
         _states,
-        description="The state after every token of this call, [batch, seq, heads, state_dim, head_dim]; needs nnter.chunk_per_token(model)",
+        description="The state after every token of this call; needs nnter.chunk_per_token(model)",
         unavailable=needs_per_token_chunks,
     )
 

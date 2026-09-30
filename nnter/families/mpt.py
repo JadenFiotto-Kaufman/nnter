@@ -72,7 +72,7 @@ class Attention(Attention):
 
     @EProperty(
         "source.nn_functional_dropout_0.output",
-        description="The attention pattern the values are mixed with, [batch, heads, query, key]",
+        description="The attention pattern the values are mixed with",
     )
     def attention_probabilities(self, value) -> Pattern:
         return value
