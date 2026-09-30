@@ -1,9 +1,9 @@
 ---
 title: Residual stream and contributions
 one_liner: "`layer_output`, `attention_output` and `mlp_output` are tensors on every family, defined by `layers[i].input + attention_output + mlp_output == layer_output`."
-tags: [usage, residual-stream, layer_output, attention_output, mlp_output, contributions]
+tags: [usage, residual-stream, layer_output, attention_output, mlp_output, contributions, hyper-connections, Streams]
 related: [docs/usage/vocabulary.md, docs/usage/methods.md, docs/usage/root-values.md, docs/usage/availability.md]
-sources: [nnter/components/layer.py, nnter/components/attention.py, nnter/components/mlp.py, nnter/components/standard.py, nnter/components/eproperty.py, nnter/families/gemma2.py, nnter/families/gemma4_text.py, nnter/families/bloom.py, nnter/families/mpt.py, nnter/families/falcon.py]
+sources: [nnter/components/layer.py, nnter/families/deepseek_v4.py, nnter/components/attention.py, nnter/components/mlp.py, nnter/components/standard.py, nnter/components/eproperty.py, nnter/families/gemma2.py, nnter/families/gemma4_text.py, nnter/families/bloom.py, nnter/families/mpt.py, nnter/families/falcon.py]
 ---
 
 # Residual stream and contributions
@@ -19,7 +19,9 @@ Three standard values give every decoder block the same three tensors:
 | `model.layers[i].mlp.mlp_output` | what the MLP sublayer adds to the residual stream |
 
 All three are `[batch, seq, hidden]`, the `Residual` layout (`Layer.layer_output.layout is
-nnter.components.Residual`; see [layouts](layouts.md)).
+nnter.components.Residual`; see [layouts](layouts.md)), except `layer_output` on DeepSeek-V4,
+whose residual is several parallel streams, `[batch, seq, streams, hidden]`
+([below](#where-the-families-differ)).
 
 `attention_output` and `mlp_output` are *contributions*, defined by one identity that
 holds on a sequential block and a parallel block alike:
@@ -245,6 +247,57 @@ the stream's term uses `layers[i].post_attention_residual_scale._module` and
 parameters' initial values; `tests/families/test_doge.py` and `test_zaya.py` check the
 gated forms on copies with the parameters moved.
 
+**DeepSeek-V4: parallel streams.** The residual between DeepSeek-V4's blocks is `hc_mult`
+parallel copies of the stream, `[batch, seq, streams, hidden]` (the model copies the
+embedding into each before block 0). `layer_output` and `layers[i].input` are that tensor,
+the block's own (layout `Streams`), and writes to them land natively. Each sublayer reads one
+weighted collapse of the streams and returns `[batch, seq, hidden]`; a hyper-connection
+(`attn_hc`, `ffn_hc`) weights that output into each stream and mixes the streams it is added
+to. `attention_output` and `mlp_output` are the sublayers' own outputs, unscaled, as on
+Gemma-4, and the weights are four values on the family's `Layer`:
+
+| value | layout | what it is |
+| --- | --- | --- |
+| `layers[i].attention_post`, `layers[i].mlp_post` | `StreamWeights`, `[batch, seq, streams]` | how much of the sublayer's output each stream receives, in (0, 2) |
+| `layers[i].attention_comb`, `layers[i].mlp_comb` | `StreamMixing`, `[batch, seq, streams, streams]` | a doubly stochastic matrix mixing the streams, applied transposed: stream `k` receives `sum_j comb[j, k] * stream_j` |
+
+The four are float32 whatever the model's dtype, and writes to them land. The identity is
+the block's own formula, not a sum:
+
+```
+h   = attention_combᵀ · input + attention_post ⊗ attention_output
+out = mlp_combᵀ · h + mlp_post ⊗ mlp_output                       # layer_output
+```
+
+```python
+import torch
+from nnter import StandardizedTransformer
+
+model = StandardizedTransformer("deepseek-ai/DeepSeek-V4-Flash", dispatch=True)
+
+layer = model.layers[2]
+with model.trace(prompt):
+    x = layer.input.save()
+    post_a, comb_a = layer.attention_post.save(), layer.attention_comb.save()
+    attn = layer.self_attn.attention_output.save()
+    post_f, comb_f = layer.mlp_post.save(), layer.mlp_comb.save()
+    mlp = layer.mlp.mlp_output.save()
+    out = layer.layer_output.save()
+
+h = comb_a.transpose(-1, -2) @ x + post_a.unsqueeze(-1) * attn.unsqueeze(-2)
+torch.testing.assert_close(comb_f.transpose(-1, -2) @ h + post_f.unsqueeze(-1) * mlp.unsqueeze(-2), out)
+
+# The stream mean is additive, up to the Sinkhorn projection's residual (about 2e-6 relative in float32):
+mean = x.mean(2) + post_a.mean(-1, keepdim=True) * attn + post_f.mean(-1, keepdim=True) * mlp
+torch.testing.assert_close(mean, out.mean(2), rtol=1e-5, atol=1e-5)
+```
+
+On the pinned tiny checkpoint (`yujiepan/deepseek-v4-bf16-tiny-random`, `dtype=torch.float32`)
+the stream form is exact (difference `0.0`) on every block. The attention's output reaches
+`layer_output` mixed by `mlp_comb` as well, so what a sublayer "adds" is not one tensor in
+stream space. The plain `input + attention_output + mlp_output` is not the output; code
+written for it broadcasts without an error and is wrong.
+
 ## Gotchas
 
 - **Forward order within one trace.** `layers[i].input`, then `self_attn.attention_output`,
@@ -261,6 +314,10 @@ gated forms on copies with the parameters moved.
   ([availability](availability.md)).
 - **The identity is exact in float32 and within a few ulps in bf16** when the block sums in
   another order (Falcon). Compare with a tolerance in the block's dtype.
+- **`layer_output` is rank 4 on DeepSeek-V4.** `resid[:, -1]` is `[batch, streams, hidden]`
+  there, and anything written for a `[batch, seq, hidden]` stream (a probe, a hand-written
+  lens) runs and answers per stream. Check `out.dim()` or the family's layout where a recipe
+  crosses families; `model.project_on_vocab` collapses the streams the way the model does.
 - **Nothing bound inside a trace survives without `.save()`**, including the value you read
   to compute a difference; save each operand.
 

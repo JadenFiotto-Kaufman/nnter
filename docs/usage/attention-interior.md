@@ -3,7 +3,7 @@ title: Attention Interior
 one_liner: Read, edit and assign the queries, keys, values, scores, pattern and per-head outputs inside every family's attention, under `attn_implementation="eager"`.
 tags: [usage, attention, interior, source, eager, heads]
 related: [docs/usage/residual-stream.md, docs/usage/layouts.md, docs/usage/availability.md, docs/usage/loading.md, docs/usage/generation.md, docs/usage/delta-net.md, docs/usage/remote.md]
-sources: [nnter/components/attention.py, nnter/components/eproperty.py, nnter/families/gpt2.py, nnter/families/falcon.py, nnter/families/gpt_oss.py, nnter/families/gptj.py, nnter/families/codegen.py, nnter/families/xglm.py, nnter/families/gpt_neox_japanese.py, nnter/families/bloom.py, nnter/families/mpt.py, nnter/families/deepseek_v2.py, nnter/families/gemma4_text.py, tests/families/suite.py]
+sources: [nnter/components/attention.py, nnter/components/eproperty.py, nnter/families/gpt2.py, nnter/families/falcon.py, nnter/families/gpt_oss.py, nnter/families/deepseek_v4.py, nnter/families/gptj.py, nnter/families/codegen.py, nnter/families/xglm.py, nnter/families/gpt_neox_japanese.py, nnter/families/bloom.py, nnter/families/mpt.py, nnter/families/deepseek_v2.py, nnter/families/gemma4_text.py, tests/families/suite.py]
 ---
 
 # Attention Interior
@@ -241,6 +241,26 @@ qk_rope_head_dim` and values `v_head_dim`, so `attention_queries` and
 `attention_head_outputs` are `model.head_dim` wide. The interface sees
 `num_heads` key/value heads whatever `num_key_value_heads` says: the latent
 projection produces keys and values for every head.
+
+### DeepSeek-V4: one tensor for keys and values, compressed keys, rotated-back heads
+
+DeepSeek-V4 is not latent attention: the plain sizes hold (one key/value head,
+`head_dim` from the config for queries, keys and values). It has GPT-OSS's sink on every
+block and reads `attention_scores` at the same binding. Three things differ:
+
+- The attention passes **one tensor as both keys and values**, so `attention_keys` and
+  `attention_values` are the same object: an in-place edit of either edits both, and an
+  assignment to one gives it a tensor of its own.
+- On a compressed block (`compressed_sparse_attention`, `heavily_compressed_attention` in
+  `config.layer_types`) the compressor's entries are concatenated after the token keys once
+  the prompt reaches the block's rate (`config.compress_rates`), so the keys' `seq` axis and
+  the pattern's `key` axis are `seq + seq // rate` long there; the mask over the extra
+  columns carries the compressor's causality and, on a sparse block, its indexer's
+  selection.
+- The interface's output keeps a rotation on each head's rotary slice (the values are the
+  rotated keys), which the module rotates back before the grouped output projection;
+  `attention_head_outputs` is that rotated-back tensor, what `o_a_proj` reads, not the
+  interface's output.
 
 ### Gemma-4: borrowed keys and values, per-layer head sizes
 

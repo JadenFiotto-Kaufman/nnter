@@ -3,7 +3,7 @@ title: Methods over the values
 one_liner: "`skip_layers`, `steer`, `project_on_vocab`, `get_topk_closest_tokens` and `probs_to_dict`: the common operations written once against the standard values."
 tags: [usage, skip_layers, steer, project_on_vocab, logit-lens, topk]
 related: [docs/usage/residual-stream.md, docs/usage/root-values.md, docs/usage/vocabulary.md]
-sources: [nnter/standardized.py, nnter/components/layer.py]
+sources: [nnter/standardized.py, nnter/components/layer.py, nnter/families/deepseek_v4.py]
 ---
 
 # Methods over the values
@@ -130,6 +130,42 @@ with model.trace(prompt):
 
 Outside a trace it runs the norm and head modules as plain `nn.Module`s on a saved tensor.
 
+## On a hyper-connection family (DeepSeek-V4)
+
+DeepSeek-V4's `layer_output` is `[batch, seq, streams, hidden]`, several parallel copies of
+the stream ([residual-stream](residual-stream.md#where-the-families-differ)). The methods
+take it as it is:
+
+- **`skip_layers`** hands the block's own four-axis input on, so it needs nothing new; a
+  `skip_with` tensor must have the stream axis too.
+- **`steer`** adds in place on `layer_output[rows, cols]`, `[..., streams, hidden]`: a
+  `[hidden]` vector broadcasts over the streams, adding `factor * vector` to every stream
+  (and so to their mean); a `[streams, hidden]` vector steers each stream by its own row.
+- **`project_on_vocab`** is the family's: it collapses the streams with the model's own
+  `hc_head` (a learned, content-dependent weighting), then `norm` and `lm_head`, which is
+  how the model makes its logits, so on the last block it equals `logits` exactly. It
+  reads the stream axis on a rank-4 tensor, or on a rank-2 tensor with `hc_mult` rows (one
+  position, `resid[0, -1]`, which is what `get_topk_closest_tokens(resid[0, -1])` passes),
+  and returns `[..., vocab]` without it. Any other tensor is taken as a plain
+  `[..., hidden]` stream (a sublayer's output, one stream `resid[:, :, k]`) and goes
+  through `norm` and `lm_head` alone.
+
+```python
+model = StandardizedTransformer("deepseek-ai/DeepSeek-V4-Flash", dispatch=True)
+
+with model.trace(prompt):
+    resid = model.layers[-1].layer_output.save()          # [1, seq, hc_mult, hidden]
+    logits = model.logits.save()
+
+torch.equal(model.project_on_vocab(resid), logits)          # True
+model.get_topk_closest_tokens(resid[0, -1], k=3)            # one position, [hc_mult, hidden]: a list of one dict
+per_stream = model.lm_head(model.norm(resid[:, :, 0]))       # one stream alone, not the model's readout
+```
+
+Both rank-2 and rank-3 inputs are ambiguous by shape. Pass `resid[:, -1:]`, not `resid[0]`
+(`[seq, streams, hidden]`, read as a plain `[batch, seq, hidden]`), and a plain `[seq,
+hidden]` slice with exactly `hc_mult` rows reads as streams: keep the batch axis on it.
+
 ## `get_topk_closest_tokens(hidden, k=5)` and `probs_to_dict(probs, k=5)`
 
 `get_topk_closest_tokens` is `project_on_vocab`, softmax, then the `k` most likely tokens
@@ -167,6 +203,9 @@ on saved tensors, is the plain form.
   head is tied, softcapped or scaled it is still exact; a hand-rolled `lm_head(hidden)` without
   the norm and the model's step after the head is not the model's prediction.
 - **Top-k on a tiny random checkpoint is noise**; the shapes are what to check there.
+- **On DeepSeek-V4 a hand-rolled `lm_head(norm(layer_output))` returns `[batch, seq, streams,
+  vocab]` without an error**: per-stream logits, none of which is the model's readout.
+  `project_on_vocab` collapses the streams first.
 
 ## Related
 

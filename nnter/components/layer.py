@@ -20,6 +20,13 @@ if TYPE_CHECKING:
 
 #: The residual stream and everything added to it: ``layer_output``, the contributions, ``token_embeddings``, a sublayer's input.
 Residual = Float[Tensor, "batch seq hidden"]
+#: A hyper-connection residual (DeepSeek-V4): ``streams`` parallel copies of the stream, the block's own
+#: ``[batch, seq, streams, hidden]``. ``layer_output`` (and a block's input) on those families, in place of `Residual`.
+Streams = Float[Tensor, "batch seq streams hidden"]
+#: One weight per stream and token: how much of a sublayer's output each stream receives.
+StreamWeights = Float[Tensor, "batch seq streams"]
+#: A per-token ``streams x streams`` matrix mixing the streams: entry ``[j, k]`` is what stream ``j`` gives stream ``k``.
+StreamMixing = Float[Tensor, "batch seq streams streams"]
 
 
 class Layer(Standard):

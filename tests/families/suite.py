@@ -488,6 +488,9 @@ class FamilySuite:
         """What each axis name in a value's annotation must be on this model."""
         seq = len(model.tokenizer(PROMPT).input_ids)
         sizes = {"batch": 1, "seq": seq, "query": seq, "key": seq, "hidden": model.hidden_size, "vocab": model.vocab_size}
+        streams = getattr(model.config.get_text_config(), "hc_mult", None)
+        if streams:  # a hyper-connection residual (DeepSeek-V4): the parallel copies of the stream
+            sizes["streams"] = streams
         if self.attn_blocks(model):  # a state-space model has no heads to size
             sizes.update(heads=model.num_heads, kv_heads=model.num_heads if self.KV_HEADS_EXPANDED else model.num_kv_heads,
                          head_dim=model.head_dim, qk_head_dim=model.qk_head_dim)

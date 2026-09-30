@@ -144,7 +144,7 @@ hybrid and drops `mlp.mlp_output` when no block has an MLP module (OPT). `VALUES
 
 | method | asserts |
 |---|---|
-| `test_values_match_their_annotations` | every value with a `layout`, on the root, a block, its attention, its MLP and one mixer, is an instance of its layout alias (`Residual`, `Pattern`, ... from `nnter.components`) and each named axis matches `axis_sizes` (`hidden_size`, `num_heads`, `head_k_dim`, ...); one value per trace; at least 11 checked |
+| `test_values_match_their_annotations` | every value with a `layout`, on the root, a block, its attention, its MLP and one mixer, is an instance of its layout alias (`Residual`, `Pattern`, ... from `nnter.components`) and each named axis matches `axis_sizes` (`hidden_size`, `num_heads`, `head_k_dim`, `streams` = the text config's `hc_mult` where it has one, ...); one value per trace; at least 11 checked |
 
 **The input** (`:489-514`)
 
@@ -225,6 +225,11 @@ per snapshot. Its `Gemma4Suite` overrides `test_contribution_identity` for the
 block's `* layer_scalar` and third term, adds `per_layer_output` to
 `expected_values`, and overrides `test_skip_layers_with_a_given_stream` on a
 KV-sharing checkpoint; `test_gemma4_unified_text.py` imports that suite.
+`tests/families/test_deepseek_v4.py` overrides `test_contribution_identity` with the
+hyper-connection block's stream formula (checked on every block), adds the four stream
+weights to `expected_values`, and gives `pattern_from_scores` GPT-OSS's sink column; the
+suite's key-length checks run on block 0 (a sliding block) with a prompt shorter than any
+compression rate, so the family's own test covers the longer keys of the compressed blocks.
 The hybrid files (`test_qwen3_next.py`, `test_qwen3_5_text.py`,
 `test_qwen3_5_moe_text.py`) are one file with three headers: they override
 `test_every_layer_is_renamed` for the per-block `self_attn`/`linear_attn`
