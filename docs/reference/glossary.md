@@ -110,7 +110,7 @@ One call or assignment inside a module's forward as nnsight's `.source` names it
 
 ## Parallel block
 
-A block where one norm's output feeds both sublayers and `x + attn(norm(x)) + mlp(norm(x))` is summed at the end: GPT-NeoX (with `use_parallel_residual`), Phi, GPT-J, StableLM-2, Falcon. `mlp.input` is that norm's output, and the contribution identity holds unchanged. See [families.md](families.md#parallel-blocks).
+A block where one norm's output feeds both sublayers and `x + attn(norm(x)) + mlp(norm(x))` is summed at the end: GPT-NeoX (with `use_parallel_residual`), Phi, GPT-J, CodeGen, StableLM-2, Falcon. `mlp.input` is that norm's output, and the contribution identity holds unchanged. See [families.md](families.md#parallel-blocks).
 
 ## Pinned read, relaxed read
 
@@ -186,7 +186,7 @@ The random-weights checkpoint each family's test pins (`hf-internal-testing/tiny
 
 ## Tuple block, `returns_tuple`
 
-A decoder block whose forward returns `(hidden_states, ...)` rather than the tensor alone: GPT-J, GPT-Neo, BLOOM, MPT, Falcon set `Layer.returns_tuple = True`. `layer_output` is the tensor either way; `skip_layers` packs the replacement the way the block would have. See [families.md](families.md#tuple-blocks).
+A decoder block whose forward returns `(hidden_states, ...)` rather than the tensor alone: GPT-J, GPT-Neo, CodeGen, GPT-NeoX-Japanese, BLOOM, MPT, Falcon set `Layer.returns_tuple = True`. `layer_output` is the tensor either way; `skip_layers` packs the replacement the way the block would have. See [families.md](families.md#tuple-blocks).
 
 ## Gotchas
 

@@ -19,8 +19,8 @@ The same block runs unchanged on `meta-llama/Llama-3.1-8B`,
 Llama, Llama 4 (text), GPT-NeoX, Mistral, Mixtral, MiniMax-M2, Qwen2, Qwen2-MoE, Qwen3, Qwen3-MoE, Gemma,
 Gemma-2, Gemma-3 (text and multimodal checkpoints), Gemma-4 (text; E2B/E4B, 26B-A4B, 31B and the unified 12B), GPT-OSS, DeepSeek-V2, DeepSeek-V3, DeepSeek-V3.2, GLM-4.5/4.6,
 GLM-4.7-Flash, GLM-5, DBRX, Phi, Phi-3,
-OLMo, OLMo-2, OLMo-3, OLMoE, EXAONE 4.0, SmolLM3, StableLM, Cohere (Command-R), Cohere-2, Granite, GPT-J, GPT-Neo, BLOOM, MPT, Falcon (7B and 40B
-layouts), OPT, the gated DeltaNet hybrids Qwen3-Next, Qwen3.5,
+OLMo, OLMo-2, OLMo-3, OLMoE, EXAONE 4.0, SmolLM3, StableLM, Cohere (Command-R), Cohere-2, Granite, GPT-J, GPT-Neo, CodeGen, GPT-NeoX-Japanese, BLOOM, MPT, Falcon (7B and 40B
+layouts), OPT, XGLM, the gated DeltaNet hybrids Qwen3-Next, Qwen3.5,
 Qwen3.5-MoE (text) and OLMo-Hybrid, the Mamba-1 state-space models Mamba,
 Falcon-Mamba and Jamba (with attention and experts), and the Mamba-2 models Mamba-2,
 Nemotron-H, Bamba and Falcon-H1, on transformers 5.17. The vocabulary is Llama's block names, with the containers
@@ -121,7 +121,7 @@ and values are split views of one tensor, which torch refuses to edit in place
 model by an `eproperty` transform.
 
 The interior values live on transformers' shared attention interface on most
-families; GPT-J, GPT-Neo, BLOOM, MPT and Falcon do their own attention arithmetic, and
+families; GPT-J, GPT-Neo, CodeGen, GPT-NeoX-Japanese, XGLM, BLOOM, MPT and Falcon do their own attention arithmetic, and
 their families map the same five values onto their own operations (with the
 head outputs presented sequence-first as a view where the family keeps heads
 first). Two of them bind values at points a single trace must respect: on
@@ -164,7 +164,7 @@ path, never by alias). Three shapes of override exist today:
 - **residual added inside the module** (BLOOM both sublayers, MPT's MLP): the
   contribution is the operation before the add, via a `source.` path, reading
   `dropout_add`'s first argument or the dropout's output;
-- **own attention arithmetic** (GPT-J, GPT-Neo, BLOOM, MPT, Falcon): the pattern and the
+- **own attention arithmetic** (GPT-J, GPT-Neo, CodeGen, GPT-NeoX-Japanese, XGLM, BLOOM, MPT, Falcon): the pattern and the
   interior values are that family's own operations rather than the shared
   interface. A family that has not mapped them yet marks them
   `unavailable(NOT_ON_INTERFACE)`.
@@ -400,7 +400,7 @@ the reverse order segfaults at import; a plain `import transformers` first is fi
 HF_HUB_OFFLINE=1 pytest
 ```
 
-One file per family under `tests/families/` (88 families, 92 checkpoints), each subclassing `FamilySuite`
+One file per family under `tests/families/` (91 families, 95 checkpoints), each subclassing `FamilySuite`
 (`tests/families/suite.py`) with its pinned tiny checkpoint, native paths and
 quirks, plus the tests that are specific to it. The suite is every end-to-end
 statement a family must satisfy: aliases reach the native modules; every

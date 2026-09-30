@@ -111,7 +111,7 @@ Each is a `StandardizedProperty`: it reads the config by the plain rule unless t
 | `num_kv_heads` | `config.num_key_value_heads`, else `num_heads`. | Falcon: `config.num_kv_heads` under `new_decoder_architecture`, `1` under `multi_query`, else `num_heads`. |
 | `head_dim` | `config.head_dim` when the config says (Qwen3, Gemma), else `hidden_size // num_heads`. | DeepSeek-V2/V3: `config.v_head_dim`. |
 | `qk_head_dim` | `head_dim`. | DeepSeek-V2/V3: `qk_nope_head_dim + qk_rope_head_dim`. |
-| `intermediate_size` | `config.intermediate_size`. A mixture of experts' experts are `config.moe_intermediate_size` wide instead. | GPT-2, GPT-J: `config.n_inner`, `4 * hidden_size` when `None`; GPT-Neo: `config.intermediate_size`, `4 * hidden_size` when `None`; Falcon: `config.ffn_hidden_size`; OPT: `config.ffn_dim`; MPT: `expansion_ratio * hidden_size`; BLOOM: `4 * hidden_size`. |
+| `intermediate_size` | `config.intermediate_size`. A mixture of experts' experts are `config.moe_intermediate_size` wide instead. | GPT-2, GPT-J, CodeGen: `config.n_inner`, `4 * hidden_size` when `None`; GPT-Neo: `config.intermediate_size`, `4 * hidden_size` when `None`; Falcon: `config.ffn_hidden_size`; OPT, XGLM: `config.ffn_dim`; GPT-NeoX-Japanese: `hidden_size * intermediate_multiple_size`; MPT: `expansion_ratio * hidden_size`; BLOOM: `4 * hidden_size`. |
 
 | Name | Signature | What |
 |---|---|---|
@@ -132,7 +132,7 @@ Each is a `StandardizedProperty`: it reads the config by the plain rule unless t
 
 ## `Layer`
 
-The decoder block. `Layer.returns_tuple` (class attribute, default `False`) says whether the block returns `(hidden_states, ...)`; GPT-J, BLOOM, MPT, Falcon, GLM-5, Bamba and Falcon-H1 set it.
+The decoder block. `Layer.returns_tuple` (class attribute, default `False`) says whether the block returns `(hidden_states, ...)`; GPT-J, GPT-Neo, CodeGen, GPT-NeoX-Japanese, BLOOM, MPT, Falcon, GLM-5, Bamba and Falcon-H1 set it.
 
 | Value | Layout | Assignable | Description |
 |---|---|---|---|
@@ -144,7 +144,7 @@ The decoder block. `Layer.returns_tuple` (class attribute, default `False`) says
 
 ## `Attention`
 
-A softmax-attention module. The base class reads everything but `attention_output` inside transformers' shared eager attention forward, reached through the module's `attention_interface` call (`INTERFACE = "attention_interface_1"`). GPT-J, BLOOM, MPT and Falcon relocate the same names onto their own operations; [families.md](families.md) has the ops.
+A softmax-attention module. The base class reads everything but `attention_output` inside transformers' shared eager attention forward, reached through the module's `attention_interface` call (`INTERFACE = "attention_interface_1"`). GPT-J, GPT-Neo, CodeGen, GPT-NeoX-Japanese, XGLM, BLOOM, MPT and Falcon relocate the same names onto their own operations; [families.md](families.md) has the ops.
 
 | Value | Layout | Base location | Assignable | Availability |
 |---|---|---|---|---|
