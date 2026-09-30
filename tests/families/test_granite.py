@@ -13,14 +13,15 @@ from nnter.families import granite
 REPO = "hf-internal-testing/tiny-random-GraniteForCausalLM"
 
 
-def _scaled_checkpoint(repo=REPO):
+def _scaled_checkpoint(repo=REPO, **overrides):
     """The tiny checkpoint with its multipliers set away from 1.0, which is all the tiny config has.
 
     The weights and tokenizer are symlinked, only ``config.json`` is rewritten:
     ``residual_multiplier`` 0.22 (granite-4.1-3b's) makes the contributions differ from the modules'
     outputs, ``logits_scaling`` 4.0 makes the logits differ from the head's
     output, and ``embedding_multiplier`` 3.0 makes the first block's input
-    differ from the embedding module's output.
+    differ from the embedding module's output. ``overrides`` rewrite further
+    keys (a family's test turning one of its own options off).
     """
     snapshot = glob.glob(os.path.expanduser(f"~/.cache/huggingface/hub/models--{repo.replace('/', '--')}/snapshots/*"))[0]
     patched = tempfile.mkdtemp(prefix="granite-scaled-")
@@ -28,7 +29,7 @@ def _scaled_checkpoint(repo=REPO):
         if name != "config.json":
             os.symlink(os.path.realpath(os.path.join(snapshot, name)), os.path.join(patched, name))
     config = json.load(open(os.path.join(snapshot, "config.json")))
-    config.update(residual_multiplier=0.22, logits_scaling=4.0, embedding_multiplier=3.0)
+    config.update(residual_multiplier=0.22, logits_scaling=4.0, embedding_multiplier=3.0, **overrides)
     json.dump(config, open(os.path.join(patched, "config.json"), "w"))
     return patched
 

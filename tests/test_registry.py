@@ -38,8 +38,8 @@ def test_import_is_lazy():
 
 
 def test_unknown_family_refused():
-    with pytest.raises(UnsupportedFamily, match="glm4"):
-        StandardizedTransformer("yujiepan/glm-4-tiny-random")
+    with pytest.raises(UnsupportedFamily, match="zamba"):
+        StandardizedTransformer("hf-tiny-v2/tiny-random-ZambaForCausalLM")
 
 
 def test_register_adds_a_family_and_can_override():
