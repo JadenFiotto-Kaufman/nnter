@@ -65,7 +65,7 @@ makes block 1 start from zeros.
 
 Each skipped block gets `Layer.skip_with(hidden)`, which calls nnsight's `.skip()` with
 `hidden` packed the way that family's block returns it: the tensor alone, or `(hidden, None)`
-on a family whose `Layer.returns_tuple` is `True` (GPT-J, BLOOM, MPT, Falcon), since the
+on a family whose `Layer.returns_tuple` is `True` (GPT-J, GPT-Neo, BLOOM, MPT, Falcon), since the
 second element is the attention weights nothing downstream reads. Call `skip_with` directly
 to skip one block with a stream of your own:
 

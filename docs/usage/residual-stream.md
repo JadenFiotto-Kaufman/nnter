@@ -61,8 +61,8 @@ then the MLP, then the block's output.
 
 ## Tensor blocks and tuple blocks
 
-A Llama, GPT-2 or GPT-NeoX block returns `hidden_states` alone. A GPT-J, BLOOM, MPT or
-Falcon block returns a tuple with it first. `layer_output` is the tensor either way, the
+A Llama, GPT-2 or GPT-NeoX block returns `hidden_states` alone. A GPT-J, GPT-Neo, BLOOM, MPT
+or Falcon block returns a tuple with it first. `layer_output` is the tensor either way, the
 same object the block returned:
 
 ```python
@@ -181,7 +181,8 @@ the block has run; `mlp_output` is the MLP's contribution.
   operation inside the module, so it comes before that module's `.output`; on Gemma-2/3
   and OLMo-2/3 it is the post-norm's output, so it comes after `self_attn.output`. Reading
   the raw and the standard value of one module in one trace forces you to know which; a
-  second trace does not.
+  second trace does not. On GPT-Neo `self_attn` is the inner `attn.attention`, so its
+  `attention_output` comes before the `attn` wrapper's `.output`.
 - **A tuple block's `.output` is a tuple; `layer_output` is the tensor.** Skip a block with
   `Layer.skip_with` ([methods](methods.md)) rather than `.skip(tensor)`, which would hand a
   bare tensor where a tuple is expected.

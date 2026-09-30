@@ -186,7 +186,7 @@ The random-weights checkpoint each family's test pins (`hf-internal-testing/tiny
 
 ## Tuple block, `returns_tuple`
 
-A decoder block whose forward returns `(hidden_states, ...)` rather than the tensor alone: GPT-J, BLOOM, MPT, Falcon set `Layer.returns_tuple = True`. `layer_output` is the tensor either way; `skip_layers` packs the replacement the way the block would have. See [families.md](families.md#tuple-blocks).
+A decoder block whose forward returns `(hidden_states, ...)` rather than the tensor alone: GPT-J, GPT-Neo, BLOOM, MPT, Falcon set `Layer.returns_tuple = True`. `layer_output` is the tensor either way; `skip_layers` packs the replacement the way the block would have. See [families.md](families.md#tuple-blocks).
 
 ## Gotchas
 
