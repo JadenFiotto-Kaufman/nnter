@@ -3,7 +3,7 @@ title: Attention Interior
 one_liner: Read, edit and assign the queries, keys, values, scores, pattern and per-head outputs inside every family's attention, under `attn_implementation="eager"`.
 tags: [usage, attention, interior, source, eager, heads]
 related: [docs/usage/residual-stream.md, docs/usage/layouts.md, docs/usage/availability.md, docs/usage/loading.md, docs/usage/generation.md, docs/usage/delta-net.md, docs/usage/remote.md]
-sources: [nnter/components/attention.py, nnter/components/eproperty.py, nnter/families/gpt2.py, nnter/families/falcon.py, nnter/families/gpt_oss.py, nnter/families/gptj.py, nnter/families/bloom.py, nnter/families/mpt.py, nnter/families/deepseek_v2.py, tests/families/suite.py]
+sources: [nnter/components/attention.py, nnter/components/eproperty.py, nnter/families/gpt2.py, nnter/families/falcon.py, nnter/families/gpt_oss.py, nnter/families/gptj.py, nnter/families/bloom.py, nnter/families/mpt.py, nnter/families/deepseek_v2.py, nnter/families/gemma4_text.py, tests/families/suite.py]
 ---
 
 # Attention Interior
@@ -84,8 +84,8 @@ Reading one raises `nnter.Unavailable` with the same reason, before the model
 runs. `attention_output` does not depend on the implementation and stays
 available. A load with no `attn_implementation` gets transformers' default,
 `sdpa` on every family that supports it, so pass `attn_implementation="eager"`
-at load for any of the six ([loading.md](loading.md)). GPT-J, BLOOM and MPT
-have no other implementation in transformers and load eager with no flag.
+at load for any of the six ([loading.md](loading.md)). GPT-J, GPT-Neo, BLOOM and
+MPT have no `sdpa` implementation in transformers and load eager with no flag.
 
 ## Reading, editing in place, assigning
 
@@ -184,16 +184,23 @@ query head before the rotary embedding, so `attention_keys` and
 `attention_values` are `num_heads` wide there, although
 `model.num_kv_heads` reports the config's `num_kv_heads`.
 
-### GPT-J, BLOOM, MPT: the same six on their own operations
+### GPT-J, GPT-Neo, BLOOM, MPT: the same six on their own operations
 
-These three do their own attention arithmetic too, and their families map the
-same six values onto it: GPT-J's around its `_attn` call, BLOOM's on its
+These four do their own attention arithmetic too, and their families map the
+same six values onto it: GPT-J's and GPT-Neo's around their `_attn` calls, BLOOM's on its
 `_reshape` split and `bmm`, MPT's on its `*_states` bindings and second
 `matmul`. The head outputs are heads-first in those forwards and are served as
-a sequence-first view, so an in-place edit still lands. All three load eager
+a sequence-first view, so an in-place edit still lands. All four load eager
 by default. BLOOM's and MPT's values do not check the implementation at all;
-GPT-J's carry the eager check like the interface families'. BLOOM's queries,
+GPT-J's and GPT-Neo's carry the eager check like the interface families'. BLOOM's queries,
 keys and values take in-place edits; MPT's are split views (above).
+
+GPT-Neo's scores are `q @ k^T` with no `1/sqrt(head_dim)` scaling, computed and
+served in float32 whatever the model's dtype; the pattern is cast back to the
+values' dtype. Its `local` layers (every other one, by `attention_layers`)
+mask keys `window_size` or more tokens back, so their pattern is zero there
+and their scores hold float32's minimum. `self_attn` is the inner
+`attn.attention` module, which the `attn` wrapper calls and returns unchanged.
 
 ### GPT-OSS: an attention sink
 
@@ -219,6 +226,43 @@ qk_rope_head_dim` and values `v_head_dim`, so `attention_queries` and
 `attention_head_outputs` are `model.head_dim` wide. The interface sees
 `num_heads` key/value heads whatever `num_key_value_heads` says: the latent
 projection produces keys and values for every head.
+
+### Gemma-4: borrowed keys and values, per-layer head sizes
+
+Gemma-4 (`gemma4_text`, `gemma4_unified_text`) has three things the other
+families do not, and the six values stay available through all of them:
+
+- **KV sharing.** The last `num_kv_shared_layers` blocks (20 of 35 on E2B, 18
+  of 42 on E4B) have no `k_proj` or `v_proj`. Each attends with the keys and
+  values of the last earlier block of its kind (sliding or full) before the
+  sharing starts. `attention_keys` and `attention_values` there are what the
+  attention receives, the source block's tensors themselves, so an in-place
+  edit on the source block's keys or values reaches every block that borrows
+  them, and one on a borrowing block reaches the later borrowers of its kind.
+  An assignment swaps only that block's argument:
+
+  ```python
+  source, borrower = model.layers[13].self_attn, model.layers[15].self_attn   # E2B: 15 borrows 13's sliding keys
+  with model.trace(prompt):
+      source.attention_keys[:, :, -1] = 0                    # in place: block 15 attends with the edited keys too
+  with model.trace(prompt):
+      source.attention_keys = source.attention_keys * 0      # assigned: block 13 alone
+  ```
+
+  Which blocks borrow is `layers[i].self_attn._module.is_kv_shared_layer`;
+  the source of a kind is the block with `store_full_length_kv`.
+- **`attention_k_eq_v`** (26B-A4B, 31B, 12B). The full-attention blocks have no
+  `v_proj`; their values are `v_norm(k_proj(x))`, the keys' projection before
+  `k_norm` and the rotary embedding. `attention_values` is that tensor.
+- **Per-layer sizes.** Sliding blocks have `head_dim` 256, full blocks 512, and
+  on every released size but E4B the two kinds have different
+  `num_key_value_heads`. `model.head_dim` and `model.num_kv_heads` are the
+  config's top-level values, the sliding blocks'; read a full block's widths off
+  its tensors (`attention_keys.shape`) or `model.config.get_text_config().per_layer_config[i]`.
+
+The queries and keys are served after `q_norm` / `k_norm` and the rotary
+embedding, and the softmax scale is 1 (`scaling = 1.0`), so the scores are the
+plain dot products of what is served.
 
 ## Under `generate`
 

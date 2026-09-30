@@ -72,8 +72,11 @@ On Gemma-2 the two differ, because `Gemma2ForCausalLM.forward` applies
 the same cap, so intermediate blocks are read on the model's own scale, and the
 wiring check above passes on Gemma-2 too. An uncapped lens on a softcapped model
 is far too confident at every layer; the top-1 token usually survives, nothing
-else does. Check `model.config`, not a list of model names: Gemma-3 sets the key
-to `None`.
+else does. Check `model.config.get_text_config()`, not a list of model names: Gemma-3
+sets the key to `None`, Gemma-4 to `30.0`, and a multimodal wrapper (`gemma3`, `gemma4`)
+keeps it in `text_config`, which is where `project_on_vocab` reads it. Gemma-4's
+`layer_scalar` shrinks the stream between blocks; the final RMS norm divides the scale
+back out, so the lens on an intermediate block reads it on the same footing as the last.
 
 ## Variations
 

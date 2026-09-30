@@ -603,7 +603,7 @@ class FamilySuite:
                 model.next_token_probs = torch.zeros(1, model.vocab_size)
 
     def test_sizes_match_the_model(self, model):
-        assert model.num_layers == len(model.layers) == model.config.num_hidden_layers
+        assert model.num_layers == len(model.layers) == model.config.get_text_config().num_hidden_layers
         blocks = self.attn_blocks(model)
         block = blocks[0] if blocks else model.layers[0]
         if blocks:
@@ -627,7 +627,7 @@ class FamilySuite:
         block = next((layer for layer in model.layers if getattr(layer, "mlp", None) is not None), block)._module
         dims = {d for p in block.parameters() for d in p.shape}
         assert isinstance(model.intermediate_size, int)  # resolves on every family, whatever the config calls it
-        width = getattr(model.config, self.MLP_WIDTH_KEY) if self.MLP_WIDTH_KEY else model.intermediate_size
+        width = getattr(model.config.get_text_config(), self.MLP_WIDTH_KEY) if self.MLP_WIDTH_KEY else model.intermediate_size
         assert width in dims, (self.MLP_WIDTH_KEY or "intermediate_size", width, dims)
 
     def test_repr_lists_the_values(self, model):

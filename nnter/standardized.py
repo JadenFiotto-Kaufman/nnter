@@ -393,8 +393,10 @@ class StandardizedTransformer(TransformersModel):
         return self._add_prefix_false_tokenizer
 
     # -- sizes (from the config) ----------------------------------------------
-    # Each is the plain case; a family whose config says it otherwise defines
-    # a function of the same name (see `StandardizedProperty`).
+    # Each is the plain case, read off the text config (a multimodal
+    # checkpoint's ``text_config``, else the config itself); a family whose
+    # config says it otherwise defines a function of the same name (see
+    # `StandardizedProperty`).
 
     @StandardizedProperty
     def num_layers(self) -> int:
@@ -402,25 +404,25 @@ class StandardizedTransformer(TransformersModel):
 
     @StandardizedProperty
     def hidden_size(self) -> int:
-        return self.config.hidden_size
+        return self.config.get_text_config().hidden_size
 
     @StandardizedProperty
     def vocab_size(self) -> int:
-        return self.config.vocab_size
+        return self.config.get_text_config().vocab_size
 
     @StandardizedProperty
     def num_heads(self) -> int:
-        return self.config.num_attention_heads
+        return self.config.get_text_config().num_attention_heads
 
     @StandardizedProperty
     def num_kv_heads(self) -> int:
         """Key/value heads: ``num_key_value_heads`` under grouped-query attention, else `num_heads`."""
-        return getattr(self.config, "num_key_value_heads", None) or self.num_heads
+        return getattr(self.config.get_text_config(), "num_key_value_heads", None) or self.num_heads
 
     @StandardizedProperty
     def head_dim(self) -> int:
         """Width of one attention head: the config's ``head_dim`` when it says (Qwen3, Gemma), else ``hidden_size // num_heads``."""
-        return getattr(self.config, "head_dim", None) or self.hidden_size // self.num_heads
+        return getattr(self.config.get_text_config(), "head_dim", None) or self.hidden_size // self.num_heads
 
     @StandardizedProperty
     def qk_head_dim(self) -> int:
@@ -430,7 +432,7 @@ class StandardizedTransformer(TransformersModel):
     @StandardizedProperty
     def intermediate_size(self) -> int:
         """Width of the dense MLP's hidden layer, ``config.intermediate_size``; a mixture of experts' experts are ``moe_intermediate_size`` wide."""
-        return self.config.intermediate_size
+        return self.config.get_text_config().intermediate_size
 
     # -- remote ------------------------------------------------------------------
 

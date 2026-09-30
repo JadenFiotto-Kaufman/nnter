@@ -193,8 +193,8 @@ is symmetric.
 - Patching mutates the served tensor; `.clone()` first if you want both.
 - A name bound inside the trace does not survive it; `cache`, `sweep`, `row` are
   made outside.
-- On a family whose block returns a tuple (GPT-J, BLOOM, MPT, Falcon),
-  `layer_output` is still the tensor, and an assignment puts it back in the tuple.
+- On a family whose block returns a tuple (GPT-J, GPT-Neo, BLOOM, MPT,
+  Falcon), `layer_output` is still the tensor, and an assignment puts it back in the tuple.
   No `[0]` indexing and no tuple rebuild.
 
 ## Related

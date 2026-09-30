@@ -17,9 +17,9 @@ with model.trace("The Eiffel Tower is in"):
 The same block runs unchanged on `meta-llama/Llama-3.1-8B`,
 `EleutherAI/pythia-70m-deduped`, and every other registered family: GPT-2,
 Llama, Llama 4 (text), GPT-NeoX, Mistral, Mixtral, MiniMax-M2, Qwen2, Qwen2-MoE, Qwen3, Qwen3-MoE, Gemma,
-Gemma-2, Gemma-3 (text), GPT-OSS, DeepSeek-V2, DeepSeek-V3, DeepSeek-V3.2, GLM-4.5/4.6,
+Gemma-2, Gemma-3 (text and multimodal checkpoints), Gemma-4 (text; E2B/E4B, 26B-A4B, 31B and the unified 12B), GPT-OSS, DeepSeek-V2, DeepSeek-V3, DeepSeek-V3.2, GLM-4.5/4.6,
 GLM-4.7-Flash, GLM-5, DBRX, Phi, Phi-3,
-OLMo, OLMo-2, OLMo-3, OLMoE, EXAONE 4.0, SmolLM3, StableLM, Cohere (Command-R), Cohere-2, Granite, GPT-J, BLOOM, MPT, Falcon (7B and 40B
+OLMo, OLMo-2, OLMo-3, OLMoE, EXAONE 4.0, SmolLM3, StableLM, Cohere (Command-R), Cohere-2, Granite, GPT-J, GPT-Neo, BLOOM, MPT, Falcon (7B and 40B
 layouts), OPT, the gated DeltaNet hybrids Qwen3-Next, Qwen3.5,
 Qwen3.5-MoE (text) and OLMo-Hybrid, the Mamba-1 state-space models Mamba,
 Falcon-Mamba and Jamba (with attention and experts), and the Mamba-2 models Mamba-2,
@@ -42,7 +42,7 @@ an extra attribute pointing at the same envoy.
 
 Norm names are deliberately not part of the vocabulary. `input_layernorm` and
 `post_attention_layernorm` bind as aliases where a family spells them
-otherwise, but their *meaning* varies: on Gemma-2/3 `post_attention_layernorm`
+otherwise, but their *meaning* varies: on Gemma-2/3/4 `post_attention_layernorm`
 follows the attention and the pre-MLP norm is `pre_feedforward_layernorm`; on
 a parallel block (GPT-NeoX, Phi, GPT-J, StableLM, Falcon) one norm feeds both
 sublayers. What a user wants from a norm is what it produces, and that is
@@ -86,7 +86,7 @@ wrapped by the family's `Layer`, an nnsight `Envoy` subclass, and gains:
 
 | value                       | what it is                                                                 |
 | --------------------------- | -------------------------------------------------------------------------- |
-| `model.layers[i].layer_output` | the residual stream leaving the block, as a tensor whether the block returns a tensor (Llama, GPT-2, GPT-NeoX) or a tuple with it first (GPT-J, Bloom, MPT, Falcon) |
+| `model.layers[i].layer_output` | the residual stream leaving the block, as a tensor whether the block returns a tensor (Llama, GPT-2, GPT-NeoX) or a tuple with it first (GPT-J, GPT-Neo, Bloom, MPT, Falcon) |
 | `model.layers[i].self_attn.attention_output` | what the attention sublayer adds to the residual stream |
 | `model.layers[i].mlp.mlp_output` | what the MLP sublayer adds to the residual stream |
 | `model.layers[i].self_attn.attention_probabilities` | the attention pattern the values are mixed with, `[batch, heads, query, key]`, read at the dropout after the softmax inside the eager attention forward |
@@ -108,7 +108,7 @@ The two contributions are defined by the identity
 which holds for a sequential and a parallel block alike; the test suite checks
 it on every pinned family. A family whose sublayer adds the residual inside the
 module (BLOOM, MPT, DBRX) or adds a post-sublayer norm's output instead
-(Gemma-2/3, OLMo-2) points the value at the right place in its subclass, so the
+(Gemma-2/3/4, OLMo-2) points the value at the right place in its subclass, so the
 name means the same thing everywhere. The pattern is read after the dropout, not
 at the softmax, for the same reason: that is the tensor the values are mixed
 with, in the model's dtype and with an attention sink's column already dropped.
@@ -121,7 +121,7 @@ and values are split views of one tensor, which torch refuses to edit in place
 model by an `eproperty` transform.
 
 The interior values live on transformers' shared attention interface on most
-families; GPT-J, BLOOM, MPT and Falcon do their own attention arithmetic, and
+families; GPT-J, GPT-Neo, BLOOM, MPT and Falcon do their own attention arithmetic, and
 their families map the same five values onto their own operations (with the
 head outputs presented sequence-first as a view where the family keeps heads
 first). Two of them bind values at points a single trace must respect: on
@@ -157,13 +157,14 @@ overriding only what its forward spells differently, and keys them on its own
 transformers module types in its `ENVOYS` (`envoys=` matches by type or native
 path, never by alias). Three shapes of override exist today:
 
-- **sandwich norms** (Gemma-2/3, OLMo-2): the contributions are the
+- **sandwich norms** (Gemma-2/3/4, OLMo-2): the contributions are the
   post-attention and post-feedforward norms' outputs, via a `../` path to the
-  sibling norm;
+  sibling norm (Gemma-4's block then adds a third term, `layers[i].per_layer_output`,
+  on checkpoints with per-layer embeddings, and multiplies the sum by `layer_scalar`);
 - **residual added inside the module** (BLOOM both sublayers, MPT's MLP): the
   contribution is the operation before the add, via a `source.` path, reading
   `dropout_add`'s first argument or the dropout's output;
-- **own attention arithmetic** (GPT-J, BLOOM, MPT, Falcon): the pattern and the
+- **own attention arithmetic** (GPT-J, GPT-Neo, BLOOM, MPT, Falcon): the pattern and the
   interior values are that family's own operations rather than the shared
   interface. A family that has not mapped them yet marks them
   `unavailable(NOT_ON_INTERFACE)`.
@@ -399,7 +400,7 @@ the reverse order segfaults at import; a plain `import transformers` first is fi
 HF_HUB_OFFLINE=1 pytest
 ```
 
-One file per family under `tests/families/` (72 families, 73 checkpoints), each subclassing `FamilySuite`
+One file per family under `tests/families/` (75 families, 79 checkpoints), each subclassing `FamilySuite`
 (`tests/families/suite.py`) with its pinned tiny checkpoint, native paths and
 quirks, plus the tests that are specific to it. The suite is every end-to-end
 statement a family must satisfy: aliases reach the native modules; every

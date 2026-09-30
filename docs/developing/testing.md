@@ -217,6 +217,13 @@ checkpoint's flat `rope_parameters` does not parse for a model with
 the snapshot's files into a temp dir, rewrites only `config.json` into the
 per-layer-type form, and `REPO` is that directory (`:36`). The family itself needs nothing. Its own
 test checks the contribution is the post-attention norm's output (`:42-46`).
+`tests/families/test_gemma4_text.py` patches weights, not only the config: the
+tiny text checkpoint's per-layer embedding table has 99 rows, so `_ple_checkpoint()`
+tiles it to the full vocabulary into a copy under the temp directory, written once
+per snapshot. Its `Gemma4Suite` overrides `test_contribution_identity` for the
+block's `* layer_scalar` and third term, adds `per_layer_output` to
+`expected_values`, and overrides `test_skip_layers_with_a_given_stream` on a
+KV-sharing checkpoint; `test_gemma4_unified_text.py` imports that suite.
 The hybrid files (`test_qwen3_next.py`, `test_qwen3_5_text.py`,
 `test_qwen3_5_moe_text.py`) are one file with three headers: they override
 `test_every_layer_is_renamed` for the per-block `self_attn`/`linear_attn`
