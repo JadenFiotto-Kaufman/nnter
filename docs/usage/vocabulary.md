@@ -62,6 +62,7 @@ family; the block keys only where a block spells a sublayer otherwise:
 | --- | --- | --- |
 | Llama, Mistral, Qwen2/3, Gemma-1/2/3, Phi-3, OLMo, DeepSeek, GPT-OSS, hybrids | `model.{embed_tokens, layers, norm}` | none needed |
 | Llama 4 (text) | `model.{embed_tokens, layers, norm}`; `language_model.model.{embed_tokens, layers, norm}` and `language_model.lm_head` on a `Llama4ForConditionalGeneration` module | `feed_forward` -> `mlp` |
+| Gemma-3, Gemma-4 | `model.{embed_tokens, layers, norm}`; `model.language_model.{embed_tokens, layers, norm}` on a `Gemma3ForConditionalGeneration` / `Gemma4ForConditionalGeneration` (`lm_head` stays at the root) | none needed |
 | GPT-2 | `transformer.{wte, h, ln_f}` | `attn` -> `self_attn`, `ln_1` -> `input_layernorm`, `ln_2` -> `post_attention_layernorm` |
 | GPT-J | `transformer.{wte, h, ln_f}` | `attn` -> `self_attn`, `ln_1` -> `input_layernorm` |
 | GPT-Neo | `transformer.{wte, h, ln_f}` | `attn.attention` -> `self_attn` (the module inside the `attn` wrapper), `ln_1` -> `input_layernorm`, `ln_2` -> `post_attention_layernorm` |
@@ -98,7 +99,7 @@ their *meaning* varies:
 
 - On a sequential block (Llama, GPT-2) `input_layernorm` feeds the attention and
   `post_attention_layernorm` feeds the MLP.
-- On Gemma-2/3 `post_attention_layernorm` follows the attention (it norms the attention's
+- On Gemma-2/3/4 `post_attention_layernorm` follows the attention (it norms the attention's
   output), and the pre-MLP norm is `pre_feedforward_layernorm`.
 - On a parallel block (GPT-NeoX with `use_parallel_residual`, Phi, GPT-J, StableLM-2,
   Falcon) one norm feeds both sublayers; GPT-J, Phi and Falcon have no

@@ -3,7 +3,7 @@ title: Attention Interior
 one_liner: Read, edit and assign the queries, keys, values, scores, pattern and per-head outputs inside every family's attention, under `attn_implementation="eager"`.
 tags: [usage, attention, interior, source, eager, heads]
 related: [docs/usage/residual-stream.md, docs/usage/layouts.md, docs/usage/availability.md, docs/usage/loading.md, docs/usage/generation.md, docs/usage/delta-net.md, docs/usage/remote.md]
-sources: [nnter/components/attention.py, nnter/components/eproperty.py, nnter/families/gpt2.py, nnter/families/falcon.py, nnter/families/gpt_oss.py, nnter/families/gptj.py, nnter/families/bloom.py, nnter/families/mpt.py, nnter/families/deepseek_v2.py, tests/families/suite.py]
+sources: [nnter/components/attention.py, nnter/components/eproperty.py, nnter/families/gpt2.py, nnter/families/falcon.py, nnter/families/gpt_oss.py, nnter/families/gptj.py, nnter/families/bloom.py, nnter/families/mpt.py, nnter/families/deepseek_v2.py, nnter/families/gemma4_text.py, tests/families/suite.py]
 ---
 
 # Attention Interior
@@ -226,6 +226,43 @@ qk_rope_head_dim` and values `v_head_dim`, so `attention_queries` and
 `attention_head_outputs` are `model.head_dim` wide. The interface sees
 `num_heads` key/value heads whatever `num_key_value_heads` says: the latent
 projection produces keys and values for every head.
+
+### Gemma-4: borrowed keys and values, per-layer head sizes
+
+Gemma-4 (`gemma4_text`, `gemma4_unified_text`) has three things the other
+families do not, and the six values stay available through all of them:
+
+- **KV sharing.** The last `num_kv_shared_layers` blocks (20 of 35 on E2B, 18
+  of 42 on E4B) have no `k_proj` or `v_proj`. Each attends with the keys and
+  values of the last earlier block of its kind (sliding or full) before the
+  sharing starts. `attention_keys` and `attention_values` there are what the
+  attention receives, the source block's tensors themselves, so an in-place
+  edit on the source block's keys or values reaches every block that borrows
+  them, and one on a borrowing block reaches the later borrowers of its kind.
+  An assignment swaps only that block's argument:
+
+  ```python
+  source, borrower = model.layers[13].self_attn, model.layers[15].self_attn   # E2B: 15 borrows 13's sliding keys
+  with model.trace(prompt):
+      source.attention_keys[:, :, -1] = 0                    # in place: block 15 attends with the edited keys too
+  with model.trace(prompt):
+      source.attention_keys = source.attention_keys * 0      # assigned: block 13 alone
+  ```
+
+  Which blocks borrow is `layers[i].self_attn._module.is_kv_shared_layer`;
+  the source of a kind is the block with `store_full_length_kv`.
+- **`attention_k_eq_v`** (26B-A4B, 31B, 12B). The full-attention blocks have no
+  `v_proj`; their values are `v_norm(k_proj(x))`, the keys' projection before
+  `k_norm` and the rotary embedding. `attention_values` is that tensor.
+- **Per-layer sizes.** Sliding blocks have `head_dim` 256, full blocks 512, and
+  on every released size but E4B the two kinds have different
+  `num_key_value_heads`. `model.head_dim` and `model.num_kv_heads` are the
+  config's top-level values, the sliding blocks'; read a full block's widths off
+  its tensors (`attention_keys.shape`) or `model.config.get_text_config().per_layer_config[i]`.
+
+The queries and keys are served after `q_norm` / `k_norm` and the rotary
+embedding, and the softmax scale is 1 (`scaling = 1.0`), so the scores are the
+plain dot products of what is served.
 
 ## Under `generate`
 

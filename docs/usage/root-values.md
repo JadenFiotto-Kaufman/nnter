@@ -134,7 +134,7 @@ The three print with the model:
 ## Sizes
 
 Each size is a `StandardizedProperty` on the root, read-only, readable before any trace and
-without `dispatch`. It reads the config by the plain rule below unless the model's family module
+without `dispatch`. It reads the text config (a multimodal checkpoint's `text_config`, else the config itself) by the plain rule below unless the model's family module
 defines a function of the same name (`def num_kv_heads(model): ...` in `falcon.py`), in
 which case that function answers. The plain rule is what a Llama-style config needs; a
 family whose config spells a size its own way keeps that spelling beside its names and
@@ -164,6 +164,7 @@ The families whose configs say it otherwise:
 | `opt` | `intermediate_size` | `config.ffn_dim` |
 | `mpt` | `intermediate_size` | `config.expansion_ratio * hidden_size` |
 | `bloom` | `intermediate_size` | `4 * hidden_size`; the config has no key for it |
+| `gemma4_text`, `gemma4_unified_text` | `head_dim`, `num_kv_heads` | the config's top-level `head_dim` / `num_key_value_heads`, the sliding blocks'. transformers marks both per-layer and refuses a plain `config.head_dim`; the full blocks' (512-wide heads, often fewer key/value heads) are `config.get_text_config().per_layer_config[i]` and the shapes of their tensors. |
 
 On the tiny checkpoints:
 
@@ -188,7 +189,9 @@ same way: [adding-a-family](../extending/adding-a-family.md#sizes).
 
 ## Gotchas
 
-- **`logits` is not `lm_head.output` on Gemma-2, Cohere or Granite.** Use `logits` for the
+- **On Gemma-4 the sizes are the sliding blocks'.** A full-attention block's `head_dim` and
+  key/value heads differ; read them off its tensors.
+- **`logits` is not `lm_head.output` on Gemma-2, Gemma-4, Cohere or Granite.** Use `logits` for the
   model's prediction and `lm_head.output` only when you want the raw projection.
 - **`next_token_probs` and `input_size` are read-only.** Assign `logits` or `input_ids`.
 - **`next_token_probs` assumes the last position is the last token.** Left-pad a batch.
