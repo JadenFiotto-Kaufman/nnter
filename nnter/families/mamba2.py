@@ -13,9 +13,9 @@ Each block is ``hidden + mixer(norm(hidden))`` (the residual in float32 when
 ``residual_in_fp32``), so the block's one contribution is the mixer's output
 and ``layer.input + linear_attn.attention_output == layer_output``. The mixer
 is `nnter.StateSpace` under the standard name ``linear_attn`` (the recurrent
-mixer's name on every hybrid) and the norm is ``input_layernorm``; both are
-bound by the block (`Layer.child_aliases`) because the mixer holds a gated
-``norm`` of its own that a ``RENAME`` key would also match. There is no
+mixer's name on every hybrid). The block's
+``norm`` keeps its name: a ``"norm"`` key would also match the mixer's own
+gated ``norm``, and its output is ``linear_attn.input``. There is no
 ``self_attn`` and no ``mlp``, so `status` lists neither.
 
 The sizes are the mixer's: ``num_heads`` and ``head_dim`` are the SSD heads
@@ -38,14 +38,12 @@ RENAME = {
     "backbone.embeddings": "embed_tokens",
     "backbone.layers": "layers",
     "backbone.norm_f": "norm",
+    "mixer": "linear_attn",
 }
 
 
 class Layer(Layer):
     """Mamba-2's block, one norm and one mixer; returns a bare tensor, so the base holds."""
-
-    def child_aliases(self) -> dict[str, str]:
-        return {"norm": "input_layernorm", "mixer": "linear_attn"}
 
 
 class StateSpace(StateSpace):

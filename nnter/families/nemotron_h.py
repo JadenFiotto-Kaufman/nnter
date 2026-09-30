@@ -15,10 +15,10 @@ block's entry in ``config.layers_block_type`` picks::
     lm_head
 
 Each block is ``hidden + mixer(norm(hidden))``. One native name, four
-meanings, so the standard name is bound by the block from its mixer's class
-(`Layer.child_aliases`): ``linear_attn`` on a Mamba-2 block, ``self_attn`` on
-an attention block, ``mlp`` on an MoE or MLP block; ``norm`` is
-``input_layernorm`` on every block. A block has exactly one of the three, so
+meanings, so the standard name is keyed on the mixer's class in ``RENAME``:
+``linear_attn`` on a Mamba-2 block, ``self_attn`` on an attention block,
+``mlp`` on an MoE or MLP block. The block's ``norm`` keeps its name (its output
+is the sublayer's ``.input``). A block has exactly one of the three, so
 `status` reports the other two missing on it, per block, and the
 contribution identity is ``input + <the one sublayer's output> ==
 layer_output``.
@@ -46,13 +46,6 @@ from ..components import Attention, Layer, Mlp, StateSpace
 
 MODEL_TYPES = ("nemotron_h",)
 
-RENAME = {
-    "model.embeddings": "embed_tokens",
-    "model.layers": "layers",
-    "model.norm_f": "norm",
-}
-
-#: The standard name of a block's ``mixer``, by the mixer's class.
 MIXER_NAMES = {
     NemotronHMamba2Mixer: "linear_attn",
     NemotronHAttention: "self_attn",
@@ -60,12 +53,19 @@ MIXER_NAMES = {
     NemotronHMLP: "mlp",
 }
 
+RENAME = {
+    "model.embeddings": "embed_tokens",
+    "model.layers": "layers",
+    "model.norm_f": "norm",
+    # One native name, four meanings: the standard name follows the mixer's class.
+    **MIXER_NAMES,
+}
+
+#: The standard name of a block's ``mixer``, by the mixer's class.
+
 
 class Layer(Layer):
     """Nemotron-H's block: ``norm`` then one ``mixer``, named by what the mixer is; returns a bare tensor."""
-
-    def child_aliases(self) -> dict[str, str]:
-        return {"norm": "input_layernorm", "mixer": MIXER_NAMES[type(self._module.mixer)]}
 
 
 class Attention(Attention):

@@ -36,11 +36,11 @@ def _patched_checkpoint(repo="hf-tiny-v2/tiny-random-NemotronHForCausalLM"):
 class TestNemotronH(StateSpaceChecks, FamilySuite):
     REPO = _patched_checkpoint()
     FAMILY = nemotron_h
+    ATTENTION_NORM = "norm"                # the block norm keeps its native name
     # ``layers_block_type``: Mamba-2, MoE, Mamba-2, attention, MoE
     NATIVE = {
         "embed_tokens": "model.embeddings",
         "layers": "model.layers",
-        "layers.0.input_layernorm": "model.layers.0.norm",
         "layers.0.linear_attn": "model.layers.0.mixer",
         "layers.1.mlp": "model.layers.1.mixer",
         "layers.3.self_attn": "model.layers.3.mixer",
@@ -62,8 +62,7 @@ class TestNemotronH(StateSpaceChecks, FamilySuite):
             name = KINDS[kind]
             assert getattr(layer, name) is layer.mixer, (layer.path, kind)
             assert all(getattr(layer, other, None) is None for other in set(KINDS.values()) - {name}), (layer.path, kind)
-            assert layer.input_layernorm is layer.norm
-            assert layer._aliases == {"input_layernorm": "norm", name: "mixer"}
+            assert layer._aliases == {name: "mixer"}
 
     def test_status_is_per_block(self, model):
         status = model.status()

@@ -10,10 +10,10 @@ from nnter.families import mamba2
 class TestMamba2(StateSpaceChecks, FamilySuite):
     REPO = "yujiepan/mamba2-tiny-random"
     FAMILY = mamba2
+    ATTENTION_NORM = "norm"                # the block norm keeps its native name
     NATIVE = {
         "embed_tokens": "backbone.embeddings",
         "layers": "backbone.layers",
-        "layers.0.input_layernorm": "backbone.layers.0.norm",
         "layers.0.linear_attn": "backbone.layers.0.mixer",
         "norm": "backbone.norm_f",
         "lm_head": "lm_head",
@@ -36,8 +36,8 @@ class TestMamba2(StateSpaceChecks, FamilySuite):
     def test_only_the_block_norm_is_aliased(self, model):
         """``norm`` is the block's; the mixer's own gated ``norm`` keeps its native name only."""
         layer = model.layers[0]
-        assert layer.input_layernorm is layer.norm and "input_layernorm" not in layer.linear_attn._aliases
-        assert layer._aliases == {"input_layernorm": "norm", "linear_attn": "mixer"}
+        assert "input_layernorm" not in layer.__dict__ and "input_layernorm" not in layer.linear_attn._aliases
+        assert layer._aliases == {"linear_attn": "mixer"}
 
     def test_sizes_are_the_mixers(self, model):
         m = model.layers[0].linear_attn._module

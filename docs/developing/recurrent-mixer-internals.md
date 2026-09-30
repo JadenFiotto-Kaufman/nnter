@@ -348,12 +348,12 @@ with SSD's recurrence checked on every decode step, the unavailable per-token
 state and the optimized-kernel reason.
 
 Nemotron-H needs a block-level name choice, since each block holds one
-`mixer` of four classes. `Layer.child_aliases()` returns native child name
--> alias per block; `Layer.__init__` and `_update` bind it as a `RENAME`
-alias would (`object.__setattr__` on the block, recorded in `_aliases`, so
-`status()`'s `_standard_children` reads it), after nnsight's own
-`_bind_aliases`. Mamba-2 uses it too, because a `RENAME` key `norm` would
-also bind inside the mixer, whose gated norm is called `norm`.
+`mixer` of four classes. Its `RENAME` keys the standard name on the mixer's
+class (`{NemotronHMamba2Mixer: "linear_attn", NemotronHAttention:
+"self_attn", NemotronHMoE: "mlp", NemotronHMLP: "mlp"}`): nnsight binds a
+class key on every envoy that has exactly one direct child of that class, so
+each block gets the name for what it holds and `status()`'s `_standard_children`
+reads it like any alias.
 
 ## Adding a recurrent mixer
 

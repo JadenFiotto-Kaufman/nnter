@@ -124,30 +124,6 @@ def test_select_function_picks_the_element_per_access(gpt2_paths):
     assert torch.allclose(pattern, causal / causal.sum(-1, keepdim=True))
 
 
-def test_child_aliases_bind_per_block():
-    """`Layer.child_aliases` names a block's children per block, as `rename` would, and survives dispatch."""
-    from transformers.models.llama.modeling_llama import LlamaDecoderLayer
-
-    class Every(Layer):
-        def child_aliases(self):
-            return {"mlp": "feed_forward"} if self.path.endswith(".0") else {}
-
-    model = StandardizedTransformer("hf-internal-testing/tiny-random-LlamaForCausalLM", envoys={LlamaDecoderLayer: Every})
-    first, second = model.layers[0], model.layers[1]
-    assert first.feed_forward is first.mlp and first._aliases["feed_forward"] == "mlp"
-    assert getattr(second, "feed_forward", None) is None
-    with model.trace("Hello world"):                     # dispatches: real weights replace meta ones, the alias is rebound
-        out = first.feed_forward.output.save()
-    assert first.feed_forward is first.mlp and out.shape[-1] == model.hidden_size
-
-    class Shadowing(Layer):
-        def child_aliases(self):
-            return {"mlp": "self_attn"}
-
-    with pytest.raises(ValueError, match="would shadow"):
-        StandardizedTransformer("hf-internal-testing/tiny-random-LlamaForCausalLM", envoys={LlamaDecoderLayer: Shadowing})
-
-
 def test_route_kernels_binds_each_state_space_kernel_to_its_own_torch_function():
     """A mixer with no per-token state (`StateSpace`) keeps its prompt kernel: each name gets its own pure-torch function."""
     import sys

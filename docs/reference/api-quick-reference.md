@@ -140,7 +140,6 @@ The decoder block. `Layer.returns_tuple` (class attribute, default `False`) says
 | Method | Signature | What |
 |---|---|---|
 | `skip_with` | `skip_with(hidden: Tensor) -> None` | Skip this block; `hidden` takes the place of its `layer_output`, as `(hidden, None)` when `returns_tuple`. Inside a trace, before the block runs. |
-| `child_aliases` | `child_aliases() -> dict[str, str]` | Standard names this block binds on its own children, native child name -> alias, decided per block (default `{}`). Bound like a `RENAME` alias, at build and again when real weights replace meta ones; an alias that would shadow a name raises `ValueError`. Nemotron-H names its one `mixer` by its class (`linear_attn`, `self_attn` or `mlp`); Mamba-2 binds `norm` and `mixer` on the block alone, since the mixer has a `norm` of its own. |
 
 ## `Attention`
 
