@@ -67,7 +67,10 @@ class EProperty(eproperty):
             indexes the returned tuple. A write repacks the element into the
             current value, so assigning one argument of a call replaces just
             that argument. ``input`` is the call's first argument, ``inputs``
-            with the first element selected.
+            with the first element selected. A function of the host returning
+            one of those (or ``None``, the whole value) selects per access, for
+            a value whose position differs between the calls a forward branches
+            to (`StateSpace`'s two kernels).
 
     The location is served by nnsight the way any eproperty's is, whatever the
     path: a module's output, a sibling norm's, or an operation's arguments,
@@ -79,6 +82,11 @@ class EProperty(eproperty):
     operation that is not there raises `SourceNotAvailable` naming what is,
     rather than the `AttributeError` a descriptor would otherwise swallow into
     "no attribute".
+
+    A host that defines ``_serve(location)`` and ``_swap(location, value)``
+    answers reads and writes itself: `StateSpace` keeps what its call was
+    served, so several values at one location, and the arguments its other
+    values depend on, are read from the model once per call.
     """
 
     def __init__(
@@ -86,7 +94,7 @@ class EProperty(eproperty):
         key: str | Callable[[Envoy], str] | None = None,
         description: str | None = None,
         unavailable: str | Callable[[Envoy], str | None] | None = None,
-        select: int | str | None = None,
+        select: int | str | Callable[[Envoy], int | str | None] | None = None,
     ) -> None:
         self.locate = key if callable(key) else None
         self.unavailable = unavailable
@@ -200,30 +208,34 @@ class EProperty(eproperty):
 
     # -- select -----------------------------------------------------------------
 
-    def _pick(self, attribute: str, value: Any) -> Any:
+    def _selection(self, obj: Envoy) -> int | str | None:
+        """The element this access selects: `select` itself, or what it returns for ``obj``."""
+        return self.select(obj) if callable(self.select) else self.select
+
+    def _pick(self, attribute: str, value: Any, select: int | str | None) -> Any:
         if attribute == "input":
             return first_input(*value)
-        if self.select is None:
+        if select is None:
             return value
         if attribute == "inputs":
             args, kwargs = value
-            return kwargs[self.select] if isinstance(self.select, str) else args[self.select]
-        return value[self.select]
+            return kwargs[select] if isinstance(select, str) else args[select]
+        return value[select]
 
-    def _put(self, attribute: str, current: Any, element: Any) -> Any:
+    def _put(self, attribute: str, current: Any, element: Any, select: int | str | None) -> Any:
         if attribute == "input":
             return replace_first_input(*current, element)
-        if self.select is None:
+        if select is None:
             return element
         if attribute == "inputs":
             args, kwargs = current
-            if isinstance(self.select, str):
-                return args, {**kwargs, self.select: element}
+            if isinstance(select, str):
+                return args, {**kwargs, select: element}
             args = list(args)
-            args[self.select] = element
+            args[select] = element
             return tuple(args), kwargs
         current = list(current)
-        current[self.select] = element
+        current[select] = element
         return tuple(current)
 
     # -- read and write -----------------------------------------------------------
@@ -237,8 +249,9 @@ class EProperty(eproperty):
         self._check(obj)
         key = self.path(obj)
         location = self._resolve(obj, key)
-        raw = Mediator.value(location)
-        value = self._pick(key.rsplit(".", 1)[-1], raw)
+        select = self._selection(obj)  # before the read: a select function may read an earlier value of the call
+        raw = _serve(obj, location)
+        value = self._pick(key.rsplit(".", 1)[-1], raw, select)
         if self._preprocess is not None:
             value = self._preprocess(obj, value)
         if self._transform is not None:
@@ -256,8 +269,24 @@ class EProperty(eproperty):
         key = self.path(obj)
         location = self._resolve(obj, key)
         attribute = key.rsplit(".", 1)[-1]
-        if self.select is not None or attribute == "input":
-            value = self._put(attribute, Mediator.value(location), value)
+        select = self._selection(obj)
+        if select is not None or attribute == "input":
+            value = self._put(attribute, _serve(obj, location), value, select)
+        _swap(obj, location, value)
+
+
+def _serve(obj: Envoy, location: str) -> Any:
+    """The value at ``location``: the host's ``_serve`` when it has one (a record of what its call was served), else the model's."""
+    serve = getattr(type(obj), "_serve", None)
+    return serve(obj, location) if serve is not None else Mediator.value(location)
+
+
+def _swap(obj: Envoy, location: str, value: Any) -> None:
+    """Replace the value at ``location``, through the host's ``_swap`` when it has one, so its record sees the write."""
+    swap = getattr(type(obj), "_swap", None)
+    if swap is not None:
+        swap(obj, location, value)
+    else:
         Mediator.swap(location, value)
 
 

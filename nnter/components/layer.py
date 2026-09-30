@@ -27,7 +27,8 @@ class Layer(Standard):
 
     Attributes:
         self_attn: The softmax attention, an `Attention`; absent on a hybrid's linear blocks.
-        linear_attn: The gated DeltaNet mixer, a `LinearAttention`; hybrids only.
+        linear_attn: The recurrent mixer, a `LinearAttention` (gated DeltaNet) or a `StateSpace` (Mamba-2);
+            hybrids and state-space models only.
         mlp: The feed-forward, an `Mlp`; absent on OPT.
         input_layernorm, post_attention_layernorm: The block's norms under their aliased names,
             where the family has them (their meaning varies; see the README).

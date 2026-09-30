@@ -144,6 +144,11 @@ relative to every envoy in the tree (nnsight docs/usage/rename-modules.md):
   such as `output`, an `nn.Module` attribute such as `config`) raises at construction.
   OPT keeps its block-level `final_layer_norm` native for a related reason: a
   single-component alias for it would also bind on the decoder's final norm.
+- A name that depends on the block goes in `RENAME` keyed on the child's *class*
+  (nnsight binds a class key on every envoy with exactly one direct child of that
+  class): Nemotron-H's one `mixer` per block is `linear_attn`, `self_attn` or `mlp` by
+  its class, `{NemotronHMamba2Mixer: "linear_attn", NemotronHAttention: "self_attn", ...}`.
+  A class that two children of one envoy share is an error there; key those by name.
 
 The standard names are `embed_tokens`, `layers`, `norm`, `lm_head`, and on blocks
 `self_attn`, `mlp`, `input_layernorm`, `post_attention_layernorm`, `linear_attn`. Bind
