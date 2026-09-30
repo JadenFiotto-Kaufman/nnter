@@ -1,0 +1,225 @@
+---
+title: The vLLM engine
+one_liner: "`StandardizedVLLM` is nnsight's `VLLM` with nnter's names and values: the same layouts as `StandardizedTransformer` (batch axis 1), private copies, vLLM's own defaults, and a family per vLLM implementation under `nnter/families/vllm/`."
+tags: [usage, vllm, engine, StandardizedVLLM, layer_input, families]
+related: [docs/usage/loading.md, docs/usage/residual-stream.md, docs/usage/root-values.md, docs/usage/availability.md, docs/usage/generation.md, docs/extending/adding-a-family.md]
+sources: [nnter/standardized_vllm.py, nnter/components/vllm.py, nnter/families/vllm/__init__.py, nnter/families/vllm/llama.py, nnter/families/vllm/gemma2.py, nnter/families/vllm/gpt2.py, tests/vllm_families/vllm_suite.py]
+---
+
+# The vLLM engine
+
+## What this is for
+
+`StandardizedVLLM` runs a checkpoint on nnsight's `VLLM` engine (continuous batching, tensor
+parallelism, serving; nnsight `docs/models/vllm.md`) under nnter's vocabulary. The names and
+the values are `StandardizedTransformer`'s, with the same layouts, so a block written against
+`model.layers[i].layer_output[:, -1]` runs on either engine.
+
+Everything else is nnsight's `VLLM`, with vLLM's own defaults: a trace is a generation request
+(`max_tokens=16`, `temperature=1.0` unless you say), sampling settings go on `trace` / `invoke`,
+and each invoke is one prompt. Read nnsight's vLLM guide for the engine; this page is what
+nnter adds and what differs from the transformers engine.
+
+Families on this engine: `llama`, `qwen2`, `qwen3`, `gemma2`, `gpt2`. Another `model_type`
+raises `UnsupportedFamily`.
+
+The snippets on this page ran on vLLM 0.27.1 with `HuggingFaceTB/SmolLM2-135M-Instruct`.
+
+## Canonical pattern
+
+```python
+import nnsight
+import torch
+from nnter import StandardizedVLLM
+
+model = StandardizedVLLM("HuggingFaceTB/SmolLM2-135M-Instruct", dispatch=True,
+                         gpu_memory_utilization=0.2, max_model_len=1024)
+
+layer = model.layers[12]
+with model.trace("The Eiffel Tower is in the city of", temperature=0.0, max_tokens=1):
+    stream_in = layer.layer_input.save()                  # [1, tokens, hidden]
+    attention = layer.self_attn.attention_output.save()   # [1, tokens, hidden]
+    mlp = layer.mlp.mlp_output.save()                     # [1, tokens, hidden]
+    stream = layer.layer_output.save()                    # [1, tokens, hidden]
+    logits = model.logits.save()                          # [1, 1, vocab]: the last position
+    probs = model.next_token_probs.save()                 # [1, vocab]
+
+print(tuple(stream.shape), tuple(logits.shape), model.tokenizer.decode(logits[0, -1].argmax()))
+# (1, 9, 576) (1, 1, 49152)  Paris
+torch.testing.assert_close(stream_in + attention + mlp, stream)
+```
+
+A script needs an `if __name__ == "__main__":` guard around the model's construction: vLLM
+starts its engine in a spawned process, which re-imports the main module.
+
+## What is the same
+
+- **The vocabulary**: `embed_tokens`, `layers[i].self_attn`, `layers[i].mlp`, `norm`, `lm_head`,
+  beside vLLM's native names.
+- **The boundary values and the identity**: `layer_input + attention_output + mlp_output ==
+  layer_output` on every block; the suite holds each against the transformers engine's value
+  for the same prompt.
+- **The layouts**: `[batch, seq, hidden]` with a batch of 1, `logits[:, -1]` the last position.
+- **The methods**: `steer`, `skip_layers`, `project_on_vocab`, `get_topk_closest_tokens`,
+  `status()`, and the sizes (`num_layers`, `hidden_size`, `num_heads`, ...).
+- **Reads, in-place edits and assignment** all reach the model.
+
+```python
+with model.trace("The Eiffel Tower is in the city of", temperature=0.0, max_tokens=1):
+    lens = nnsight.save(model.get_topk_closest_tokens(model.layers[24].layer_output[:, -1], k=3))
+    model.layers[25].layer_output[:, -1] *= 0.5            # in place
+    model.layers[26].mlp.mlp_output = model.layers[26].mlp.mlp_output * 0   # assignment
+    edited = model.logits.save()
+
+print(list(lens[0]))
+assert not torch.equal(edited, logits)
+```
+
+## What differs
+
+### One sequence per request
+
+vLLM serves a request's own rows, `[tokens, hidden]`; nnter restores the batch axis, which is
+always 1. Several prompts are several invokes, and a name saved in each comes back as a list:
+
+```python
+with model.trace(temperature=0.0, max_tokens=1) as tracer:
+    for prompt in ["The capital of France is", "Two plus two is"]:
+        with tracer.invoke(prompt):
+            last = layer.layer_output[:, -1].save()        # [1, hidden], once per invoke
+
+print(len(last), tuple(last[0].shape))
+# 2 (1, 576)
+```
+
+Under `tracer.iter`, step 0 is the prefill (every prompt token) and each later step one token:
+
+```python
+with model.trace("The capital of France is", temperature=0.0, max_tokens=3, ignore_eos=True) as tracer:
+    shapes = nnsight.save([])
+    for step in tracer.iter[:3]:
+        shapes.append(tuple(layer.layer_output.shape))
+
+print(shapes)
+# [(1, 5, 576), (1, 1, 576), (1, 1, 576)]
+```
+
+### Values are private copies
+
+A tensor vLLM serves is the model's live buffer, which the next fused kernel rewrites; raw
+`.output` saved without a clone comes back holding later data. Every nnter value on this engine
+is a copy, handed back to the model when the block moves on, so a saved value stays what it
+was read as and an in-place edit still lands. Two reads of a value in one statement are the
+same tensor:
+
+```python
+with model.trace("The Eiffel Tower is in the city of", temperature=0.0, max_tokens=1):
+    layer.layer_output[:, -1] += 0.1 * layer.layer_output[:, -1]
+    nudged = model.logits.save()
+
+assert not torch.equal(nudged, logits)
+```
+
+### The stream is in two halves on most families
+
+vLLM's Llama-style blocks fuse each residual add into the following norm: the block is called
+`forward(positions, hidden_states, residual)` and returns `(hidden_states, residual)`. Natively
+`layers[i].input` is the positions and `layers[i].output` a pair whose sum is the stream. Use
+`layer_input` and `layer_output`; they are the stream on every family and both engines
+(`layer_input` exists on `StandardizedTransformer` too, where it is `layers[i].input`).
+
+### `logits` is one position
+
+The engine computes logits for the last position only: `model.logits` is `[1, 1, vocab]`, the
+prompt's last token on the prefill and the newest token on each decode step.
+`model.samples` (nnsight's) is the token drawn from it.
+
+### A written value must keep its rows
+
+An assignment is spliced into the step the engine is running among other requests' rows. nnter
+refuses a value whose shape is not the one it served, in the block that wrote it; the request
+fails and the engine carries on:
+
+```python
+try:
+    with model.trace("The Eiffel Tower is in the city of", temperature=0.0, max_tokens=1):
+        layer.layer_output = layer.layer_output[:, :-1]
+except RuntimeError as error:
+    print(str(error).splitlines()[0][:90])
+```
+
+Errors raised in the engine's worker arrive as `RuntimeError` naming the original type.
+
+### What is unavailable
+
+```python
+status = model.status()
+print(sorted(name for name, reason in status.items() if reason))
+# ['attention_mask', 'self_attn.attention_head_outputs', 'self_attn.attention_keys',
+#  'self_attn.attention_probabilities', 'self_attn.attention_queries', 'self_attn.attention_scores',
+#  'self_attn.attention_values']
+```
+
+The scores and the pattern are computed inside vLLM's attention kernel; the queries, keys,
+values and head outputs are reachable but not mapped yet. A request is one unpadded sequence,
+so there is no `attention_mask`. `input_ids` and `input_size` are read-only. `project_on_vocab`
+and `get_topk_closest_tokens` call the engine's modules, so they work inside a trace only.
+Gradients, `.source` inside a kernel and `scan` are nnsight's limits on this engine.
+
+### `skip_layers` on a shared engine
+
+A skip has to answer for every row of the step, and a step holds whatever requests the engine
+batched together. `skip_layers` is safe on a request that runs alone; with other requests in
+flight it can end the engine (nnsight's vLLM guide, "skip"). To ablate a block without skipping
+it, write its contributions to zero.
+
+## Family notes
+
+| family | vLLM's block | notes |
+| --- | --- | --- |
+| `llama`, `qwen2`, `qwen3` | fused: `(hidden_states, residual)` | names are transformers' |
+| `gemma2` | fused, sandwich norms | contributions are the post-norms' outputs, as on transformers. No `lm_head` module: the unembedding is `embed_tokens`' weight, and `project_on_vocab` uses it. `token_embeddings` is the lookup *before* the `sqrt(hidden_size)` scaling (transformers' module scales itself); `layers[0].layer_input` is the scaled stream. |
+| `gpt2` | plain: takes and returns the stream | names are transformers' (`transformer.h`, `attn`, `ln_1`, `ln_2`) |
+
+## Adding a vLLM family
+
+One module, `nnter/families/vllm/<model_type>.py`, with what a transformers family declares
+([adding-a-family](../extending/adding-a-family.md)): `MODEL_TYPES`, `RENAME`, `Layer` /
+`Attention` / `Mlp`, and `ENVOYS` keyed on vLLM's module classes
+(`vllm.model_executor.models.<name>`). Subclass the bases in `nnter.components.vllm`:
+
+- `FusedLayer` for a block that takes and returns `(hidden_states, residual)` whose sum is the
+  stream; set `HIDDEN` / `RESIDUAL` if the block orders its arguments another way.
+- `Layer` for a block that takes and returns the stream; if it takes the positions first, say
+  where the stream is: `layer_input = Flat("inputs", select=1, ...)`.
+- `Attention` and `Mlp` when the module's output is what the block adds; otherwise point the
+  value at the right place with `Flat`, the descriptor for a `[tokens, ...]` tensor
+  (`Flat("../post_attention_layernorm.output")` in `gemma2.py`).
+
+Read vLLM's forward before choosing: the return type does not tell. StableLM's block returns a
+pair whose first element is already the whole stream. Then add
+`tests/vllm_families/test_vllm_<model_type>.py`, a `VLLMFamilySuite` subclass naming a
+checkpoint; the suite compares every value with `StandardizedTransformer`'s.
+`nnter.families.register(module, engine="vllm")` adds one from outside the package.
+
+## Gotchas
+
+- **nnter must be importable in the engine's worker process.** The block runs there against
+  the family's envoy classes, by reference. An installed package is; a path added with
+  `sys.path.insert` in the script is not, but `PYTHONPATH` is inherited.
+- **Bind the envoys you use outside the block in a sweep.** `model.layers[i]` or `model.logits`
+  inside a block ships the root with every invoke (nnsight's vLLM guide, "per-invoke cost").
+- **`layers[i].input` is not the stream** on a fused family; it is the positions.
+- **Reads follow forward order** within a step, as everywhere: a block's `layer_input`, its
+  contributions, then its `layer_output`.
+- **`model.edit()` needs `enable_prefix_caching=False`** at construction (nnsight's rule); a
+  trace forces its own recompute.
+- **bf16 checkpoints differ from transformers by more than float32 ones**; the suite compares
+  in float32 (`dtype="float32"`).
+
+## Related
+
+- nnsight `docs/models/vllm.md` and the `nnsight:vllm` skill — the engine: sampling, `edit()`,
+  taps, serving, tensor parallelism.
+- [residual-stream](residual-stream.md), [root-values](root-values.md), [availability](availability.md).
+- [docs/developing/testing.md](../developing/testing.md) — running `tests/vllm_families/`.
