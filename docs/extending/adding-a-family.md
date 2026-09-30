@@ -206,7 +206,8 @@ before path keys.
 
 The root's sizes (`num_layers`, `hidden_size`, `vocab_size`, `num_heads`, `num_kv_heads`,
 `head_dim`, `qk_head_dim`, `intermediate_size`) are each a `StandardizedProperty` on
-`StandardizedTransformer` that reads the config by the plain Llama-style rule:
+`StandardizedTransformer` that reads the text config (a multimodal checkpoint's `text_config`,
+else the config itself) by the plain Llama-style rule:
 `num_kv_heads` is `config.num_key_value_heads` or `num_heads`, `head_dim` is
 `config.head_dim` or `hidden_size // num_heads`, `qk_head_dim` is `head_dim`,
 `intermediate_size` is `config.intermediate_size`. Where the family's config spells one

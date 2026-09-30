@@ -142,7 +142,7 @@ The tensor a block passes to the next, `[batch, seq, hidden]`: `layers[i].input`
 
 ## Sandwich block
 
-A block that norms a sublayer's output before adding it to the residual stream, `x + post_attention_layernorm(attn(...))` (Gemma-2/3, OLMo-2/3). The contribution is the post-norm's output, so those families point `attention_output` / `mlp_output` at the sibling norm. See [families.md](families.md#sandwich-norms) and [../extending/overriding-values.md](../extending/overriding-values.md).
+A block that norms a sublayer's output before adding it to the residual stream, `x + post_attention_layernorm(attn(...))` (Gemma-2/3/4, OLMo-2/3). The contribution is the post-norm's output, so those families point `attention_output` / `mlp_output` at the sibling norm. See [families.md](families.md#sandwich-norms) and [../extending/overriding-values.md](../extending/overriding-values.md).
 
 ## Selective scan, `SelectiveScan`
 

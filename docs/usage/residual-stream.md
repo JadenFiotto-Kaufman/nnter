@@ -3,7 +3,7 @@ title: Residual stream and contributions
 one_liner: "`layer_output`, `attention_output` and `mlp_output` are tensors on every family, defined by `layers[i].input + attention_output + mlp_output == layer_output`."
 tags: [usage, residual-stream, layer_output, attention_output, mlp_output, contributions]
 related: [docs/usage/vocabulary.md, docs/usage/methods.md, docs/usage/root-values.md, docs/usage/availability.md]
-sources: [nnter/components/layer.py, nnter/components/attention.py, nnter/components/mlp.py, nnter/components/standard.py, nnter/components/eproperty.py, nnter/families/gemma2.py, nnter/families/bloom.py, nnter/families/mpt.py, nnter/families/falcon.py]
+sources: [nnter/components/layer.py, nnter/components/attention.py, nnter/components/mlp.py, nnter/components/standard.py, nnter/components/eproperty.py, nnter/families/gemma2.py, nnter/families/gemma4_text.py, nnter/families/bloom.py, nnter/families/mpt.py, nnter/families/falcon.py]
 ---
 
 # Residual stream and contributions
@@ -116,7 +116,7 @@ Three shapes of block put the contribution somewhere other than the module's own
 and the family's `Attention` or `Mlp` subclass points the value at the right place, so the
 name means the same thing everywhere. Contrast each with the raw `.output`:
 
-**Sandwich norms (Gemma-2, Gemma-3, OLMo-2, OLMo-3).** The block adds
+**Sandwich norms (Gemma-2, Gemma-3, Gemma-4, OLMo-2, OLMo-3).** The block adds
 `post_attention_layernorm(attn(...))` and `post_feedforward_layernorm(mlp(...))`. What
 reaches the residual stream is the post-norm's output, so `attention_output` is
 `post_attention_layernorm.output` and `mlp_output` is `post_feedforward_layernorm.output`
@@ -173,6 +173,44 @@ with model.trace(prompt):
 
 A raw `mlp.output.save()` on Falcon is the live tensor, and it reads as `mlp + attn` after
 the block has run; `mlp_output` is the MLP's contribution.
+
+**Gemma-4: a third add, and a scaled sum.** Gemma-4's block is Gemma-3's sandwich, then on
+the checkpoints with per-layer embeddings (E2B, E4B) a third add, then the whole sum times
+`layer_scalar`, a per-block buffer, in place:
+
+```
+x1  = x  + post_attention_layernorm(attn(...))           # attention_output
+x2  = x1 + post_feedforward_layernorm(mlp(...) [+ experts]) # mlp_output
+x3  = x2 + post_per_layer_input_norm(...)                 # layers[i].per_layer_output (E2B, E4B)
+out = x3 * layer_scalar                                   # layer_output
+```
+
+The third term is `layers[i].per_layer_output`, a value on Gemma-4's `Layer` only
+(unavailable, with a reason, on 26B-A4B and 31B, which have no per-layer embeddings). The
+contributions are served unscaled, so the identity carries the scalar:
+
+```python
+model = StandardizedTransformer("google/gemma-4-E2B", dispatch=True)
+
+layer = model.layers[3]                                   # bound outside: a name bound in the trace does not survive it
+with model.trace(prompt):
+    x = layer.input.save()
+    attn = layer.self_attn.attention_output.save()
+    mlp = layer.mlp.mlp_output.save()
+    ple = layer.per_layer_output.save()
+    out = layer.layer_output.save()
+
+scalar = layer._module.layer_scalar                       # a [1] buffer
+torch.testing.assert_close((x + attn + mlp + ple) * scalar, out)
+```
+
+`layer_scalar` is far from one on the released weights (0.005 to 0.99; the first block's is
+between 0.018 and 0.11 on every size), so a contribution reaches a later block's stream
+shrunk by its own block's scalar and by every later one. Compare contributions across
+blocks with that in mind; nnter computes nothing for it. On a mixture-of-experts block
+(26B-A4B) `mlp_output` is the dense MLP and the experts together: the block norms each and
+then their sum, and `mlp_output` is that last norm's output, while `mlp.output` is the dense
+MLP alone.
 
 ## Gotchas
 

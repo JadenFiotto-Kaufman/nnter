@@ -60,7 +60,7 @@ known families:
 
 ```
 UnsupportedFamily: no standardization for model_type 'bogus'; known: ['bloom', 'dbrx',
-'deepseek_v2', 'deepseek_v3', 'falcon', 'gemma', 'gemma2', 'gemma3_text', 'gpt2',
+'deepseek_v2', 'deepseek_v3', 'falcon', 'gemma', 'gemma2', 'gemma3_text', 'gemma4_text', 'gemma4_unified_text', 'gpt2',
 'gpt_neox', 'gpt_oss', 'gptj', 'llama', 'mistral', 'mixtral', 'mpt', 'olmo', 'olmo2',
 'olmo3', 'olmo_hybrid', 'olmoe', 'opt', 'phi', 'phi3', 'qwen2', 'qwen2_moe', 'qwen3', 'qwen3_5_moe_text',
 'qwen3_5_text', 'qwen3_moe', 'qwen3_next', 'smollm3', 'stablelm']. Add

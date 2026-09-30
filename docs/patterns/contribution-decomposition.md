@@ -165,6 +165,12 @@ unchanged.
 - `model.lm_head(x)` inside a trace is a stood-down call on your tensor;
   `model.lm_head.output` is the model's own projection of the *normed* final
   stream, and `model.logits` adds the softcap on Gemma-2. Three different things.
+- Gemma-4 is not a plain sum. Each block adds a third term on checkpoints with
+  per-layer embeddings (`layers[i].per_layer_output`), then multiplies its stream by
+  `layers[i]._module.layer_scalar` (0.005 to 0.99 on the released weights). A term
+  added in block `i` reaches the last block's output times the product of the
+  scalars of blocks `i` through the last, and the base times all of them; weight
+  each term by that product before summing or attributing.
 - A softcapped model's logits are not a sum of anything; `project_on_vocab` applies
   the cap, the linear DLA does not.
 - `getattr(a, "x", None) or getattr(b, ...)` on envoys raises on a module without
