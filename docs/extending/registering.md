@@ -102,8 +102,8 @@ config's unused `intermediate_size` key (37) instead of `n_inner`'s `4 * hidden_
 3. `UnsupportedFamily`, listing what exists:
 
 ```
-UnsupportedFamily: no standardization for model_type 'glm4'; known: ['bloom', 'dbrx', ..., 'stablelm'].
-Add nnter/families/glm4.py with MODEL_TYPES, RENAME and ENVOYS, or pass a module to nnter.families.register().
+UnsupportedFamily: no standardization for model_type 'zamba'; known: ['afmoe', 'apertus', ..., 'zaya'].
+Add nnter/families/zamba.py with MODEL_TYPES, RENAME and ENVOYS, or pass a module to nnter.families.register().
 ```
 
 The list is `sorted(set(known()) | set(REGISTRY))`, so a registered type appears there.

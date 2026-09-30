@@ -212,6 +212,20 @@ blocks with that in mind; nnter computes nothing for it. On a mixture-of-experts
 then their sum, and `mlp_output` is that last norm's output, while `mlp.output` is the dense
 MLP alone.
 
+**Doge and ZAYA: the stream is rescaled too.** Two families scale the residual the block
+carries, not only what it adds, so the identity carries the block's parameters as Gemma-4's
+carries its scalar. Doge gates the stream per channel and adds the modules' outputs
+unscaled: `h = input_residual * x + attention_output`, `out = post_attention_residual * h +
+mlp_output`, the gates being `layers[i]._module.input_residual` and `.post_attention_residual`
+(both start at one). ZAYA merges each sublayer's output `o` into the stream `r` with a
+`ZayaResidualScaling`, `(o + hidden_states_bias) * hidden_states_scale + (r + residual_bias) *
+residual_scale`; `attention_output` and `mlp_output` are the first term, a computed copy
+that assignment and in-place edits carry back into the module's output as on Granite, and
+the stream's term uses `layers[i].post_attention_residual_scale._module` and
+`.post_mlp_residual_scale._module`. On both, the plain identity holds only at the
+parameters' initial values; `tests/families/test_doge.py` and `test_zaya.py` check the
+gated forms on copies with the parameters moved.
+
 ## Gotchas
 
 - **Forward order within one trace.** `layers[i].input`, then `self_attn.attention_output`,
