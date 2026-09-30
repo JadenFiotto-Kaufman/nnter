@@ -65,6 +65,7 @@ family; the block keys only where a block spells a sublayer otherwise:
 | Gemma-3, Gemma-4 | `model.{embed_tokens, layers, norm}`; `model.language_model.{embed_tokens, layers, norm}` on a `Gemma3ForConditionalGeneration` / `Gemma4ForConditionalGeneration` (`lm_head` stays at the root) | none needed |
 | GPT-2 | `transformer.{wte, h, ln_f}` | `attn` -> `self_attn`, `ln_1` -> `input_layernorm`, `ln_2` -> `post_attention_layernorm` |
 | GPT-J | `transformer.{wte, h, ln_f}` | `attn` -> `self_attn`, `ln_1` -> `input_layernorm` |
+| GPT-Neo | `transformer.{wte, h, ln_f}` | `attn.attention` -> `self_attn` (the module inside the `attn` wrapper), `ln_1` -> `input_layernorm`, `ln_2` -> `post_attention_layernorm` |
 | GPT-NeoX | `gpt_neox.{embed_in, layers, final_layer_norm}` | `attention` -> `self_attn`; `embed_out` -> `lm_head` |
 | BLOOM | `transformer.{word_embeddings, h, ln_f}` | `self_attention` -> `self_attn` |
 | Falcon | `transformer.{word_embeddings, h, ln_f}` | `self_attention` -> `self_attn` |

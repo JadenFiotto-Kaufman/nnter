@@ -160,6 +160,7 @@ The families whose configs say it otherwise:
 | `deepseek_v2`, `deepseek_v3` | `head_dim` | `config.v_head_dim`, the width of one head's values and outputs. The config's own `head_dim` key is the latent width, which no served value has. |
 | `deepseek_v2`, `deepseek_v3` | `qk_head_dim` | `config.qk_nope_head_dim + config.qk_rope_head_dim` |
 | `gpt2`, `gptj` | `intermediate_size` | `config.n_inner`, `None` meaning `4 * hidden_size`. GPT-2's config also carries an `intermediate_size` key the model never reads. |
+| `gpt_neo` | `intermediate_size` | `config.intermediate_size`, `None` meaning `4 * hidden_size` |
 | `opt` | `intermediate_size` | `config.ffn_dim` |
 | `mpt` | `intermediate_size` | `config.expansion_ratio * hidden_size` |
 | `bloom` | `intermediate_size` | `4 * hidden_size`; the config has no key for it |

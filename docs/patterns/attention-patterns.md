@@ -156,7 +156,7 @@ real keys, is unchanged.
   a few ulps, not exactly.
 - A GPT-2 checkpoint with `reorder_and_upcast_attn` set takes GPT-2's own upcast
   path, off the shared interface; `status()` reports the pattern unavailable there.
-- GPT-J, BLOOM, MPT and Falcon compute attention themselves; their families map
+- GPT-J, GPT-Neo, BLOOM, MPT and Falcon compute attention themselves; their families map
   the pattern onto their own softmax (Falcon's onto the softmax without alibi and
   onto the dropout after the second softmax with it, by `config.alibi`).
 
