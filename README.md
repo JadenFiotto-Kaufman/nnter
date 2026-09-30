@@ -400,7 +400,7 @@ the reverse order segfaults at import; a plain `import transformers` first is fi
 HF_HUB_OFFLINE=1 pytest
 ```
 
-One file per family under `tests/families/` (53 families, 57 checkpoints), each subclassing `FamilySuite`
+One file per family under `tests/families/` (75 families, 79 checkpoints), each subclassing `FamilySuite`
 (`tests/families/suite.py`) with its pinned tiny checkpoint, native paths and
 quirks, plus the tests that are specific to it. The suite is every end-to-end
 statement a family must satisfy: aliases reach the native modules; every
