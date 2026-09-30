@@ -2,8 +2,8 @@
 title: Glossary
 one_liner: Alphabetical definitions of the terms the nnter docs use, one or two sentences each, with the page that explains each one.
 tags: [reference, glossary, vocabulary]
-related: [docs/reference/api-quick-reference.md, docs/reference/families.md, docs/usage/vocabulary.md, docs/usage/residual-stream.md, docs/usage/availability.md, docs/usage/layouts.md, docs/usage/attention-interior.md, docs/usage/delta-net.md, docs/extending/adding-a-family.md, docs/developing/eproperty-internals.md, docs/developing/linear-attention-internals.md]
-sources: [nnter/__init__.py, nnter/standardized.py, nnter/components/__init__.py, nnter/components/eproperty.py, nnter/components/attention.py, nnter/components/linear_attention.py, nnter/families/__init__.py, tests/families/suite.py]
+related: [docs/reference/api-quick-reference.md, docs/reference/families.md, docs/usage/vocabulary.md, docs/usage/residual-stream.md, docs/usage/availability.md, docs/usage/layouts.md, docs/usage/attention-interior.md, docs/usage/delta-net.md, docs/extending/adding-a-family.md, docs/developing/eproperty-internals.md, docs/developing/recurrent-mixer-internals.md]
+sources: [nnter/__init__.py, nnter/standardized.py, nnter/components/__init__.py, nnter/components/eproperty.py, nnter/components/attention.py, nnter/components/linear_attention.py, nnter/components/recurrent.py, nnter/families/__init__.py, tests/families/suite.py]
 ---
 
 # Glossary
@@ -58,7 +58,7 @@ transformers' `attn_implementation="eager"`: the Python attention forward whose 
 
 ## Envoy
 
-nnsight's proxy for one module in the tree, reached by attribute path (`model.layers[3].self_attn`), with `.input`, `.output`, `.source`, `.skip()`. nnter's `Layer`, `Attention`, `Mlp` and `LinearAttention` are `Envoy` subclasses installed through `envoys=`. See nnsight `docs/reference/glossary.md`.
+nnsight's proxy for one module in the tree, reached by attribute path (`model.layers[3].self_attn`), with `.input`, `.output`, `.source`, `.skip()`. nnter's `Layer`, `Attention`, `Mlp`, `RecurrentMixer` and `LinearAttention` are `Envoy` subclasses installed through `envoys=`. See nnsight `docs/reference/glossary.md`.
 
 ## `envoys=`
 
@@ -78,7 +78,7 @@ The linear-attention mixer of Qwen3-Next and Qwen3.5 (`linear_attn`): queries, k
 
 ## Hybrid
 
-A family whose blocks are of two kinds: Qwen3-Next, Qwen3.5 (text) and Qwen3.5-MoE (text) have `linear_attn` (gated DeltaNet, a `LinearAttention`) on three blocks in four and `self_attn` on the fourth, per `config.layer_types`; never both on one block. `status()` reads per block there. See [families.md](families.md#hybrids).
+A family whose blocks are of two kinds: Qwen3-Next, Qwen3.5 (text) and Qwen3.5-MoE (text) have `linear_attn` (gated DeltaNet, a `LinearAttention`, a `RecurrentMixer`) on three blocks in four and `self_attn` on the fourth, per `config.layer_types`; never both on one block. `status()` reads per block there. See [families.md](families.md#hybrids).
 
 ## Interface (`attention_interface_1`)
 
@@ -114,11 +114,15 @@ A block where one norm's output feeds both sublayers and `x + attn(norm(x)) + ml
 
 ## Pinned read, relaxed read
 
-Inside `for t in tracer.iter[t]:` a read is *pinned* to occurrence `t` of its location; a read outside any `tracer.iter`, or after a step body's first read, is *relaxed* and takes the occurrence in flight. An `EProperty` drills into a call relaxed, so the callee resolves from the live call even when the value read that follows is pinned to a token. See [../developing/eproperty-internals.md](../developing/eproperty-internals.md) and [../developing/linear-attention-internals.md](../developing/linear-attention-internals.md).
+Inside `for t in tracer.iter[t]:` a read is *pinned* to occurrence `t` of its location; a read outside any `tracer.iter`, or after a step body's first read, is *relaxed* and takes the occurrence in flight. An `EProperty` drills into a call relaxed, so the callee resolves from the live call even when the value read that follows is pinned to a token. See [../developing/eproperty-internals.md](../developing/eproperty-internals.md) and [../developing/recurrent-mixer-internals.md](../developing/recurrent-mixer-internals.md).
 
 ## Recurrent state
 
 A gated DeltaNet layer's per-head memory, `[batch, heads, key_dim, value_dim]`: `state_input` entering a call (`None` on a fresh prompt), `state_output` leaving it, `state` after one token and `states` after every token of the call. See [../usage/delta-net.md](../usage/delta-net.md).
+
+## `RecurrentMixer`
+
+The base envoy of a recurrent mixer (`nnter.components.recurrent`): a subclass names its prompt and decode-step kernels (`CHUNK_KERNEL`, `RECURRENT_KERNEL`), the branch between them (`BRANCH`) and the per-token state binding (`STATE_OP`, or `None`), and declares its values at the kernel call; the base reaches them, reports their availability, holds `attention_output` and the per-token `state` / `states`, and routes the kernels (`route_kernels`). `LinearAttention` is the gated DeltaNet subclass. See [../developing/recurrent-mixer-internals.md](../developing/recurrent-mixer-internals.md).
 
 ## Registry
 
@@ -132,9 +136,9 @@ nnsight's `rename=` constructor argument, a dict of native path to alias. A key 
 
 The tensor a block passes to the next, `[batch, seq, hidden]`: `layers[i].input` entering, `layer_output` leaving, each sublayer adding its contribution in between. See [../usage/residual-stream.md](../usage/residual-stream.md).
 
-## `route_delta_rule`
+## `route_kernels`, `route_delta_rule`
 
-`nnter.route_delta_rule(family, "recurrent" | "chunked")`: binds a hybrid family's delta-rule names, process-wide, to transformers' token-by-token torch loop or back to the module's import-time binding. The per-token `state` / `states` exist only under `"recurrent"`; call it before tracing the layer. See [../usage/delta-net.md](../usage/delta-net.md).
+`nnter.route_kernels(family, "torch" | "default")`: binds a family's recurrent kernel names, process-wide, to transformers' pure-torch kernels (on a gated DeltaNet, both to the token-by-token loop) or back to the module's import-time binding. The per-token `state` / `states` exist only under `"torch"`; call it before tracing the layer. `nnter.route_delta_rule(family, "recurrent" | "chunked")` is the same switch in the delta rule's words. See [../usage/delta-net.md](../usage/delta-net.md).
 
 ## Sandwich block
 

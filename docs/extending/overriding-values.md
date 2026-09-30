@@ -79,8 +79,13 @@ envoy:
 - The key may be a function of the host returning a path, decided at read time inside
   the trace: Falcon's `by_alibi(without, with_alibi, attribute="output")` reads
   `config.alibi`, `branched(...)` reads a binding the forward makes, and
-  `LinearAttention`'s `kernel("inputs")` names whichever delta-rule kernel fires on this
-  call ([finding-source-ops.md](finding-source-ops.md)).
+  a `RecurrentMixer`'s `kernel("inputs")` names whichever kernel fires on this call
+  (`LinearAttention`'s chunked or token-by-token delta rule)
+  ([finding-source-ops.md](finding-source-ops.md)).
+- On a `RecurrentMixer` a value that moves is declared at the kernel call; the kernel
+  constants (`CHUNK_KERNEL`, `RECURRENT_KERNEL`, `STATE_OP`) are the base's to use, and a
+  family that needs another kernel name sets the constant rather than redeclaring values
+  ([../developing/recurrent-mixer-internals.md](../developing/recurrent-mixer-internals.md)).
 
 The value is served at that location by nnsight, whatever the path, so in-place edits
 reach the model without anything more, and `postprocess` and `transform` work on every

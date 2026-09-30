@@ -2,8 +2,8 @@
 title: EProperty Internals
 one_liner: How nnter's descriptors sit on nnsight's eproperty — one `EProperty` whose key is a path (`output`, `../norm.output`, `source.<op>.inputs`), availability, `_resolve`'s walk and the per-run drill into `.source`, `select`, the once-per-access key, the `Standard.sourced` flag, derived values, and the per-call cache a branching forward needs.
 tags: [developing, internals, eproperty, source, descriptors]
-related: [docs/developing/architecture.md, docs/developing/linear-attention-internals.md, docs/developing/gotchas.md, docs/usage/availability.md]
-sources: [nnter/components/eproperty.py, nnter/components/standard.py, nnter/components/layer.py, nnter/components/attention.py, nnter/components/linear_attention.py, nnter/standardized.py, nnter/families/falcon.py, nnter/families/llama4_text.py, nnsight src/nnsight/intervention/eproperty.py, nnsight src/nnsight/intervention/envoy.py, nnsight src/nnsight/intervention/source.py, nnsight src/nnsight/intervention/interleaver.py, nnsight src/nnsight/intervention/iterator.py, nnsight src/nnsight/intervention/util.py]
+related: [docs/developing/architecture.md, docs/developing/recurrent-mixer-internals.md, docs/developing/gotchas.md, docs/usage/availability.md]
+sources: [nnter/components/eproperty.py, nnter/components/standard.py, nnter/components/layer.py, nnter/components/attention.py, nnter/components/linear_attention.py, nnter/components/recurrent.py, nnter/standardized.py, nnter/families/falcon.py, nnter/families/llama4_text.py, nnsight src/nnsight/intervention/eproperty.py, nnsight src/nnsight/intervention/envoy.py, nnsight src/nnsight/intervention/source.py, nnsight src/nnsight/intervention/interleaver.py, nnsight src/nnsight/intervention/iterator.py, nnsight src/nnsight/intervention/util.py]
 ---
 
 # EProperty Internals
@@ -129,7 +129,7 @@ from the host envoy:
 | `../` (leading, repeatable) | the parent module, by native name | `"../post_attention_layernorm.output"`: Gemma-2's `attention_output` (`families/gemma2.py:30-36`) |
 | a name | a child module of the current node, aliases included; under a `source`, an operation | `"embed_tokens.output"`: `token_embeddings` (`standardized.py:167-175`) |
 | `source` | the current module's or operation's forward, instrumented for this run | `"source.attention_interface_1.source.nn_functional_dropout_0.output"`: `attention_probabilities` (`attention.py:147-153`); `"../source.hidden_states_view_0.output"`: Llama 4's `mlp_output` (`families/llama4_text.py:106-112`) |
-| a function of the host | returns a path, at read time, inside the trace | `branched(...)` (`:282-305`), Falcon's `by_alibi(without, with_alibi, attribute)` (`families/falcon.py:51-58`), `LinearAttention`'s `kernel("inputs")` (`linear_attention.py:123-130`) |
+| a function of the host | returns a path, at read time, inside the trace | `branched(...)` (`:282-305`), Falcon's `by_alibi(without, with_alibi, attribute)` (`families/falcon.py:51-58`), a `RecurrentMixer`'s `kernel("inputs")` (`recurrent.py:186-193`) |
 
 ### `_resolve`: the walk
 
@@ -204,7 +204,7 @@ value and `_put(attribute, current, element)` (`:194-208`) puts one back;
   stub.
 - `inputs` with an int `select` is `args[n]`, with a str `kwargs[name]`
   (`attention_queries` is `select=1`, `attention.py:91`; a DeltaNet `decays`
-  is `select="g"`, `linear_attention.py:197`); with no `select` it is the
+  is `select="g"`, `linear_attention.py:66`); with no `select` it is the
   pair (the root's `input_ids`, whose stub takes `kwargs["input_ids"]` and
   whose postprocess puts it back, `standardized.py:328-336`).
 - `output` with an int `select` is one element of the returned tuple
@@ -272,7 +272,7 @@ block.
   `typing.get_type_hints(func, include_extras=True)`. The annotation is one
   of the fourteen layout aliases, each defined in the file of the envoy that
   serves it (`Residual = Float[Tensor, "batch seq hidden"]` in `layer.py`,
-  `Pattern` and `Keys` in `attention.py`, `State` in `linear_attention.py`,
+  `Pattern` and `Keys` in `attention.py`, `State` in `recurrent.py`,
   `Logits` in `standardized.py`):
   `get_type_hints` evaluates the string annotation (the components use
   `from __future__ import annotations`) in the stub's module globals, where
@@ -338,8 +338,8 @@ served values in forward order; `__set__` raises `AttributeError("... is
 derived and read-only")` (`:350-351`), which is the one place an
 `AttributeError` is right (it is the assignment that fails). `_preprocess`
 is set to `compute` (`:339`) **only** so that `layout` reads its return
-annotation; it is never called as a preprocess. `LinearAttention.states`
-(`linear_attention.py:302-306`) is the one instance.
+annotation; it is never called as a preprocess. `RecurrentMixer.states`
+(`recurrent.py:330-334`) is the one instance.
 
 ## `branched`, `per_call`, `at_occurrence`
 
@@ -350,9 +350,11 @@ let a function key name the op that fires *on this call*:
 - `branched(variable, ops)` (`:282-305`) returns a key function: read
   `getattr(envoy.source, variable).output` (a binding is an operation,
   nnsight `source.py:26-31`) and look it up in `ops`. The read is cached
-  through `per_call`. `LinearAttention.KERNEL` (`linear_attention.py:169`)
-  is the one instance, and `kernel(attribute)` (`:123-130`) turns it into
-  the path `source.<kernel>.<attribute>` every kernel-located value declares.
+  through `per_call`. `RecurrentMixer.KERNEL`, built in
+  `__init_subclass__` from a subclass's constants (`recurrent.py:238-243`),
+  is the one instance, and `kernel(attribute)` (`recurrent.py:186-193`) turns
+  it into the path `source.<kernel>.<attribute>` every kernel-located value
+  declares.
 - `per_call(envoy, key, compute)` (`:308-325`) caches `compute()` on the
   envoy under `key`, telling calls apart by fact 4: the cache entry is
   `(mediator, step, value)`; another mediator is another run; a step that is
@@ -362,12 +364,12 @@ let a function key name the op that fires *on this call*:
   same body is relaxed and hits it. Reading the variable as the step's first,
   pinned read also keeps the kernel read sequential, which is what lets an op
   that never fires on step 0 resolve on later steps (`:290-298`).
-- `at_occurrence(t)` (`:353-357`) is `Iterations()[t : t + 1]`: the
+- `at_occurrence(t)` (`recurrent.py:179-183`) is `Iterations()[t : t + 1]`: the
   `for step in tracer.iter[t]` stretch as a value, so library code can pin
   one occurrence of a location and have the pin restored afterwards
   (`iterator.py:121-144`).
 
-[linear-attention-internals.md](linear-attention-internals.md) is where all
+[recurrent-mixer-internals.md](recurrent-mixer-internals.md) is where all
 three are used.
 
 ## Where it lives
@@ -422,11 +424,11 @@ to say it otherwise")`, so an assignment cannot shadow it. It is what lets `falc
 - `.source` instruments the forward over a snapshot of the module's globals
   at first drill (nnsight `source.py:439-471`, `function_like` copies
   `fn.__globals__`); a kernel binding switched after that is not seen. See
-  `route_delta_rule` in [linear-attention-internals.md](linear-attention-internals.md).
+  `route_kernels` in [recurrent-mixer-internals.md](recurrent-mixer-internals.md).
 
 ## Related
 
 - [architecture.md](architecture.md) — where the descriptors sit in the tree
-- [linear-attention-internals.md](linear-attention-internals.md) — `branched`, `per_call`, `at_occurrence` in use
+- [recurrent-mixer-internals.md](recurrent-mixer-internals.md) — `branched`, `per_call`, `at_occurrence` in use
 - [gotchas.md](gotchas.md)
 - nnsight `docs/developing/extending-envoy.md`, `docs/developing/source-internals.md`, `docs/developing/interleaver-internals.md`

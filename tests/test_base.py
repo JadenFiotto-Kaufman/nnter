@@ -104,3 +104,63 @@ def test_eproperty_paths_resolve_and_write(gpt2_paths):
         pattern = attn.softmax.save()
     causal = torch.ones_like(pattern).tril()                 # with no scaling every score is 0: uniform over the causal keys
     assert torch.allclose(pattern, causal / causal.sum(-1, keepdim=True))
+
+
+def test_recurrent_mixer_without_a_state_op_reports_the_state_unavailable():
+    """A `RecurrentMixer` whose kernels do not materialize the state per token says so, and still serves its call's values."""
+    from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5GatedDeltaNet
+
+    from nnter import LinearAttention, RecurrentMixer
+    from nnter.components import EProperty
+    from nnter.components.recurrent import kernel, needs_torch_kernels
+
+    class NoState(RecurrentMixer):
+        CHUNK_KERNEL = LinearAttention.CHUNK_KERNEL
+        RECURRENT_KERNEL = LinearAttention.RECURRENT_KERNEL
+
+        @EProperty(kernel("output"), select=1, unavailable=needs_torch_kernels)
+        def state_output(self, value):
+            return value
+
+    assert NoState.STATE_OP is None and NoState.KERNEL.__name__ == "branched(use_precomputed_states_0)"
+    model = StandardizedTransformer("yujiepan/qwen3.5-tiny-random", dispatch=True, envoys={Qwen3_5GatedDeltaNet: NoState})
+    mix = model.layers[0].linear_attn
+    assert type(mix) is NoState
+    reason = "this mixer's kernels do not materialize the state per token"
+    for name in ("state", "states"):
+        assert mix.status()[name] == reason
+        assert model.status()[f"linear_attn.{name}"][0] == reason
+    assert mix.status()["state_output"] is None
+    with pytest.raises(Unavailable, match="do not materialize the state per token"):
+        mix.state_after(0)
+    with pytest.raises(Unavailable, match="do not materialize the state per token"):
+        mix.set_state_after(0, torch.zeros(1))
+    with model.trace("Hello world"):
+        final = mix.state_output.save()
+    assert final.dim() == 4
+
+
+def test_route_kernels_round_trips_the_bindings():
+    """``"torch"`` binds both kernel names to the token-by-token loop; ``"default"`` restores what the module bound."""
+    import sys
+
+    from nnter import LinearAttention, route_delta_rule, route_kernels
+    from nnter.families import qwen3_5_text
+
+    module = sys.modules[qwen3_5_text.Qwen3_5GatedDeltaNet.__module__]
+    chunk, recurrent = LinearAttention.CHUNK_KERNEL.rsplit("_", 1)[0], LinearAttention.RECURRENT_KERNEL.rsplit("_", 1)[0]
+    before = {chunk: getattr(module, chunk), recurrent: getattr(module, recurrent)}
+    loop = before[recurrent].__wrapped__  # functools.wraps on the dispatcher: the pure-torch token-by-token rule
+    try:
+        route_kernels(qwen3_5_text, "torch")
+        assert getattr(module, chunk) is loop and getattr(module, recurrent) is loop
+        route_kernels(qwen3_5_text, "default")
+        assert {name: getattr(module, name) for name in before} == before
+        route_delta_rule(module, "recurrent")  # the DeltaNet spelling, given the modeling module itself
+        assert getattr(module, chunk) is loop
+        route_delta_rule(module, "chunked")
+        assert {name: getattr(module, name) for name in before} == before
+        with pytest.raises(ValueError, match="'torch' or 'default'"):
+            route_kernels(qwen3_5_text, "recurrent")
+    finally:
+        route_kernels(qwen3_5_text, "default")

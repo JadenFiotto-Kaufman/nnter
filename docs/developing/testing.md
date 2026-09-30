@@ -220,7 +220,7 @@ The hybrid files (`test_qwen3_next.py`, `test_qwen3_5_text.py`,
 `test_qwen3_5_moe_text.py`) are one file with three headers: they override
 `test_every_layer_is_renamed` for the per-block `self_attn`/`linear_attn`
 split and add the DeltaNet tests
-([linear-attention-internals.md](linear-attention-internals.md)).
+([recurrent-mixer-internals.md](recurrent-mixer-internals.md)).
 
 ## The root tests
 
@@ -278,8 +278,9 @@ session collector agrees; `compute_next_token_probs` rows sum to one.
   its own class (`_alibi_checkpoint()`, `test_falcon.py:47-57`;
   `_patched_checkpoint()`, `test_olmo3.py:14-32`) rather than mutating the
   fixture's.
-- `route_delta_rule(..., "recurrent")` is process-wide; the hybrid tests load
-  a second model after routing and restore `"chunked"` in a `finally`.
+- `route_delta_rule(..., "recurrent")` (`route_kernels(..., "torch")`) is
+  process-wide; the hybrid tests load a second model after routing and restore
+  `"chunked"` in a `finally`.
 - pytest imports `tests/families/suite.py` as the bare module `suite`
   (`from suite import FamilySuite`); do not name another test helper that.
 - Run from the repository root: `git rev-parse --show-toplevel` is
@@ -289,5 +290,5 @@ session collector agrees; `compute_next_token_probs` rows sum to one.
 
 - [contributing.md](contributing.md) — the workflow around the suite
 - [transformers-compat.md](transformers-compat.md) — the tests that guard op names
-- [linear-attention-internals.md](linear-attention-internals.md) — what the hybrid tests pin
+- [recurrent-mixer-internals.md](recurrent-mixer-internals.md) — what the hybrid tests pin
 - nnsight `docs/developing/testing.md` — the suite of the library underneath

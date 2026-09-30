@@ -2,8 +2,8 @@
 title: Developing Gotchas
 one_liner: The traps a contributor meets writing families, descriptors and tests — each as the constraint and the reason, with where it comes from.
 tags: [developing, gotchas, internals, source, tracing]
-related: [docs/developing/eproperty-internals.md, docs/developing/linear-attention-internals.md, docs/developing/testing.md, docs/developing/architecture.md, docs/usage/availability.md]
-sources: [nnter/components/eproperty.py, nnter/components/attention.py, nnter/components/linear_attention.py, nnter/families/falcon.py, nnter/families/gpt2.py, tests/families/suite.py, nnsight src/nnsight/intervention/envoy.py, nnsight src/nnsight/intervention/interleaver.py, nnsight src/nnsight/intervention/source.py]
+related: [docs/developing/eproperty-internals.md, docs/developing/recurrent-mixer-internals.md, docs/developing/testing.md, docs/developing/architecture.md, docs/usage/availability.md]
+sources: [nnter/components/eproperty.py, nnter/components/attention.py, nnter/components/linear_attention.py, nnter/components/recurrent.py, nnter/families/falcon.py, nnter/families/gpt2.py, tests/families/suite.py, nnsight src/nnsight/intervention/envoy.py, nnsight src/nnsight/intervention/interleaver.py, nnsight src/nnsight/intervention/source.py]
 ---
 
 # Developing Gotchas
@@ -47,7 +47,7 @@ but the model already ran past it). Falcon binds values before the rotary
 that produces queries and keys, so read `attention_values` first
 (`nnter/families/falcon.py:37-41`; `tests/families/test_falcon.py:33-38`);
 on DeltaNet, `states` reads every position, so it goes before any state
-write (`nnter/components/linear_attention.py:300-306`).
+write (`nnter/components/recurrent.py:316-334`).
 
 **An out-of-order read of a *source-located* value is a warning, not an
 error.** The drill parks on `{op}.fn` with the mediator relaxed
@@ -75,9 +75,9 @@ every trace (`components/eproperty.py:194-207`); never cache a
 run, across generation steps (nnsight `source.py:495-503`, `interleaver.py:710`).
 
 **A served location is re-read only while the worker is parked there.**
-`_call` reads the queries first *because* that read parks the worker at the
-kernel call's start, the one moment the state op's count is what earlier
-calls put through it (`linear_attention.py:237-256`). A value computed from
+`_call` reads `_seq()` (the queries, on DeltaNet) first *because* that read
+parks the worker at the kernel call's start, the one moment the state op's
+count is what earlier calls put through it (`recurrent.py:289-308`). A value computed from
 several served reads has to think about *when* each read happens.
 
 **Occurrence indices are absolute per location over the run.** The
@@ -86,7 +86,7 @@ occurrence is that count minus the count when it started (nnsight
 `interleaver.py:629-633`, `:331-334`). A decode step's one token is
 occurrence `k - 1` of the recurrent op on step `k`, so `states`,
 `state_after` and `set_state_after` offset by `_call()`'s `first`
-([linear-attention-internals.md](linear-attention-internals.md)).
+([recurrent-mixer-internals.md](recurrent-mixer-internals.md)).
 
 ## Descriptors
 
@@ -110,14 +110,15 @@ trace; inside, ask `status()`.
 function built over the original's `__globals__` (nnsight `source.py:439-444`,
 `:447-471`) and cached per code object; a module-level name rebound
 afterwards (a kernel switch, a monkeypatch) is not what the instrumented copy
-sees. `route_delta_rule` must therefore run before the first trace of that
-layer (`linear_attention.py:59-61`).
+sees. `route_kernels` must therefore run before the first trace of that
+layer (`recurrent.py:92-125`).
 
-**`KERNEL` is called as `type(self).KERNEL(self)`.** A function stored on a
-class is a bound method when reached through an instance, so
-`self.KERNEL(self)` passes the envoy twice and raises. Reach it through the
-class, as `linear_attention.py:219`, `:252`, `:264` do, so the call reads as
-the function applied to the envoy.
+**A key function stored on a class is a bound method through an instance.**
+`RecurrentMixer.__init_subclass__` stores `KERNEL` as a `staticmethod`
+(`recurrent.py:238-243`), so `self.KERNEL(self)` and `type(self).KERNEL(self)`
+are the same call. A subclass that sets `KERNEL` itself wraps it in
+`staticmethod` too, or reaches it through the class; a bare function reached
+through an instance passes the envoy twice and raises.
 
 **An `EProperty` is not cloudpicklable by value.** `pickle.dumps(nnter.Layer.layer_output)`
 is `TypeError: cannot pickle 'EProperty' object`. A family that travels to
@@ -154,7 +155,7 @@ the block will later write into its tensor.
 
 **DeltaNet's cache buffer is overwritten in place.** The kernel receives
 the cache's own tensor as `initial_state` and the cache then writes the new
-state into it; `state_input` returns a clone (`linear_attention.py:186-195`).
+state into it; `state_input` returns a clone (`linear_attention.py:76-85`).
 
 ## Repository
 
@@ -171,7 +172,7 @@ segfaults ([transformers-compat.md](transformers-compat.md));
 ## Related
 
 - [eproperty-internals.md](eproperty-internals.md)
-- [linear-attention-internals.md](linear-attention-internals.md)
+- [recurrent-mixer-internals.md](recurrent-mixer-internals.md)
 - [testing.md](testing.md)
 - [transformers-compat.md](transformers-compat.md)
 - nnsight `docs/gotchas/index.md`, `docs/errors/out-of-order-error.md`

@@ -2,7 +2,7 @@
 title: Architecture
 one_liner: The map of nnter — how a checkpoint's model_type becomes a renamed envoy tree whose blocks carry standard values, and which layer owns what.
 tags: [developing, architecture, internals, families, components]
-related: [docs/developing/eproperty-internals.md, docs/developing/linear-attention-internals.md, docs/developing/testing.md, docs/developing/gotchas.md, docs/extending/index.md]
+related: [docs/developing/eproperty-internals.md, docs/developing/recurrent-mixer-internals.md, docs/developing/testing.md, docs/developing/gotchas.md, docs/extending/index.md]
 sources: [nnter/standardized.py, nnter/families/__init__.py, nnter/components/__init__.py, nnter/components/standard.py, nnter/components/layer.py, nnter/components/attention.py, nnter/components/mlp.py, nnter/families/gpt2.py, nnter/families/llama.py, nnsight src/nnsight/intervention/envoy.py]
 ---
 
@@ -200,8 +200,12 @@ and `layer_output` (`:58-77`, `first_tensor` in, `rewrap` out). `Attention`
 interior values on `INTERFACE`; `off_interface` (`:87-89`) is the one method
 a family overrides to give another reason the interface does not run
 (`families/gpt2.py:50-53` for `reorder_and_upcast_attn`). `Mlp`
-(`components/mlp.py:15-32`) adds `mlp_output`. `LinearAttention` is its own
-page, [linear-attention-internals.md](linear-attention-internals.md).
+(`components/mlp.py:15-32`) adds `mlp_output`. `RecurrentMixer`
+(`components/recurrent.py`) adds `attention_output`, the kernel choice, the
+per-token state and the kernel routing for a mixer read at a kernel call, and
+`LinearAttention` (`components/linear_attention.py`) sets its kernel
+constants and declares the gated DeltaNet's values on it; both are their own
+page, [recurrent-mixer-internals.md](recurrent-mixer-internals.md).
 
 ## The registry
 
@@ -240,7 +244,7 @@ checkpoint of that type is looked up, and never earlier.
 | one family | `nnter/families/<model_type>.py` |
 | descriptors | `nnter/components/eproperty.py` ([eproperty-internals.md](eproperty-internals.md)) |
 | base envoys | `nnter/components/{standard,layer,attention,mlp}.py` |
-| DeltaNet mixer | `nnter/components/linear_attention.py` ([linear-attention-internals.md](linear-attention-internals.md)) |
+| recurrent mixers: the base, and the DeltaNet subclass | `nnter/components/recurrent.py`, `nnter/components/linear_attention.py` ([recurrent-mixer-internals.md](recurrent-mixer-internals.md)) |
 | helpers that use the values | `nnter/prompt_utils.py`, `nnter/nnsight_utils.py` |
 | the executable contract | `tests/families/suite.py` ([testing.md](testing.md)) |
 
@@ -269,7 +273,7 @@ checkpoint of that type is looked up, and never earlier.
 ## Related
 
 - [eproperty-internals.md](eproperty-internals.md) — the four descriptors and the nnsight facts they use
-- [linear-attention-internals.md](linear-attention-internals.md) — the hybrid mixer and occurrence arithmetic
+- [recurrent-mixer-internals.md](recurrent-mixer-internals.md) — `RecurrentMixer`, the DeltaNet subclass, and occurrence arithmetic
 - [testing.md](testing.md) — `FamilySuite`, the contract every family passes
 - [transformers-compat.md](transformers-compat.md) — what a release can rename
 - [gotchas.md](gotchas.md) — contributor-facing traps

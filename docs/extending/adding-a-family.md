@@ -180,7 +180,12 @@ class Layer(Layer):
   `mlp_output` when the residual is added inside (BLOOM, MPT) or when a post-norm's
   output is what reaches the stream (Gemma-2/3, OLMo-2/3).
 - **`LinearAttention`** (hybrids only): the base holds for transformers' pure-torch gated
-  delta rule; Qwen3-Next and Qwen3.5 subclass it with a docstring and nothing else.
+  delta rule; Qwen3-Next, Qwen3.5 and OLMo-Hybrid subclass it with a docstring and nothing
+  else. It is a `RecurrentMixer`: a mixer with other kernels (a state-space layer) is a new
+  `RecurrentMixer` subclass that sets `CHUNK_KERNEL`, `RECURRENT_KERNEL` and `STATE_OP` and
+  declares its own values
+  ([../developing/recurrent-mixer-internals.md](../developing/recurrent-mixer-internals.md)).
+  Key it in `ENVOYS` like the others, so `route_kernels(model.family, ...)` finds it.
 
 ### `ENVOYS`
 

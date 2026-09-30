@@ -3,7 +3,7 @@ title: Availability
 one_liner: "`model.status()` says which standard values this checkpoint has and why not, before any trace; reading an unavailable one raises `nnter.Unavailable` at that line."
 tags: [usage, status, Unavailable, SourceNotAvailable, eager, hybrids]
 related: [docs/usage/loading.md, docs/usage/vocabulary.md, docs/usage/residual-stream.md, docs/usage/layouts.md]
-sources: [nnter/standardized.py, nnter/components/standard.py, nnter/components/eproperty.py, nnter/components/attention.py, nnter/components/linear_attention.py, nnter/families/gpt2.py, nnter/families/falcon.py, nnter/families/opt.py]
+sources: [nnter/standardized.py, nnter/components/standard.py, nnter/components/eproperty.py, nnter/components/attention.py, nnter/components/linear_attention.py, nnter/components/recurrent.py, nnter/families/gpt2.py, nnter/families/falcon.py, nnter/families/opt.py]
 ---
 
 # Availability
@@ -91,7 +91,7 @@ blocks 0-2 are linear and block 3 is attention):
  'linear_attn.attention_output': {3: 'no linear_attn module on this block'},
  'linear_attn.decays': {3: 'no linear_attn module on this block'},
  'linear_attn.state_output': {3: 'no linear_attn module on this block'},
- 'linear_attn.state': {0: "the state after each token is materialized only by the token-by-token kernel; the chunked kernel a prompt runs through keeps one state per 64 tokens. Call nnter.route_delta_rule(model.family, 'recurrent') before tracing this layer (slower, like attn_implementation='eager')",
+ 'linear_attn.state': {0: "the state after each token is materialized only by the token-by-token kernel; the chunked kernel a prompt runs through carries it between chunks. Call nnter.route_kernels(model.family, 'torch') before tracing this layer (slower, like attn_implementation='eager')",
                        1: ..., 2: ...,
                        3: 'no linear_attn module on this block'},
  'linear_attn.states': {0: "the state after each token is materialized only by ...", 1: ..., 2: ..., 3: 'no linear_attn module on this block'},
@@ -128,14 +128,15 @@ outside the trace to pick blocks.
 | `this checkpoint sets reorder_and_upcast_attn, which takes GPT-2's own upcast attention path` | the GPT-2 interior | `config.reorder_and_upcast_attn` is set |
 | `The attention does its own arithmetic rather than transformers' shared attention interface; not mapped for this family yet` | an interior value a family has not mapped onto its own arithmetic | a family off the shared interface that marks it `unavailable(NOT_ON_INTERFACE)` |
 | `no self_attn module on this block` / `no linear_attn module on this block` / `no mlp module on this block` | every value of that module | some other block has the module and this one does not (a hybrid's blocks); a module no block has (OPT's `mlp`) has no key instead |
-| `the state after each token is materialized only by the token-by-token kernel; the chunked kernel a prompt runs through keeps one state per 64 tokens. Call nnter.route_delta_rule(model.family, 'recurrent') before tracing this layer (slower, like attn_implementation='eager')` | `linear_attn.state`, `linear_attn.states` | the family's delta rule is still the chunked kernel |
-| `read inside transformers' pure-torch gated delta rule, but this process dispatches to an optimized kernel (flash-linear-attention / causal-conv1d) with no Python source; uninstall it to read these` | every `linear_attn` value but `attention_output` | `flash-linear-attention` or `causal-conv1d` is installed |
+| `the state after each token is materialized only by the token-by-token kernel; the chunked kernel a prompt runs through carries it between chunks. Call nnter.route_kernels(model.family, 'torch') before tracing this layer (slower, like attn_implementation='eager')` | `linear_attn.state`, `linear_attn.states` | the family's delta rule is still the chunked kernel |
+| `this mixer's kernels do not materialize the state per token` | `state`, `states` on a `RecurrentMixer` with no `STATE_OP` | the mixer has no token-by-token kernel |
+| `read inside transformers' pure-torch torch_chunk_gated_delta_rule, but this process dispatches it to an optimized kernel (fla) with no Python source; uninstall it, or call nnter.route_kernels(model.family, 'torch'), to read these` | every `linear_attn` value but `attention_output` | `flash-linear-attention` or `causal-conv1d` is installed |
 
 BLOOM and MPT do their attention arithmetic themselves, so their pattern and interior do
 not need an eager load and are `None` under any implementation.
 
 The reasons are evaluated on the instance, so a config that changes after the load changes
-the answer: `route_delta_rule(model.family, "recurrent")` turns the `state` and `states`
+the answer: `route_kernels(model.family, "torch")` turns the `state` and `states`
 entries to `None` on the linear blocks.
 
 ## `SourceNotAvailable`: the forward took another path

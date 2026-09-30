@@ -3,7 +3,7 @@ title: API Quick Reference
 one_liner: Every public nnter symbol in one place: the model class, the standard values by host with their layouts and availability, the descriptors, the registry, the helper modules and the exceptions.
 tags: [reference, api, values, layouts, availability]
 related: [docs/usage/loading.md, docs/usage/vocabulary.md, docs/usage/root-values.md, docs/usage/methods.md, docs/usage/availability.md, docs/usage/layouts.md, docs/usage/attention-interior.md, docs/usage/delta-net.md, docs/usage/prompt-utils.md, docs/usage/activations.md, docs/extending/custom-values.md, docs/extending/registering.md, docs/developing/eproperty-internals.md, docs/reference/families.md, docs/reference/glossary.md]
-sources: [nnter/__init__.py, nnter/standardized.py, nnter/components/__init__.py, nnter/components/eproperty.py, nnter/components/standard.py, nnter/components/layer.py, nnter/components/attention.py, nnter/components/mlp.py, nnter/components/linear_attention.py, nnter/families/__init__.py, nnter/prompt_utils.py, nnter/nnsight_utils.py]
+sources: [nnter/__init__.py, nnter/standardized.py, nnter/components/__init__.py, nnter/components/eproperty.py, nnter/components/standard.py, nnter/components/layer.py, nnter/components/attention.py, nnter/components/mlp.py, nnter/components/linear_attention.py, nnter/components/recurrent.py, nnter/families/__init__.py, nnter/prompt_utils.py, nnter/nnsight_utils.py]
 ---
 
 # API Quick Reference
@@ -45,9 +45,10 @@ Reads within one trace follow the forward: the pattern is produced inside block 
 |---|---|
 | `StandardizedTransformer` | The model class: a `TransformersModel` renamed to the standard vocabulary and wrapped in the family's envoys. |
 | `Layer`, `Attention`, `Mlp`, `LinearAttention` | The base envoys a family subclasses; the hosts of the standard values. |
-| `Standard` | The envoy base of the four, with `values()`, `status()` and the `sourced` flag. |
+| `RecurrentMixer` | The base of `LinearAttention`: how a recurrent mixer's values are reached at its kernel call, the per-token state and the kernel routing. |
+| `Standard` | The envoy base of them all, with `values()`, `status()` and the `sourced` flag. |
 | `EProperty`, `DerivedEProperty` | The descriptors a value is made of: one keyed on a path from the host, one computed. |
-| `unavailable`, `branched`, `route_delta_rule` | A value a family lacks; an op picked by the forward's own branch; the DeltaNet kernel switch. |
+| `unavailable`, `branched`, `route_kernels`, `route_delta_rule` | A value a family lacks; an op picked by the forward's own branch; the recurrent kernel switch, and its DeltaNet spelling. |
 | `Unavailable`, `UnsupportedFamily` | The two exceptions nnter raises itself. |
 
 `nnter.families`, `nnter.components`, `nnter.prompt_utils` and `nnter.nnsight_utils` are imported as modules.
@@ -120,7 +121,7 @@ Each is a `StandardizedProperty`: it reads the config by the plain rule unless t
 
 | Attribute | What it is |
 |---|---|
-| `model.family` | The family module the checkpoint resolved to (`nnter.families.llama`); what `route_delta_rule` takes. |
+| `model.family` | The family module the checkpoint resolved to (`nnter.families.llama`); what `route_kernels` takes. |
 | `model.layers` | The decoder blocks, `Sequence[Layer]` of the family's `Layer`. |
 | `model.embed_tokens`, `model.norm`, `model.lm_head` | The embedding, the final norm, the unembedding, as envoys. |
 | `model.layers[i].self_attn`, `.mlp`, `.linear_attn` | The family's `Attention`, `Mlp`, `LinearAttention`; `linear_attn` on a hybrid's DeltaNet blocks only, `mlp` absent on OPT. |
@@ -169,20 +170,38 @@ Each layout is the alias `.layout` returns (`Attention.attention_keys.layout is 
 |---|---|---|---|---|
 | `mlp_output` | `Residual` | the module's `.output`, first tensor (a mixture of experts returns router scores beside it) | yes; in place reaches the model (Falcon: through a transform, on a copy) | always where the block has an MLP module; OPT has none, so `status()` lists no `mlp.*` key |
 
+## `RecurrentMixer`
+
+The base of a recurrent mixer's envoy (`nnter/components/recurrent.py`): how its values are reached at the kernel call its forward makes, apart from what they are. A subclass sets the constants and declares its values at `kernel("inputs")` / `kernel("output")`; the base provides `attention_output`, the per-token state, the availability predicates and `route_kernels`.
+
+| Constant | Default | What |
+|---|---|---|
+| `BRANCH` | `"use_precomputed_states_0"` | The binding the forward makes before it branches: `False` on a prompt, `True` on a decode step. |
+| `CHUNK_KERNEL` | `None` | The call a prompt runs through. |
+| `RECURRENT_KERNEL` | `None` | The call each decode step of `generate` runs through. |
+| `STATE_OP` | `None` | Inside the token-by-token kernel, the binding of the state after each token's update; `None` when the kernels do not materialize it, and then `state`, `states`, `state_after` and `set_state_after` are unavailable. |
+| `KERNEL` | built in `__init_subclass__` | `branched(BRANCH, {False: CHUNK_KERNEL, True: RECURRENT_KERNEL})`: whichever kernel fires on this call. A subclass whose branch is not one boolean sets it itself. |
+
+| Value | Layout | Location | Assignable | Availability |
+|---|---|---|---|---|
+| `attention_output` | `Residual` | the module's `.output`, first tensor | yes | always |
+| `state` | `State` | `STATE_OP` inside the token-by-token kernel: one occurrence per token, walked with `tracer.iter` | yes: the following tokens continue from the write | `needs_recurrent_routing` |
+| `states` | `States` | every occurrence of `STATE_OP` in this call, stacked; a `DerivedEProperty` | no (`AttributeError`; use `set_state_after`) | `needs_recurrent_routing` |
+
+`_seq()` is the call's number of tokens, `attention_queries.shape[1]` in the base; a mixer whose kernel is laid out otherwise overrides it.
+
 ## `LinearAttention`
 
-A hybrid's gated DeltaNet mixer (`layers[i].linear_attn`). Everything but `attention_output` is read at the delta-rule kernel call, whichever fires on this step.
+A hybrid's gated DeltaNet mixer (`layers[i].linear_attn`), a `RecurrentMixer` that sets the constants and declares eight values; `attention_output`, `state`, `states`, `state_after` and `set_state_after` are the base's. Everything but `attention_output` is read at the delta-rule kernel call, whichever fires on this step.
 
 | Constant | Value | What |
 |---|---|---|
 | `CHUNK_KERNEL` | `"torch_chunk_gated_delta_rule_0"` | The call a prompt runs through. |
 | `RECURRENT_KERNEL` | `"torch_recurrent_gated_delta_rule_0"` | The call each decode step of `generate` runs through. |
-| `KERNEL` | `branched("use_precomputed_states_0", {False: CHUNK_KERNEL, True: RECURRENT_KERNEL})` | Whichever fires on this call, read off the forward's own branch variable. |
 | `STATE_OP` | `"last_recurrent_state_3"` | Inside the token-by-token kernel, the binding of the state after each token. |
 
 | Value | Layout | Location | Assignable | Availability |
 |---|---|---|---|---|
-| `attention_output` | `Residual` | the module's `.output`, first tensor | yes | always |
 | `attention_queries` | `LinearQK` | `KERNEL` argument 0 | yes | `needs_torch_kernels` |
 | `attention_keys` | `LinearQK` | `KERNEL` argument 1 | yes | `needs_torch_kernels` |
 | `attention_values` | `LinearV` | `KERNEL` argument 2 | yes | `needs_torch_kernels` |
@@ -191,8 +210,8 @@ A hybrid's gated DeltaNet mixer (`layers[i].linear_attn`). Everything but `atten
 | `state_input` | `State`, or `None` on a fresh prompt | `KERNEL` keyword `initial_state`, read as a clone of the cache's buffer | yes | `needs_torch_kernels` |
 | `attention_head_outputs` | `LinearV` | `KERNEL` return 0, before the gated norm and `out_proj` | yes | `needs_torch_kernels` |
 | `state_output` | `State` | `KERNEL` return 1 | yes | `needs_torch_kernels` |
-| `state` | `State` | `STATE_OP` inside the token-by-token kernel: one occurrence per token, walked with `tracer.iter` | yes: the following tokens continue from the write | `needs_recurrent_routing` |
-| `states` | `States` | every occurrence of `STATE_OP` in this call, stacked; a `DerivedEProperty` | no (`AttributeError`; use `set_state_after`) | `needs_recurrent_routing` |
+
+The base's methods, on every `RecurrentMixer`:
 
 | Method | Signature | What |
 |---|---|---|
@@ -254,8 +273,8 @@ The fourteen `jaxtyping` types every standard value is annotated with, each defi
 | `LinearQK` | `batch seq heads key_dim` | `components/linear_attention.py` | `linear_attn.attention_queries`, `linear_attn.attention_keys` |
 | `LinearV` | `batch seq heads value_dim` | `components/linear_attention.py` | `linear_attn.attention_values`, `linear_attn.attention_head_outputs` |
 | `Gates` | `batch seq heads` | `components/linear_attention.py` | `decays`, `betas` |
-| `State` | `batch heads key_dim value_dim` | `components/linear_attention.py` | `state_input`, `state_output`, `state` |
-| `States` | `batch seq heads key_dim value_dim` | `components/linear_attention.py` | `states` |
+| `State` | `batch heads key_dim value_dim` | `components/recurrent.py` | `state_input`, `state_output`, `state` |
+| `States` | `batch seq heads key_dim value_dim` | `components/recurrent.py` | `states` |
 
 The axis names are the same on every layout (`batch` axis 0 everywhere, `seq` the token axis, `heads` the query heads, `kv_heads` the key/value heads, `head_dim` the width of values and head outputs, `qk_head_dim` that of queries and keys, `query`/`key` a pattern's two token axes, `key_dim`/`value_dim` a DeltaNet state's two sides); the comments above each alias state them, and [../usage/layouts.md](../usage/layouts.md) is the page.
 
@@ -266,8 +285,8 @@ The axis names are the same on every layout (`batch` axis 0 everywhere, `seq` th
 | `unavailable` | `unavailable(reason: str) -> EProperty` | A value a family does not have: assign it in the class body in place of the inherited one. The name stays in the tree and the repr (`"Unavailable: <reason>"`), and every access raises `Unavailable`. |
 | `needs_eager` | `needs_eager(envoy) -> str \| None` | The reason when `config._attn_implementation != "eager"`. |
 | `interface_reason` | `interface_reason(envoy) -> str \| None` | `envoy.off_interface()`: the predicate of the base `Attention`'s interior values. |
-| `needs_torch_kernels` | `needs_torch_kernels(envoy) -> str \| None` | The reason when the family's delta-rule names dispatch to an optimized kernel (`flash-linear-attention` / `causal-conv1d`) with no Python source. |
-| `needs_recurrent_routing` | `needs_recurrent_routing(envoy) -> str \| None` | `needs_torch_kernels`, then the reason when the prompt kernel is not the token-by-token loop: call `route_delta_rule`. |
+| `needs_torch_kernels` | `needs_torch_kernels(envoy) -> str \| None` | The reason when the mixer's `CHUNK_KERNEL` or `RECURRENT_KERNEL` name dispatches to an optimized kernel (`flash-linear-attention`, `mamba_ssm`) with no Python source. |
+| `needs_recurrent_routing` | `needs_recurrent_routing(envoy) -> str \| None` | The reason when `STATE_OP` is `None` (the kernels do not materialize the state per token), then `needs_torch_kernels`, then the reason when the prompt kernel is not the token-by-token loop: call `route_kernels`. |
 | `INTERFACE` | `"attention_interface_1"` | The shared attention call every interface family makes. |
 | `NOT_ON_INTERFACE` | `"The attention does its own arithmetic rather than transformers' shared attention interface; not mapped for this family yet"` | The reason for `unavailable(NOT_ON_INTERFACE)` in a family that has not mapped an interior value onto its own arithmetic. No shipped family uses it: all four own-arithmetic families map every interior value. |
 
@@ -278,7 +297,8 @@ The axis names are the same on every layout (`batch` axis 0 everywhere, `seq` th
 | `branched` | `branched(variable: str, ops: dict[Any, str]) -> Callable[[Envoy], str]` | A key function for `EProperty` whose op is chosen by a binding the forward makes before it branches: `ops[value of <variable>]`, decided once per module call (`per_call`). |
 | `per_call` | `per_call(envoy, key: str, compute: Callable[[], Any]) -> Any` | `compute()` once per module call, cached on the envoy under `key`; a call is told apart by the worker's mediator and its step. |
 | `at_occurrence` | `at_occurrence(t: int)` | The `for step in tracer.iter[t]` stretch as an object: one occurrence of a location inside a call. What `states`, `state_after` and `set_state_after` iterate with. |
-| `route_delta_rule` | `route_delta_rule(family, kernel: str = "recurrent") -> None` | Bind a hybrid family's delta-rule names process-wide: `"recurrent"` to transformers' token-by-token torch loop (the only kernel that materializes `state`, `states`, `state_after`, `set_state_after`), `"chunked"` back to what the modeling module bound at import. `family` is `model.family`, `nnter.families.<name>` or the modeling module. Call it before tracing a layer. |
+| `route_kernels` | `route_kernels(family, kernel: str = "torch") -> None` | Bind a family's recurrent kernel names process-wide: `"torch"` to transformers' pure-torch kernels (on a mixer with a `STATE_OP`, both names to the token-by-token loop, the only kernel that materializes `state`, `states`, `state_after`, `set_state_after`), `"default"` back to what the modeling module bound at import. `family` is `model.family`, `nnter.families.<name>` or the modeling module. Call it before tracing a layer. |
+| `route_delta_rule` | `route_delta_rule(family, kernel: str = "recurrent") -> None` | `route_kernels` in the delta rule's words: `"recurrent"` is `"torch"`, `"chunked"` is `"default"`. |
 | `seq_first` | `seq_first(value: Tensor) -> Tensor` | `value.transpose(1, 2)`: `[batch, heads, seq, d]` to `[batch, seq, heads, d]` as a view, and its own inverse. Used by families whose arithmetic keeps heads first. |
 | `first_tensor` | `first_tensor(value) -> Tensor` | The first element of a tuple output, or the tensor itself. |
 | `rewrap` | `rewrap(envoy, value: Tensor) -> Any` | `value` back in the module's current output tuple, if any. |
@@ -333,7 +353,7 @@ nnterp's activation helpers on the standard values. `GetActivations = Callable[[
 - GPT-2's and MPT's queries, keys and values are views of one fused tensor: assign, do not edit in place. Falcon's `mlp_output` is a copy; assignment and in-place edits reach the model through a transform.
 - `model.logits` is the output's `.logits` (softcapped on Gemma-2, scaled on Cohere and Granite); `model.lm_head.output` is the raw projection, and `model.project_on_vocab(model.layers[-1].layer_output)` is `logits`.
 - `next_token_probs`, `input_size` and `states` are read-only.
-- `route_delta_rule(model.family, "recurrent")` before tracing a DeltaNet layer whose `state` you want; a forward `.source` has already instrumented keeps the binding it was compiled with.
+- `route_kernels(model.family, "torch")` before tracing a DeltaNet layer whose `state` you want; a forward `.source` has already instrumented keeps the binding it was compiled with.
 - `import nnter` (or `nnsight`) before any `transformers.models...modeling_*` import; the reverse order segfaults at import on this stack.
 
 ## Related

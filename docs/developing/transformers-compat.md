@@ -3,7 +3,7 @@ title: transformers Compatibility
 one_liner: The versions nnter is developed against, exactly which operation names a transformers release can move, how the suite catches it, and the upgrade procedure.
 tags: [developing, compatibility, transformers, nnsight, versions, source]
 related: [docs/developing/testing.md, docs/developing/eproperty-internals.md, docs/developing/architecture.md, docs/developing/gotchas.md]
-sources: [nnter/components/attention.py, nnter/components/linear_attention.py, nnter/families/gpt_oss.py, nnter/families/bloom.py, nnter/families/mpt.py, nnter/families/falcon.py, nnter/families/gptj.py, tests/families/suite.py, tests/conftest.py, pyproject.toml]
+sources: [nnter/components/attention.py, nnter/components/linear_attention.py, nnter/components/recurrent.py, nnter/families/gpt_oss.py, nnter/families/bloom.py, nnter/families/mpt.py, nnter/families/falcon.py, nnter/families/gptj.py, tests/families/suite.py, tests/conftest.py, pyproject.toml]
 ---
 
 # transformers Compatibility
@@ -99,17 +99,17 @@ an attention mask is passed, as it is on every prompt.
 are the two kernel calls, `use_precomputed_states_0` the branch binding that
 picks between them, and `last_recurrent_state_3` the per-token state
 binding inside the recurrent loop
-(`nnter/components/linear_attention.py:144-150`;
+(`nnter/components/linear_attention.py:45-49`;
 `modeling_qwen3_5.py:561`, `:626`, `:639`, `:474-494`). The state op's `_3`
 is the count of `last_recurrent_state = ...` bindings before the one after
 the token's update: two before the loop, the decay inside it, then the
 update. A release that adds or removes one binding moves it. The kernels'
 argument names `g`, `beta`, `initial_state` are the `select` keys of
-`decays`, `betas`, `state_input` (`linear_attention.py:176-195`). The
+`decays`, `betas`, `state_input` (`linear_attention.py:66-85`). The
 kernel-dispatch closure names `torch_function` and `implementation`
 (`transformers/integrations/hub_kernels.py:847-859`) are what
-`needs_torch_kernels` and `_delta_rule_loop` read (`linear_attention.py:23-35`,
-`:79-93`).
+`needs_torch_kernels`, `route_kernels` and `needs_recurrent_routing` read
+through `_dispatch` (`recurrent.py:43-55`, `:92-176`).
 
 ### Names, not ops
 
@@ -192,7 +192,7 @@ Also relied on: `Mediator.current`, `Mediator.iteration`, `Mediator.occurrence`,
 `Interleaver.sourced` and `Iterations` (nnsight `interleaver.py:287-334`,
 `:654-660`; `iterator.py:103-144`), which are not part of nnsight's
 documented public surface; [eproperty-internals.md](eproperty-internals.md)
-and [linear-attention-internals.md](linear-attention-internals.md) say
+and [recurrent-mixer-internals.md](recurrent-mixer-internals.md) say
 exactly how.
 
 ## Gotchas
@@ -214,5 +214,5 @@ exactly how.
 
 - [testing.md](testing.md) — the guard, method by method
 - [eproperty-internals.md](eproperty-internals.md) — `_drill` and `SourceNotAvailable`
-- [linear-attention-internals.md](linear-attention-internals.md) — the DeltaNet names in context
+- [recurrent-mixer-internals.md](recurrent-mixer-internals.md) — the DeltaNet names in context
 - nnsight `docs/usage/source.md`, `docs/developing/source-internals.md` — how op labels are made
