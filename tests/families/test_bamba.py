@@ -23,8 +23,9 @@ class TestBamba(StateSpaceChecks, FamilySuite):
     EXPECTED_UNAVAILABLE = {
         **{name: "no self_attn module" for name in VALUES if name.startswith("self_attn.")},
         **{f"linear_attn.{name}": "no linear_attn module" for name in LINEAR if name not in ("state", "states")},
-        "linear_attn.state": "",
+        "linear_attn.state": "",   # missing off the Mamba-2 blocks, and unavailable on them
         "linear_attn.states": "",
+        "linear_attn.set_state_after": "",
     }
 
     def test_every_layer_is_renamed(self, model):

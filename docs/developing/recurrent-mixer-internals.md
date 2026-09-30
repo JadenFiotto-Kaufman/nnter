@@ -289,7 +289,7 @@ so it goes in its own trace
 `StateSpace` (`nnter/components/state_space.py`) is the Mamba-2 (SSD)
 mixer on `mamba2`, `nemotron_h`, `bamba` and `falcon_h1`. Every one of these
 modeling files carries the same copy of transformers' Mamba-2 code, so one
-class serves them. Its forward differs from the DeltaNet's in four ways, and
+class serves them. Its forward differs from the DeltaNet's in five ways, and
 each is handled in the subclass, not the base:
 
 - **The branch is compound.** The forward decodes through
@@ -323,8 +323,14 @@ each is handled in the subclass, not the base:
   head_dim]` and `[batch, groups, state_dim]`, and `dt`, `A`, `D`, `dt_bias`
   are expanded over `head_dim` (and `state_dim` for `A`). The preprocess of
   each value adds a sequence axis of 1 on a decode step and the postprocess
-  removes it; `betas` and `decays` are `DerivedEProperty` values that take
-  element `[..., 0]` of the expanded `dt` and `A` there.
+  removes it. `betas` and `decays` are `EProperty` values on the kernel's
+  `dt` argument (`select=argument("dt")`): the preprocess is the kernel's
+  own arithmetic (`_gate`: plus `dt_bias`, softplus, the clamp to
+  `dt_limit` on a prompt; times `A` for `decays`), taking element `[..., 0]`
+  of the expanded `dt`, `dt_bias` and `A` on a decode step. The postprocess
+  is the inverse (`_dt_for`): `log(expm1(b)) - dt_bias`, computed as `b +
+  log(-expm1(-b))` so it does not overflow, without the clamp, expanded back
+  over `head_dim` on a decode step; `decays` divides by `A` first.
 - **The update returns only `y`.** It writes the new state into the cache's
   buffer (`state.copy_(ssm_states)`), so a decode step's `state_output` is
   read inside the kernel at `UPDATED_STATE = "ssm_states_0"`, the binding
@@ -333,19 +339,58 @@ each is handled in the subclass, not the base:
   cache and `y` alone without one, so `attention_head_outputs` selects `0`
   or the whole return and `state_output` raises `Unavailable` at the read
   without a cache.
+- **Several values share one location, and some need another argument.**
+  Seven values select from the kernel's `inputs`, and `betas`, `decays` and
+  a prompt's `state_output` need arguments beyond their own (`dt_bias`, `A`,
+  `return_final_states`), possibly after the model has moved into the
+  kernel. `EProperty` asks the host for a served value when the host defines
+  `_serve(location)` / `_swap(location, value)`; `StateSpace`'s keep what
+  each location inside its own forward served in the call's record
+  (`_this_call`'s `"served"`, and `"at"`, the location the worker is parked
+  at). A read at the current location, or `_arguments` at any point of the
+  call, uses the record; a read of a location the call has moved past goes to
+  the model, which reports it out of order as it would without the record; a
+  write updates the record, so a value read after it sees what the kernel
+  runs with. Locations outside the mixer's forward (its `.output`, a
+  Falcon-H1 block op) are served directly.
 
 The state is `[batch, heads, head_dim, state_dim]` in the kernels; both
 state values are served transposed, `[batch, heads, state_dim, head_dim]`,
 so the shared `State` layout (key side first) holds, and transposed back on
-assignment. `STATE_OP` is `None`: the scan carries the state per chunk and
-the update runs one token, so the per-token state is unavailable with the
-base's reason, and `route_kernels(family, "torch")` binds each kernel name to
-its own `torch_function` (the dispatcher's closure is the one the DeltaNet
-kernels use, `use_kernel_func_from_hub_with_fallback` over `mamba_ssm`; the
-routing needed no change). The tests are `tests/families/ssd.py`, mixed into
-each family's suite: the shapes, the writes, the hand-off under `generate`
-with SSD's recurrence checked on every decode step, the unavailable per-token
-state and the optimized-kernel reason.
+assignment. `STATE_OP` is `None`: no kernel binds the state once per token,
+and `route_kernels(family, "torch")` binds each kernel name to its own
+`torch_function` (the dispatcher's closure is the one the DeltaNet kernels
+use, `use_kernel_func_from_hub_with_fallback` over `mamba_ssm`; the routing
+needed no change).
+
+The per-token state comes from the chunk scan instead. Its inter-chunk
+recurrence binds `new_states` (`CHUNK_STATES = "new_states_0"`), `[batch,
+chunks + 1, heads, head_dim, state_dim]`: the state before each chunk and
+after the last, computed in one cumulative step (a decay matrix over the
+chunk boundaries times every chunk's contribution). `chunk_size` is the
+mixer instance's attribute, read on every call, so `chunk_per_token(model)`
+sets it to 1 on each `StateSpace` module of one model (recording the built
+value in the module's `_nnter_chunk_size` for `enabled=False`), and every
+token is a boundary. `states` overrides the base's: a `DerivedEProperty`
+that reads `CHUNK_STATES` through a module-level `EProperty`
+(`_chunk_states`, keyed `source.<CHUNK_KERNEL>.source.new_states_0.output`,
+so the read drills and orders like any value), after `_arguments` so the
+record holds the arguments for later values; it serves `[:, 1:]`, transposed
+and cloned. On a decode step it is `state_output` unsqueezed. Its predicate
+is `needs_per_token_chunks` (the kernel reason, then the chunk size).
+`state_after(t)` is `states[:, t]`. `state` and `set_state_after` are
+`unavailable(...)` values (`NO_STATE_OCCURRENCES`, `NO_STATE_WRITES`), so
+both are listed by `status()`: there is no per-token occurrence to walk, and
+a boundary state written at token `t` would not flow into later boundaries,
+which the same cumulative step computes from the chunk contributions and the
+initial state, not from each other.
+
+The tests are `tests/families/ssd.py`, mixed into each family's suite: the
+shapes, the writes (`betas` and `decays` included, read back and checked
+against the recurrence), the hand-off under `generate` with SSD's recurrence
+checked on every decode step, the per-token `states` under `chunk_per_token`
+checked against the recurrence token by token, values read together in one
+trace, the `status()` reasons and the optimized-kernel reason.
 
 Nemotron-H needs a block-level name choice, since each block holds one
 `mixer` of four classes. Its `RENAME` keys the standard name on the mixer's

@@ -51,7 +51,7 @@ everywhere. Everything nnsight does (`trace`, `generate`, `.save()`, `tracer.ite
 - [docs/patterns/delta-net-state.md](docs/patterns/delta-net-state.md) — patch and track the state
 
 ### "Mamba-2 / Nemotron-H / Bamba / Falcon-H1: the state-space mixer"
-- [docs/usage/state-space.md](docs/usage/state-space.md) — `linear_attn` is a `StateSpace`: `C`/`B`/`x` as queries/keys/values, `dt` as `betas`; `route_kernels(model.family, "torch")` when `mamba_ssm` is installed; no per-token state
+- [docs/usage/state-space.md](docs/usage/state-space.md) — `linear_attn` is a `StateSpace`: `C`/`B`/`x` as queries/keys/values, `dt` as `betas`; `route_kernels(model.family, "torch")` when `mamba_ssm` is installed; `nnter.chunk_per_token(model)` for the state after every token (`states`, `state_after`); `betas`/`decays` assignable
 
 ### "What shape is this value?"
 - [docs/usage/layouts.md](docs/usage/layouts.md) — one layout per value on every family, named (`Residual`, `Pattern`, `Keys`, ... in `nnter.components`); `value.dims`, `value.layout is Pattern`

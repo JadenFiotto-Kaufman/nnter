@@ -60,13 +60,16 @@ from .recurrent import (
     route_kernels,
 )
 from .standard import Standard, first_tensor, rewrap
-from .state_space import SSDHeadOutputs, SSDKeys, SSDQueries, SSDValues, StateSpace
+from .state_space import (
+    SSDHeadOutputs, SSDKeys, SSDQueries, SSDValues, StateSpace, chunk_per_token, needs_per_token_chunks,
+)
 
 __all__ = [
     "Attention", "DerivedEProperty", "EProperty", "Gates", "HeadOutputs", "INTERFACE", "Keys", "Layer", "LinearAttention",
     "LinearQK", "LinearV", "Mlp", "Pattern", "Queries", "RecurrentMixer", "Residual", "State", "States", "Values",
     "NOT_ON_INTERFACE", "SSDHeadOutputs", "SSDKeys", "SSDQueries", "SSDValues", "Standard", "StateSpace", "Unavailable",
     "at_occurrence",
-    "branched", "first_tensor", "interface_reason", "needs_eager", "needs_recurrent_routing",
+    "branched", "chunk_per_token", "first_tensor", "interface_reason", "needs_eager", "needs_per_token_chunks",
+    "needs_recurrent_routing",
     "needs_torch_kernels", "per_call", "rewrap", "route_delta_rule", "route_kernels", "seq_first", "unavailable",
 ]

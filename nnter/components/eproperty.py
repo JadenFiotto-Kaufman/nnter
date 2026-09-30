@@ -82,6 +82,11 @@ class EProperty(eproperty):
     operation that is not there raises `SourceNotAvailable` naming what is,
     rather than the `AttributeError` a descriptor would otherwise swallow into
     "no attribute".
+
+    A host that defines ``_serve(location)`` and ``_swap(location, value)``
+    answers reads and writes itself: `StateSpace` keeps what its call was
+    served, so several values at one location, and the arguments its other
+    values depend on, are read from the model once per call.
     """
 
     def __init__(
@@ -245,7 +250,7 @@ class EProperty(eproperty):
         key = self.path(obj)
         location = self._resolve(obj, key)
         select = self._selection(obj)  # before the read: a select function may read an earlier value of the call
-        raw = Mediator.value(location)
+        raw = _serve(obj, location)
         value = self._pick(key.rsplit(".", 1)[-1], raw, select)
         if self._preprocess is not None:
             value = self._preprocess(obj, value)
@@ -266,7 +271,22 @@ class EProperty(eproperty):
         attribute = key.rsplit(".", 1)[-1]
         select = self._selection(obj)
         if select is not None or attribute == "input":
-            value = self._put(attribute, Mediator.value(location), value, select)
+            value = self._put(attribute, _serve(obj, location), value, select)
+        _swap(obj, location, value)
+
+
+def _serve(obj: Envoy, location: str) -> Any:
+    """The value at ``location``: the host's ``_serve`` when it has one (a record of what its call was served), else the model's."""
+    serve = getattr(type(obj), "_serve", None)
+    return serve(obj, location) if serve is not None else Mediator.value(location)
+
+
+def _swap(obj: Envoy, location: str, value: Any) -> None:
+    """Replace the value at ``location``, through the host's ``_swap`` when it has one, so its record sees the write."""
+    swap = getattr(type(obj), "_swap", None)
+    if swap is not None:
+        swap(obj, location, value)
+    else:
         Mediator.swap(location, value)
 
 

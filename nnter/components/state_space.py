@@ -6,13 +6,14 @@ from typing import Any
 
 import torch
 import torch.nn.functional as F
+from nnsight.intervention.interleaver import Mediator
 
 from jaxtyping import Float
 from torch import Tensor
 
-from .eproperty import DerivedEProperty, EProperty, Unavailable, per_call
+from .eproperty import DerivedEProperty, EProperty, Unavailable, per_call, unavailable
 from .linear_attention import Gates
-from .recurrent import RecurrentMixer, State, kernel, needs_torch_kernels
+from .recurrent import RecurrentMixer, State, States, kernel, needs_torch_kernels
 
 #: The layouts at the scan call, tokens before heads. SSD's ``C`` and ``B`` are projected once per *group* of
 #: heads (``n_groups``, which divides ``num_heads``) and live on the state's ``state_dim`` side; the values
@@ -28,8 +29,8 @@ SSDHeadOutputs = Float[Tensor, "batch seq heads head_dim"]
 def _this_call(envoy: Any) -> dict[str, Any]:
     """What is known about this call, decided at its first read and kept for the call's other reads.
 
-    The kernel that fires, and once read, the call's arguments. `per_call`
-    tells a new step by the step's pinned first read; a step whose first read
+    The kernel that fires, and what each location inside the forward served
+    (`StateSpace._serve`). `per_call` tells a new step by the step's pinned first read; a step whose first read
     is something else (the mixer's own ``.input``) relaxes the pin before a
     kernel value is read, so the record also carries how many of the mixer's
     calls had returned when it was made, and a record from an earlier call is
@@ -98,6 +99,70 @@ def _head_outputs_select(envoy: Any) -> int | None:
     return 0 if cls.KERNEL(envoy) == cls.CHUNK_KERNEL and envoy._returns_state() else None
 
 
+def chunk_per_token(model: Any, enabled: bool = True) -> None:
+    """Run every Mamba-2 mixer of ``model`` with a chunk size of 1, so the chunk scan keeps the state after every token.
+
+    The chunk scan materializes the state at each chunk boundary
+    (``new_states``, `StateSpace.states`); with ``chunk_size == 1`` every
+    token is a boundary. The outputs are the same; the cost is not: the
+    recurrence between chunks is quadratic in the number of chunks, so a long
+    prompt runs markedly slower. Unlike `route_kernels`, which binds a
+    family's kernels process-wide, this sets an attribute of each mixer module
+    of this one model (``chunk_size``, which the forward reads on every
+    call), so it applies from the next trace and to no other model. Call it
+    on a loaded model: a lazily built model's modules are replaced when its
+    weights arrive. ``enabled=False`` restores the chunk size each mixer was
+    built with (``config.chunk_size``, ``mamba_chunk_size`` on Bamba, Falcon-H1
+    and GraniteMoeHybrid).
+    """
+    mixers = model.modules(include_fn=lambda envoy: isinstance(envoy, StateSpace))
+    if not mixers:
+        raise ValueError(f"{type(model).__name__} has no Mamba-2 (StateSpace) mixer")
+    for envoy in mixers:
+        module = envoy._module
+        built = module.__dict__.setdefault("_nnter_chunk_size", module.chunk_size)
+        module.chunk_size = 1 if enabled else built
+
+
+def needs_per_token_chunks(envoy: Any) -> str | None:
+    """Why `StateSpace.states` is unavailable: the kernels have no source to read, or the chunk scan's chunks are longer than a token."""
+    reason = needs_torch_kernels(envoy)
+    if reason:
+        return reason
+    size = envoy._module.chunk_size
+    if size != 1:
+        return (
+            f"the chunk scan materializes the state only at chunk boundaries, every {size} tokens "
+            f"(chunk_size={size}); call nnter.chunk_per_token(model) to set every mixer's chunk_size to 1, "
+            "so every token is a boundary (slower on long prompts)"
+        )
+    return None
+
+
+def _chunk_states_at(envoy: Any) -> str:
+    cls = type(envoy)
+    return f"source.{cls.CHUNK_KERNEL}.source.{cls.CHUNK_STATES}.output"
+
+
+@EProperty(_chunk_states_at)
+def _chunk_states(self: Any, value: torch.Tensor) -> States:
+    """The chunk scan's ``new_states`` after its first entry, key side first: a copy, so an in-place edit does not reach the scan."""
+    return value[:, 1:].transpose(-1, -2).clone()
+
+
+#: Why `StateSpace.state` is unavailable.
+NO_STATE_OCCURRENCES = (
+    "the chunk scan computes every token's state in one tensor per call, not one occurrence per token "
+    "to walk with tracer.iter; read states, or state_after(t), after nnter.chunk_per_token(model)"
+)
+#: Why `StateSpace.set_state_after` is unavailable.
+NO_STATE_WRITES = (
+    "the chunk scan computes every boundary state in one cumulative step from the initial state, "
+    "so a state written at token t does not flow into later tokens' states; "
+    "assign state_input to change where a call starts"
+)
+
+
 class StateSpace(RecurrentMixer):
     """A Mamba-2 (SSD) mixer (Mamba-2, Nemotron-H, Bamba, Falcon-H1, Zamba2, GraniteMoeHybrid): a selective state space.
 
@@ -120,8 +185,9 @@ class StateSpace(RecurrentMixer):
     * ``betas`` is ``dt = softplus(dt + dt_bias)``, the write strength,
       ``[batch, seq, heads]``; ``decays`` is ``A * dt``, the log of how much of
       the state each token keeps, ``[batch, seq, heads]``, float32 and
-      non-positive. Both derived from the call's ``dt``, ``dt_bias`` and ``A``,
-      so read-only: assign ``dt`` through the kernel's own arguments.
+      non-positive. Both are the kernel's ``dt`` argument seen through
+      ``dt_bias``, the softplus and ``A``; an assignment is carried back into
+      ``dt`` (`_dt_for`), so the kernel computes the assigned gate.
     * ``state_input`` / ``state_output``: the state entering and leaving the
       call, served as ``[batch, heads, state_dim, head_dim]`` (key side
       first, the shared `State` layout), the transpose of the cache's
@@ -141,12 +207,25 @@ class StateSpace(RecurrentMixer):
     and returns only ``y``, so a decode step's ``state_output`` is read inside
     it, at ``UPDATED_STATE``.
 
-    The chunk scan carries the state per chunk and the update runs one
-    token, so the state after every token of a prompt is not materialized:
-    ``state``, ``states``, ``state_after`` and ``set_state_after`` are
-    unavailable (``STATE_OP`` is ``None``). With ``mamba_ssm`` installed the
-    kernels have no Python source; ``route_kernels(model.family, "torch")``
-    binds transformers' pure-torch ones (`RecurrentMixer`).
+    The chunk scan materializes the state at every chunk boundary, in one
+    tensor (``new_states``, `CHUNK_STATES`); with a chunk size of 1
+    (`chunk_per_token`) every token is a boundary, and ``states`` and
+    ``state_after(t)`` read the state after every token of the call (a decode
+    step's is its ``state_output``). There is no per-token occurrence to walk
+    with ``tracer.iter`` (``state`` is unavailable, ``STATE_OP`` is ``None``),
+    and no per-token write: the scan computes every boundary state in one
+    cumulative step from the initial state, so ``set_state_after`` is
+    unavailable too. With ``mamba_ssm`` installed the kernels have no Python
+    source; ``route_kernels(model.family, "torch")`` binds transformers'
+    pure-torch ones (`RecurrentMixer`).
+
+    The values of one call are served from a record of what the call's
+    locations served (`_serve`), so the kernel's arguments are read from the
+    model once per call however many values select from them, and a value
+    that needs another argument (``betas`` needs ``dt_bias``, a prompt's
+    ``state_output`` whether the scan returns a state) finds it after the
+    model has moved into the kernel. A value read after the model has moved
+    past its location is still an out-of-order read.
     """
 
     #: The call a prompt runs through: ``mamba2_chunk_scan(hidden_states, dt, A, B, C, chunk_size=, D=, dt_bias=, initial_states=, ...)``.
@@ -155,6 +234,8 @@ class StateSpace(RecurrentMixer):
     RECURRENT_KERNEL = "mamba2_selective_state_update_0"
     #: Neither kernel binds the state once per token.
     STATE_OP = None
+    #: Inside the chunk scan, the binding of the state at every chunk boundary: ``[batch, chunks + 1, heads, head_dim, state_dim]``, the state before each chunk and after the last.
+    CHUNK_STATES = "new_states_0"
     #: The first op after `BRANCH` whose output is ``[batch, seq, ...]`` on both paths: the input with padding masked.
     SEQ_OP = "apply_mask_to_padding_states_0"
     #: Inside the update, the binding of the new state before it is copied into the cache.
@@ -172,17 +253,45 @@ class StateSpace(RecurrentMixer):
     def _arguments_table(self) -> dict[str, int | str]:
         return self.RECURRENT_ARGUMENTS if self._decoding() else self.CHUNK_ARGUMENTS
 
-    def _arguments(self) -> dict[str, Any]:
-        """This call's scan arguments by name, read once per call."""
+    def _serve(self, location: str) -> Any:
+        """The value at ``location`` for this call's values (`EProperty` asks the host): read from the model once per call.
+
+        A location inside the mixer's own forward is kept in the call's
+        record, so a second value there, or `_arguments` after the model has
+        moved on, reads the record. A value asked of a location the call has
+        already moved past is asked of the model, which has run past it: an
+        out-of-order read, as without the record. Any other location (the
+        mixer's output, an op of the block's forward) is served directly.
+        """
+        if not location.startswith(f"{self.path}.source."):
+            return Mediator.value(location)
         call = _this_call(self)
-        if "arguments" not in call:
-            args, kwargs = getattr(self.source, call["kernel"]).inputs
-            named = {name: kwargs.get(at) if isinstance(at, str) else args[at] for name, at in self._arguments_table().items()}
-            named["dt_softplus"] = kwargs.get("dt_softplus", False)
-            named["dt_limit"] = kwargs.get("dt_limit")
-            named["return_final_states"] = kwargs.get("return_final_states", False)
-            call["arguments"] = named
-        return call["arguments"]
+        served = call.setdefault("served", {})
+        if location in served and call["at"] == location:
+            return served[location]
+        served[location] = value = Mediator.value(location)
+        call["at"] = location
+        return value
+
+    def _swap(self, location: str, value: Any) -> None:
+        """Write ``value`` at ``location``, and keep it in the call's record so later values read what the model runs with."""
+        Mediator.swap(location, value)
+        if location.startswith(f"{self.path}.source."):
+            call = _this_call(self)
+            call.setdefault("served", {})[location] = value
+            call["at"] = location
+
+    def _arguments(self) -> dict[str, Any]:
+        """This call's scan arguments by name, from the call's record (read from the model on the call's first need)."""
+        call = _this_call(self)
+        location = f"{getattr(self.source, call['kernel']).path}.input"
+        served = call.get("served", {})
+        args, kwargs = served[location] if location in served else self._serve(location)
+        named = {name: kwargs.get(at) if isinstance(at, str) else args[at] for name, at in self._arguments_table().items()}
+        named["dt_softplus"] = kwargs.get("dt_softplus", False)
+        named["dt_limit"] = kwargs.get("dt_limit")
+        named["return_final_states"] = kwargs.get("return_final_states", False)
+        return named
 
     def _returns_state(self) -> bool:
         return bool(self._arguments()["return_final_states"])
@@ -223,9 +332,10 @@ class StateSpace(RecurrentMixer):
     def attention_values(self, value: torch.Tensor) -> torch.Tensor:
         return self._without_seq(value)
 
-    def _betas(self) -> Gates:
+    def _gate(self, dt: torch.Tensor) -> Gates:
+        """The kernel's ``dt`` argument as the write strength it computes: plus ``dt_bias``, softplus, and on a prompt clamped to ``dt_limit``."""
         args = self._arguments()
-        dt, bias = args["dt"], args["dt_bias"]
+        bias = args["dt_bias"]
         if self._decoding():  # expanded over head_dim for the update: [batch, heads, head_dim], [heads, head_dim]
             dt, bias = dt[..., 0].unsqueeze(1), None if bias is None else bias[..., 0]
         if bias is not None:
@@ -236,24 +346,63 @@ class StateSpace(RecurrentMixer):
             dt = torch.clamp(dt, min=args["dt_limit"][0], max=args["dt_limit"][1])
         return dt
 
-    def _decays(self) -> Gates:
+    def _dt_for(self, betas: torch.Tensor) -> torch.Tensor:
+        """The ``dt`` argument the kernel turns into ``betas``: the inverse of `_gate`, without the clamp.
+
+        ``log(expm1(b)) - dt_bias`` when the kernel applies the softplus
+        (written ``b + log(-expm1(-b))``, which does not overflow), so a
+        ``betas`` of 0 is a ``dt`` of ``-inf`` and the softplus returns 0. On a
+        decode step the ``[batch, 1, heads]`` value is expanded back over
+        ``head_dim``, the update's ``[batch, heads, head_dim]``.
+        """
+        args = self._arguments()
+        current, bias = args["dt"], args["dt_bias"]
+        b = betas.float()
+        if self._decoding():
+            b, bias = b.squeeze(1), None if bias is None else bias[..., 0]
+        dt = b + torch.log(-torch.expm1(-b)) if args["dt_softplus"] else b
+        if bias is not None:
+            dt = dt - bias.float()
+        if self._decoding():
+            dt = dt[..., None].expand(current.shape)
+        return dt.to(current.dtype)
+
+    def _A(self) -> torch.Tensor:
+        """``A`` per head: the update takes it expanded to ``[heads, head_dim, state_dim]``."""
         A = self._arguments()["A"]
-        if self._decoding():  # expanded to [heads, head_dim, state_dim] for the update
-            A = A[:, 0, 0]
-        return A.float() * self._betas().float()
+        return A[:, 0, 0] if self._decoding() else A
 
     #: ``dt`` after its bias, softplus and limit: how strongly each token writes into the state.
-    betas = DerivedEProperty(
-        _betas,
-        description="dt, the per-token write strength into the state, [batch, seq, heads]; derived from dt and dt_bias, read-only",
-        unavailable=needs_torch_kernels,
-    )
+    @EProperty(kernel("inputs"), select=argument("dt"), description="dt, the per-token write strength into the state, [batch, seq, heads]", unavailable=needs_torch_kernels)
+    def betas(self, value: torch.Tensor) -> Gates:
+        """``dt`` as the kernel uses it, ``[batch, seq, heads]``: ``softplus(dt + dt_bias)``, clamped to ``dt_limit`` on a prompt.
+
+        Assignable: the value is carried back into the kernel's ``dt``
+        argument (`_dt_for`). It must be positive where the kernel applies
+        the softplus (0 stops the token's write and its decay); on a prompt
+        the kernel clamps it to ``dt_limit`` again, so a value outside the
+        limit runs clamped.
+        """
+        return self._gate(value)
+
+    @betas.postprocess
+    def betas(self, value: torch.Tensor) -> torch.Tensor:
+        return self._dt_for(value)
+
     #: ``A * dt``: the log of how much of the state each token keeps.
-    decays = DerivedEProperty(
-        _decays,
-        description="A * dt, the per-token log decay of the state, [batch, seq, heads]; derived, read-only",
-        unavailable=needs_torch_kernels,
-    )
+    @EProperty(kernel("inputs"), select=argument("dt"), description="A * dt, the per-token log decay of the state, [batch, seq, heads]", unavailable=needs_torch_kernels)
+    def decays(self, value: torch.Tensor) -> Gates:
+        """``A * dt``, ``[batch, seq, heads]``, float32 and non-positive: the log of how much of the state each token keeps.
+
+        Assignable: ``decays / A`` is the ``betas`` it implies, carried back
+        into ``dt`` like an assignment of ``betas``, so the token's write
+        strength changes with it (they are one argument).
+        """
+        return self._A().float() * self._gate(value).float()
+
+    @decays.postprocess
+    def decays(self, value: torch.Tensor) -> torch.Tensor:
+        return self._dt_for(value.float() / self._A().float())
 
     @EProperty(kernel("inputs"), select=argument("state"), description="The state entering the layer, [batch, heads, state_dim, head_dim], or None at the start of a prompt (a copy of the cache's buffer)", unavailable=needs_torch_kernels)
     def state_input(self, value: Any) -> State | None:
@@ -287,3 +436,30 @@ class StateSpace(RecurrentMixer):
     @state_output.postprocess
     def state_output(self, value: torch.Tensor) -> torch.Tensor:
         return value.transpose(-1, -2)
+
+    # -- the state after every token: the chunk scan's boundaries, with chunk_per_token ------------
+
+    def _states(self) -> States:
+        if self._decoding():
+            return self.state_output.unsqueeze(1)
+        self._arguments()  # recorded before the read inside the scan, for the values read after it
+        return _chunk_states.__get__(self)
+
+    #: The state after each token of this call, from the chunk scan's boundaries (``chunk_size`` 1).
+    states = DerivedEProperty(
+        _states,
+        description="The state after every token of this call, [batch, seq, heads, state_dim, head_dim]; needs nnter.chunk_per_token(model)",
+        unavailable=needs_per_token_chunks,
+    )
+
+    #: The chunk scan has no per-token occurrence of the state.
+    state = unavailable(NO_STATE_OCCURRENCES)
+    #: The chunk scan does not carry a state written at one token into the next.
+    set_state_after = unavailable(NO_STATE_WRITES)
+
+    def state_after(self, t: int) -> torch.Tensor:
+        """The state after token ``t`` of this call, ``[batch, heads, state_dim, head_dim]``: ``states[:, t]``."""
+        reason = type(self).states.reason(self)
+        if reason:
+            raise Unavailable(f"{self.path}.state_after is not available: {reason}")
+        return self.states[:, t]

@@ -1,9 +1,9 @@
 ---
 title: Mamba-2 State-Space Mixers
-one_liner: The `linear_attn` values on Mamba-2 (SSD) blocks — Mamba-2, Nemotron-H, Bamba, Falcon-H1 — what C, B, x and dt are called, the two kernels a prompt and a decode step run, and the state handed between steps.
+one_liner: The `linear_attn` values on Mamba-2 (SSD) blocks — Mamba-2, Nemotron-H, Bamba, Falcon-H1 — what C, B, x and dt are called, the two kernels a prompt and a decode step run, the state handed between steps, and the state after every token with `chunk_per_token`.
 tags: [usage, hybrid, state-space, mamba2, ssd, state, nemotron_h, bamba, falcon_h1]
 related: [docs/usage/delta-net.md, docs/usage/vocabulary.md, docs/usage/availability.md, docs/usage/layouts.md, docs/usage/generation.md, docs/developing/recurrent-mixer-internals.md]
-sources: [nnter/components/state_space.py, nnter/components/recurrent.py, nnter/components/layer.py, nnter/families/mamba2.py, nnter/families/nemotron_h.py, nnter/families/bamba.py, nnter/families/falcon_h1.py, tests/families/ssd.py, tests/families/test_mamba2.py, tests/families/test_nemotron_h.py]
+sources: [nnter/components/state_space.py, nnter/components/eproperty.py, nnter/components/recurrent.py, nnter/components/layer.py, nnter/families/mamba2.py, nnter/families/nemotron_h.py, nnter/families/bamba.py, nnter/families/falcon_h1.py, tests/families/ssd.py, tests/families/test_mamba2.py, tests/families/test_nemotron_h.py]
 ---
 
 # Mamba-2 State-Space Mixers
@@ -71,8 +71,9 @@ per block; the identity is the input plus that one sublayer's contribution.
 On Falcon-H1 it has four terms, both mixers and the MLP, each mixer's
 contribution scaled by its µP multiplier ([families.md](../reference/families.md)).
 
-`state`, `states`, `state_after` and `set_state_after` are unavailable on every
-Mamba-2 mixer: `this mixer's kernels do not materialize the state per token`.
+`states` and `state_after` need `nnter.chunk_per_token(model)` (below);
+`state` and `set_state_after` are unavailable on every Mamba-2 mixer, with the
+reasons in [The state after every token](#the-state-after-every-token).
 
 ## The values
 
@@ -82,11 +83,12 @@ Mamba-2 mixer: `this mixer's kernels do not materialize the state per token`.
 | `attention_queries` | `C` | what reads the state, after the conv and the activation; one per group of heads | `SSDQueries`: `batch seq groups state_dim` |
 | `attention_keys` | `B` | where each token writes into the state; one per group of heads | `SSDKeys`: `batch seq groups state_dim` |
 | `attention_values` | `x` | what each token writes | `SSDValues`: `batch seq heads head_dim` |
-| `betas` | `dt` | `softplus(dt + dt_bias)` (clamped to `time_step_limit` on a prompt): the write strength; derived, read-only | `Gates`: `batch seq heads` |
-| `decays` | `A * dt` | the log of how much of the state each token keeps; float32, non-positive; derived, read-only | `Gates`: `batch seq heads` |
+| `betas` | `dt` | `softplus(dt + dt_bias)` (clamped to `time_step_limit` on a prompt): the write strength | `Gates`: `batch seq heads` |
+| `decays` | `A * dt` | the log of how much of the state each token keeps; float32, non-positive | `Gates`: `batch seq heads` |
 | `state_input` | `h` in | the state the call starts from: `None` on a fresh prompt, the cached state on a decode step (a copy) | `State`: `batch heads key_dim value_dim` |
 | `state_output` | `h` out | the state after the call's last token: what the next decode step starts from | `State`: `batch heads key_dim value_dim` |
 | `attention_head_outputs` | `y` | each head's read of the state plus the `D` skip, before the gated norm and `out_proj` | `SSDHeadOutputs`: `batch seq heads head_dim` |
+| `states` | `h` per token | the state after every token of the call; needs `chunk_per_token`; read-only, a copy | `States`: `batch seq heads key_dim value_dim` |
 
 `groups` is the mixer's `n_groups` (the heads in a group share `B` and `C`),
 `heads` its `num_heads`, `head_dim` its `head_dim` and `state_dim` its
@@ -99,9 +101,101 @@ Everything but `attention_output` is read at the scan kernel call. Assign
 `attention_queries`, `attention_keys`, `attention_values`,
 `attention_head_outputs`, `state_input` or `state_output` to replace them, or
 edit the first four in place (`mix.attention_head_outputs[:, -1] = 0` reaches
-the model). `betas` and `decays` are computed from the call's `dt`, `dt_bias`
-and `A` and are read-only. `state_input` is a clone: the decode kernel updates
-the cache's buffer in place.
+the model). `state_input` is a clone: the decode kernel updates the cache's
+buffer in place.
+
+The values of one call can be read together in one trace in forward order
+(`attention_queries`, `betas`, `attention_head_outputs`, `state_output`, ...):
+the kernel's arguments are read from the model once per call, and every value
+that needs one of them (`betas` needs `dt_bias`, a prompt's `state_output`
+whether the scan returns a state) takes it from that one read.
+
+### `betas` and `decays` are assignable
+
+Both are the kernel's `dt` argument seen through `dt_bias`, the softplus and
+`A`. An assignment is carried back into `dt`: `betas` becomes `dt =
+log(expm1(betas)) - dt_bias`, and `decays` the `betas` it implies,
+`decays / A`, so the kernel computes the gate you wrote and a read after the
+write returns it (to the precision of `dt`, bf16 on a bf16 checkpoint). They
+are one argument: writing one changes the other.
+
+```python
+with model.generate(prompt, max_new_tokens=2, do_sample=False) as tracer:
+    for step in tracer.iter[1]:                        # a decode step
+        entering = mix.state_input.save()
+        mix.betas = torch.zeros_like(mix.betas)         # no write, and exp(0) = 1: no decay
+        leaving = mix.state_output.save()               # == entering
+
+with model.trace(prompt):
+    mix.decays = mix.decays * 0.5                       # keep more of the state at every token
+    logits = model.logits.save()
+```
+
+`betas` must be positive (0 stops the token's write and its decay; the inverse
+of the softplus is undefined below it). On a prompt the chunk scan clamps
+`dt` to `time_step_limit` after the softplus, so a written value outside the
+limit runs clamped; a decode step does not clamp.
+
+## The state after every token
+
+The chunk scan computes the state at every chunk boundary in one tensor
+(`new_states`, `[batch, chunks + 1, heads, head_dim, state_dim]`: the state
+before each chunk and after the last). With a chunk size of 1 every token is
+a boundary. `nnter.chunk_per_token(model)` sets each Mamba-2 mixer's
+`chunk_size` to 1, and then `states` and `state_after(t)` read the state after
+every token of the call:
+
+```python
+from nnter import chunk_per_token
+
+chunk_per_token(model)                         # this model only; the logits are unchanged
+with model.trace(prompt):
+    states = mix.states.save()                 # [batch, seq, heads, state_dim, head_dim]
+    final = mix.state_output.save()            # == states[:, -1]
+with model.trace(prompt):
+    s3 = mix.state_after(3).save()             # == states[:, 3]
+chunk_per_token(model, False)                  # back to the chunk size the mixer was built with
+```
+
+Token by token, `states` is SSD's recurrence, from `state_input` (zeros on a
+fresh prompt): `states[:, t] == exp(decays[:, t]) * states[:, t - 1] +
+betas[:, t] * B_t ⊗ x_t`, with `B` repeated from groups to heads
+(`tests/families/ssd.py`, `test_states_per_token`). On a decode step `states`
+is that step's one token, `state_output` with a sequence axis of 1, and
+`state_after(0)` is the same state.
+
+`states` is a copy, `new_states[:, 1:]` transposed to the key-side-first
+`States` layout, and read-only: an edit to it does not reach the scan.
+
+- **Per model, not per family.** `chunk_per_token` sets an attribute of each
+  mixer module of the model you pass, which the forward reads on every call;
+  unlike `route_kernels` it touches no other model. `chunk_per_token(model,
+  False)` restores the chunk size each mixer was built with
+  (`config.chunk_size`, `mamba_chunk_size` on Bamba and Falcon-H1). Call it on
+  a loaded model.
+- **Slower on long prompts.** The recurrence between chunks is quadratic in
+  the number of chunks, and with a chunk size of 1 that is the number of
+  tokens.
+- **Without it**, `states` reports `the chunk scan materializes the state only
+  at chunk boundaries, every 256 tokens (chunk_size=256); call
+  nnter.chunk_per_token(model) to set every mixer's chunk_size to 1, so every
+  token is a boundary (slower on long prompts)` (the mixer's own chunk size),
+  and `state_after` raises `Unavailable` with it.
+
+What stays unavailable, with or without it:
+
+- `state`, the per-occurrence value a `tracer.iter` walk reads on a gated
+  DeltaNet: `the chunk scan computes every token's state in one tensor per
+  call, not one occurrence per token to walk with tracer.iter; read states, or
+  state_after(t), after nnter.chunk_per_token(model)`.
+- `set_state_after`: `the chunk scan computes every boundary state in one
+  cumulative step from the initial state, so a state written at token t does
+  not flow into later tokens' states; assign state_input to change where a
+  call starts`.
+
+Both appear in `model.status()` under `linear_attn.state` and
+`linear_attn.set_state_after`, and reading `mix.state` or `mix.set_state_after`
+raises `Unavailable` with the reason.
 
 ## Two kernels, one value
 
@@ -154,8 +248,10 @@ them.
 - **Route before the layer is traced**, with the family module before loading
   (`nnter.families.mamba2`) or `model.family` after; see
   [recurrent-mixer-internals.md](../developing/recurrent-mixer-internals.md).
-- **`betas` and `decays` are read-only.** Scale the state's write through
-  `attention_keys` or `attention_values`, or replace `state_input`.
+- **A written `betas` must be positive**, and on a prompt it is clamped to
+  `time_step_limit` by the kernel.
+- **`chunk_per_token` is not undone by `route_kernels(family, "default")`**;
+  call `chunk_per_token(model, False)`.
 - **`state_input` is `None` on a fresh prompt.** Save it only when it is not.
 - **A prompt run with `use_cache=False` returns no final state**: `state_output`
   raises `Unavailable` there.
@@ -165,7 +261,7 @@ them.
 
 ## Related
 
-- [delta-net.md](delta-net.md), the gated DeltaNet mixer with the same names, and a per-token state.
+- [delta-net.md](delta-net.md), the gated DeltaNet mixer with the same names, and a per-token state walked with `tracer.iter` and writable per token.
 - [vocabulary.md](vocabulary.md), where `linear_attn` sits in the standard names.
 - [availability.md](availability.md), per-block `status()` on a hybrid.
 - [layouts.md](layouts.md), the layouts beside the softmax ones.

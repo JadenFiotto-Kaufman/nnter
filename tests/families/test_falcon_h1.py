@@ -18,7 +18,11 @@ class TestFalconH1(StateSpaceChecks, FamilySuite):
         "layers.0.post_attention_layernorm": "model.layers.0.pre_ff_layernorm",
         "layers.0.linear_attn": "model.layers.0.mamba",
     }
-    EXPECTED_UNAVAILABLE = {"linear_attn.state": "per token", "linear_attn.states": "per token"}
+    EXPECTED_UNAVAILABLE = {
+        "linear_attn.state": "one tensor per call",
+        "linear_attn.states": "chunk_per_token",
+        "linear_attn.set_state_after": "one cumulative step",
+    }
 
     def test_every_block_has_both_mixers(self, model):
         for layer in model.layers:

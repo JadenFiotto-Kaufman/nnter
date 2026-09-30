@@ -18,7 +18,11 @@ class TestMamba2(StateSpaceChecks, FamilySuite):
         "norm": "backbone.norm_f",
         "lm_head": "lm_head",
     }
-    EXPECTED_UNAVAILABLE = {"linear_attn.state": "per token", "linear_attn.states": "per token"}
+    EXPECTED_UNAVAILABLE = {
+        "linear_attn.state": "one tensor per call",
+        "linear_attn.states": "chunk_per_token",
+        "linear_attn.set_state_after": "one cumulative step",
+    }
 
     def test_block_is_the_mixer_alone(self, model):
         """No attention, no MLP: the status lists neither, and the mixer is the block's one contribution."""
