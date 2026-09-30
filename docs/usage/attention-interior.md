@@ -3,7 +3,7 @@ title: Attention Interior
 one_liner: Read, edit and assign the queries, keys, values, scores, pattern and per-head outputs inside every family's attention, under `attn_implementation="eager"`.
 tags: [usage, attention, interior, source, eager, heads]
 related: [docs/usage/residual-stream.md, docs/usage/layouts.md, docs/usage/availability.md, docs/usage/loading.md, docs/usage/generation.md, docs/usage/delta-net.md, docs/usage/remote.md]
-sources: [nnter/components/attention.py, nnter/components/eproperty.py, nnter/families/gpt2.py, nnter/families/falcon.py, nnter/families/gpt_oss.py, nnter/families/gptj.py, nnter/families/bloom.py, nnter/families/mpt.py, nnter/families/deepseek_v2.py, nnter/families/gemma4_text.py, tests/families/suite.py]
+sources: [nnter/components/attention.py, nnter/components/eproperty.py, nnter/families/gpt2.py, nnter/families/falcon.py, nnter/families/gpt_oss.py, nnter/families/gptj.py, nnter/families/codegen.py, nnter/families/xglm.py, nnter/families/gpt_neox_japanese.py, nnter/families/bloom.py, nnter/families/mpt.py, nnter/families/deepseek_v2.py, nnter/families/gemma4_text.py, tests/families/suite.py]
 ---
 
 # Attention Interior
@@ -86,8 +86,9 @@ Reading one raises `nnter.Unavailable` with the same reason, before the model
 runs. `attention_output` does not depend on the implementation and stays
 available. A load with no `attn_implementation` gets transformers' default,
 `sdpa` on every family that supports it, so pass `attn_implementation="eager"`
-at load for any of the six ([loading.md](loading.md)). GPT-J, GPT-Neo, BLOOM and
-MPT have no `sdpa` implementation in transformers and load eager with no flag.
+at load for any of the six ([loading.md](loading.md)). GPT-J, GPT-Neo, CodeGen,
+XGLM, GPT-NeoX-Japanese, BLOOM and MPT have no `sdpa` implementation in transformers
+and load eager with no flag.
 
 ## Reading, editing in place, assigning
 
@@ -186,16 +187,18 @@ query head before the rotary embedding, so `attention_keys` and
 `attention_values` are `num_heads` wide there, although
 `model.num_kv_heads` reports the config's `num_kv_heads`.
 
-### GPT-J, GPT-Neo, BLOOM, MPT: the same six on their own operations
+### GPT-J, GPT-Neo, CodeGen, GPT-NeoX-Japanese, XGLM, BLOOM, MPT: the same six on their own operations
 
-These four do their own attention arithmetic too, and their families map the
-same six values onto it: GPT-J's and GPT-Neo's around their `_attn` calls, BLOOM's on its
-`_reshape` split and `bmm`, MPT's on its `*_states` bindings and second
-`matmul`. The head outputs are heads-first in those forwards and are served as
-a sequence-first view, so an in-place edit still lands. All four load eager
-by default. BLOOM's and MPT's values do not check the implementation at all;
-GPT-J's and GPT-Neo's carry the eager check like the interface families'. BLOOM's queries,
-keys and values take in-place edits; MPT's are split views (above).
+These seven do their own attention arithmetic too, and their families map the
+same six values onto it: GPT-J's, GPT-Neo's, CodeGen's and GPT-NeoX-Japanese's around
+their `_attn` calls, XGLM's on the flattened tensors its two `bmm` calls take, BLOOM's on
+its `_reshape` split and `bmm`, MPT's on its `*_states` bindings and second `matmul`. The
+head outputs are heads-first in those forwards and are served as a sequence-first view,
+so an in-place edit still lands. All seven load eager by default. BLOOM's, MPT's,
+CodeGen's, XGLM's and GPT-NeoX-Japanese's values do not check the implementation at all
+(the model has no other); GPT-J's and GPT-Neo's carry the eager check like the interface
+families'. BLOOM's queries, keys and values take in-place edits; MPT's are split views
+(above).
 
 GPT-Neo's scores are `q @ k^T` with no `1/sqrt(head_dim)` scaling, computed and
 served in float32 whatever the model's dtype; the pattern is cast back to the
@@ -203,6 +206,16 @@ values' dtype. Its `local` layers (every other one, by `attention_layers`)
 mask keys `window_size` or more tokens back, so their pattern is zero there
 and their scores hold float32's minimum. `self_attn` is the inner
 `attn.attention` module, which the `attn` wrapper calls and returns unchanged.
+
+The scale sits in a different place on each of the others. CodeGen's scores are
+`(q @ k^T + mask) / sqrt(head_dim)`, in float32: the mask is added before the division.
+Its rotary embedding multiplies by a float32 buffer, so on a half-precision model its
+queries (and its keys, when no cache casts them back) are served in float32. XGLM scales
+the queries by `1/sqrt(head_dim)` as it projects them, so `attention_queries` is already
+scaled and the scores are `q @ k^T` plus the mask; each of its six values is a view of the
+`[batch * heads, ...]` tensor the forward holds, so an in-place edit lands and an
+assignment is reshaped back. GPT-NeoX-Japanese folds the scale into a `baddbmm` and adds
+the mask after it.
 
 ### GPT-OSS: an attention sink
 

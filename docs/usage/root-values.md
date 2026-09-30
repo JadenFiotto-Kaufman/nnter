@@ -174,9 +174,10 @@ The families whose configs say it otherwise:
 | `falcon` | `intermediate_size` | `config.ffn_hidden_size` |
 | `deepseek_v2`, `deepseek_v3` | `head_dim` | `config.v_head_dim`, the width of one head's values and outputs. The config's own `head_dim` key is the latent width, which no served value has. |
 | `deepseek_v2`, `deepseek_v3` | `qk_head_dim` | `config.qk_nope_head_dim + config.qk_rope_head_dim` |
-| `gpt2`, `gptj` | `intermediate_size` | `config.n_inner`, `None` meaning `4 * hidden_size`. GPT-2's config also carries an `intermediate_size` key the model never reads. |
+| `gpt2`, `gptj`, `codegen` | `intermediate_size` | `config.n_inner`, `None` meaning `4 * hidden_size`. GPT-2's config also carries an `intermediate_size` key the model never reads. |
 | `gpt_neo` | `intermediate_size` | `config.intermediate_size`, `None` meaning `4 * hidden_size` |
-| `opt` | `intermediate_size` | `config.ffn_dim` |
+| `opt`, `xglm` | `intermediate_size` | `config.ffn_dim` |
+| `gpt_neox_japanese` | `intermediate_size` | `hidden_size * config.intermediate_multiple_size` |
 | `mpt` | `intermediate_size` | `config.expansion_ratio * hidden_size` |
 | `bloom` | `intermediate_size` | `4 * hidden_size`; the config has no key for it |
 | `gemma4_text`, `gemma4_unified_text` | `head_dim`, `num_kv_heads` | the config's top-level `head_dim` / `num_key_value_heads` as stored, the sliding blocks'. transformers marks both per-layer and refuses a plain `config.head_dim`; the full blocks' (512-wide heads, often fewer key/value heads) are on `layers[i].self_attn`. |

@@ -61,8 +61,8 @@ then the MLP, then the block's output.
 
 ## Tensor blocks and tuple blocks
 
-A Llama, GPT-2 or GPT-NeoX block returns `hidden_states` alone. A GPT-J, GPT-Neo, BLOOM, MPT
-or Falcon block returns a tuple with it first. `layer_output` is the tensor either way, the
+A Llama, GPT-2 or GPT-NeoX block returns `hidden_states` alone. A GPT-J, GPT-Neo, CodeGen,
+GPT-NeoX-Japanese, BLOOM, MPT or Falcon block returns a tuple with it first. `layer_output` is the tensor either way, the
 same object the block returned:
 
 ```python
@@ -174,6 +174,25 @@ with model.trace(prompt):
 A raw `mlp.output.save()` on Falcon is the live tensor, and it reads as `mlp + attn` after
 the block has run; `mlp_output` is the MLP's contribution.
 
+**GPT-NeoX-Japanese's bias.** The attention's output projection has no bias; on the last
+block the attention returns a separate `dense_bias` as its third element and the block adds
+it (`residual + dropout(attn + bias)`). `attention_output` is that sum, the module's output
+plus the bias, computed as it is read; an `eproperty` transform subtracts the bias from an
+edit and hands the rest back, so in-place edits and assignment both land, and a read with no
+edit leaves the forward bit-identical. On the other blocks `dense_bias` is `None` and
+`attention_output` is the module's own tensor.
+
+```python
+model = StandardizedTransformer("abeja/gpt-neox-japanese-2.7b", dispatch=True)
+
+last = model.layers[-1]
+with model.trace(prompt):
+    raw = last.self_attn.output.save()                   # (attn_output, attn_weights, dense_bias)
+    attn = last.self_attn.attention_output.save()
+
+torch.allclose(attn, raw[0] + raw[2])                     # True
+```
+
 **Gemma-4: a third add, and a scaled sum.** Gemma-4's block is Gemma-3's sandwich, then on
 the checkpoints with per-layer embeddings (E2B, E4B) a third add, then the whole sum times
 `layer_scalar`, a per-block buffer, in place:
@@ -224,7 +243,7 @@ MLP alone.
 - **A tuple block's `.output` is a tuple; `layer_output` is the tensor.** Skip a block with
   `Layer.skip_with` ([methods](methods.md)) rather than `.skip(tensor)`, which would hand a
   bare tensor where a tuple is expected.
-- **`mlp_output` does not exist on OPT** (no MLP module); `status()` says so
+- **`mlp_output` does not exist on OPT or XGLM** (no MLP module; `layers[i].fc2.output` is what the block adds); `status()` says so
   ([availability](availability.md)).
 - **The identity is exact in float32 and within a few ulps in bf16** when the block sums in
   another order (Falcon). Compare with a tolerance in the block's dtype.
