@@ -3,8 +3,9 @@
 A family gives its modules standard *values* by wrapping them in `Envoy`
 subclasses (nnsight's ``envoys=``): `Layer` on the decoder block, `Attention`
 on the softmax-attention module, `Mlp` on the feed-forward, and
-`LinearAttention` on a hybrid's gated DeltaNet mixer, a `RecurrentMixer`
-(the mechanism every recurrent mixer shares). The families under
+`LinearAttention` on a hybrid's gated DeltaNet mixer and `SelectiveScan` on a
+Mamba-1 mixer, both `RecurrentMixer`s (the mechanism every recurrent mixer
+shares). The families under
 `nnter.families` subclass these, so a family whose forward is spelled
 differently overrides only what differs, and key them on its own module types
 in its ``ENVOYS``.
@@ -58,12 +59,18 @@ from .recurrent import (
     RecurrentMixer, State, States, at_occurrence, needs_recurrent_routing, needs_torch_kernels, route_delta_rule,
     route_kernels,
 )
+from .selective_scan import (
+    ScanDecays, ScanQK, ScanState, ScanStates, ScanSteps, ScanValues, SelectiveScan, needs_kernel_source,
+    needs_token_loop,
+)
 from .standard import Standard, first_tensor, rewrap
 
 __all__ = [
     "Attention", "DerivedEProperty", "EProperty", "Gates", "HeadOutputs", "INTERFACE", "Keys", "Layer", "LinearAttention",
-    "LinearQK", "LinearV", "Mlp", "Pattern", "Queries", "RecurrentMixer", "Residual", "State", "States", "Values",
+    "LinearQK", "LinearV", "Mlp", "Pattern", "Queries", "RecurrentMixer", "Residual", "ScanDecays", "ScanQK", "ScanState",
+    "ScanStates", "ScanSteps", "ScanValues", "SelectiveScan", "State", "States", "Values",
     "NOT_ON_INTERFACE", "Standard", "Unavailable", "at_occurrence",
-    "branched", "first_tensor", "interface_reason", "needs_eager", "needs_recurrent_routing",
-    "needs_torch_kernels", "per_call", "rewrap", "route_delta_rule", "route_kernels", "seq_first", "unavailable",
+    "branched", "first_tensor", "interface_reason", "needs_eager", "needs_kernel_source",
+    "needs_recurrent_routing", "needs_token_loop", "needs_torch_kernels", "per_call", "rewrap", "route_delta_rule",
+    "route_kernels", "seq_first", "unavailable",
 ]

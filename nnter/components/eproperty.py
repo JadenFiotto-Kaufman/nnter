@@ -67,7 +67,10 @@ class EProperty(eproperty):
             indexes the returned tuple. A write repacks the element into the
             current value, so assigning one argument of a call replaces just
             that argument. ``input`` is the call's first argument, ``inputs``
-            with the first element selected.
+            with the first element selected. A function of the host returning
+            one of these (or ``None``, the whole value) for a key that branches
+            onto calls whose arguments sit at different positions (Mamba's
+            prompt and decode kernels); it runs at read time, after the key.
 
     The location is served by nnsight the way any eproperty's is, whatever the
     path: a module's output, a sibling norm's, or an operation's arguments,
@@ -86,7 +89,7 @@ class EProperty(eproperty):
         key: str | Callable[[Envoy], str] | None = None,
         description: str | None = None,
         unavailable: str | Callable[[Envoy], str | None] | None = None,
-        select: int | str | None = None,
+        select: int | str | Callable[[Envoy], int | str | None] | None = None,
     ) -> None:
         self.locate = key if callable(key) else None
         self.unavailable = unavailable
@@ -200,30 +203,34 @@ class EProperty(eproperty):
 
     # -- select -----------------------------------------------------------------
 
-    def _pick(self, attribute: str, value: Any) -> Any:
+    def _selector(self, obj: Envoy) -> int | str | None:
+        """The element this access selects: `select`, or what it returns for ``obj``."""
+        return self.select(obj) if callable(self.select) else self.select
+
+    def _pick(self, attribute: str, value: Any, select: int | str | None) -> Any:
         if attribute == "input":
             return first_input(*value)
-        if self.select is None:
+        if select is None:
             return value
         if attribute == "inputs":
             args, kwargs = value
-            return kwargs[self.select] if isinstance(self.select, str) else args[self.select]
-        return value[self.select]
+            return kwargs[select] if isinstance(select, str) else args[select]
+        return value[select]
 
-    def _put(self, attribute: str, current: Any, element: Any) -> Any:
+    def _put(self, attribute: str, current: Any, element: Any, select: int | str | None) -> Any:
         if attribute == "input":
             return replace_first_input(*current, element)
-        if self.select is None:
+        if select is None:
             return element
         if attribute == "inputs":
             args, kwargs = current
-            if isinstance(self.select, str):
-                return args, {**kwargs, self.select: element}
+            if isinstance(select, str):
+                return args, {**kwargs, select: element}
             args = list(args)
-            args[self.select] = element
+            args[select] = element
             return tuple(args), kwargs
         current = list(current)
-        current[self.select] = element
+        current[select] = element
         return tuple(current)
 
     # -- read and write -----------------------------------------------------------
@@ -238,7 +245,7 @@ class EProperty(eproperty):
         key = self.path(obj)
         location = self._resolve(obj, key)
         raw = Mediator.value(location)
-        value = self._pick(key.rsplit(".", 1)[-1], raw)
+        value = self._pick(key.rsplit(".", 1)[-1], raw, self._selector(obj))
         if self._preprocess is not None:
             value = self._preprocess(obj, value)
         if self._transform is not None:
@@ -256,8 +263,9 @@ class EProperty(eproperty):
         key = self.path(obj)
         location = self._resolve(obj, key)
         attribute = key.rsplit(".", 1)[-1]
-        if self.select is not None or attribute == "input":
-            value = self._put(attribute, Mediator.value(location), value)
+        select = self._selector(obj)
+        if select is not None or attribute == "input":
+            value = self._put(attribute, Mediator.value(location), value, select)
         Mediator.swap(location, value)
 
 
@@ -323,14 +331,21 @@ def per_call(envoy: Envoy, key: str, compute: Callable[[], Any]) -> Any:
     For a served value several reads in one call depend on, when the model
     serves it once: the branch a forward takes, the sequence length of a call.
     A call is told apart by the worker's mediator and its step (see
-    `branched`): a pinned step different from the cached one is a new call, a
-    relaxed one the same call, another mediator another run.
+    `branched`): a pinned step different from the cached one is a new call,
+    another mediator another run. A relaxed read counts as the step of the
+    envoy's last pinned one, so a value first computed after the step's
+    first read (a DeltaNet's per-token offset, read after ``state_input``)
+    is not the previous step's.
     """
     from nnsight.intervention.interleaver import Mediator
 
     mediator = Mediator.current(key)
     step = mediator.iteration
     cache = envoy.__dict__.setdefault("_per_call", {})
+    if step is not None:
+        cache[None] = (mediator, step)
+    elif cache.get(None, (None,))[0] is mediator:
+        step = cache[None][1]
     cached = cache.get(key)
     if cached is None or cached[0] is not mediator or (step is not None and step != cached[1]):
         cache[key] = cached = (mediator, step, compute())

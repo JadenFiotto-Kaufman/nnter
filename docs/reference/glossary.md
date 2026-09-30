@@ -118,11 +118,11 @@ Inside `for t in tracer.iter[t]:` a read is *pinned* to occurrence `t` of its lo
 
 ## Recurrent state
 
-A gated DeltaNet layer's per-head memory, `[batch, heads, key_dim, value_dim]`: `state_input` entering a call (`None` on a fresh prompt), `state_output` leaving it, `state` after one token and `states` after every token of the call. See [../usage/delta-net.md](../usage/delta-net.md).
+A gated DeltaNet layer's per-head memory, `[batch, heads, key_dim, value_dim]`: `state_input` entering a call (`None` on a fresh prompt), `state_output` leaving it, `state` after one token and `states` after every token of the call. See [../usage/delta-net.md](../usage/delta-net.md). A Mamba-1 layer's is one `state_dim` vector per channel, `[batch, channels, state_dim]`, under the same names ([../usage/selective-scan.md](../usage/selective-scan.md)).
 
 ## `RecurrentMixer`
 
-The base envoy of a recurrent mixer (`nnter.components.recurrent`): a subclass names its prompt and decode-step kernels (`CHUNK_KERNEL`, `RECURRENT_KERNEL`), the branch between them (`BRANCH`) and the per-token state binding (`STATE_OP`, or `None`), and declares its values at the kernel call; the base reaches them, reports their availability, holds `attention_output` and the per-token `state` / `states`, and routes the kernels (`route_kernels`). `LinearAttention` is the gated DeltaNet subclass. See [../developing/recurrent-mixer-internals.md](../developing/recurrent-mixer-internals.md).
+The base envoy of a recurrent mixer (`nnter.components.recurrent`): a subclass names its prompt and decode-step kernels (`CHUNK_KERNEL`, `RECURRENT_KERNEL`), the branch between them (`BRANCH`) and the per-token state binding (`STATE_OP`, or `None`), and declares its values at the kernel call; the base reaches them, reports their availability, holds `attention_output` and the per-token `state` / `states`, and routes the kernels (`route_kernels`). `LinearAttention` is the gated DeltaNet subclass, `SelectiveScan` the Mamba-1 one. See [../developing/recurrent-mixer-internals.md](../developing/recurrent-mixer-internals.md).
 
 ## Registry
 
@@ -138,11 +138,15 @@ The tensor a block passes to the next, `[batch, seq, hidden]`: `layers[i].input`
 
 ## `route_kernels`, `route_delta_rule`
 
-`nnter.route_kernels(family, "torch" | "default")`: binds a family's recurrent kernel names, process-wide, to transformers' pure-torch kernels (on a gated DeltaNet, both to the token-by-token loop) or back to the module's import-time binding. The per-token `state` / `states` exist only under `"torch"`; call it before tracing the layer. `nnter.route_delta_rule(family, "recurrent" | "chunked")` is the same switch in the delta rule's words. See [../usage/delta-net.md](../usage/delta-net.md).
+`nnter.route_kernels(family, "torch" | "default")`: binds a family's recurrent kernel names, process-wide, to transformers' pure-torch kernels (on a gated DeltaNet, both to the token-by-token loop; on Mamba-1, each to its own, the scan being the loop) or back to the module's import-time binding. The per-token `state` / `states` exist only under `"torch"`; call it before tracing the layer. `nnter.route_delta_rule(family, "recurrent" | "chunked")` is the same switch in the delta rule's words. See [../usage/delta-net.md](../usage/delta-net.md).
 
 ## Sandwich block
 
 A block that norms a sublayer's output before adding it to the residual stream, `x + post_attention_layernorm(attn(...))` (Gemma-2/3, OLMo-2/3). The contribution is the post-norm's output, so those families point `attention_output` / `mlp_output` at the sibling norm. See [families.md](families.md#sandwich-norms) and [../extending/overriding-values.md](../extending/overriding-values.md).
+
+## Selective scan, `SelectiveScan`
+
+Mamba-1's mixer: per channel, `h = exp(dt*A) h + dt B x`, `y = C.h + D x`, with the step size `dt` and the vectors `B`, `C` computed from each token. `nnter.components.SelectiveScan` serves it as `linear_attn` on Mamba, Falcon-Mamba and Jamba, with `C` / `B` / `x` as `attention_queries` / `attention_keys` / `attention_values`, `dt` as `betas` and `dt*A` as `decays`. See [../usage/selective-scan.md](../usage/selective-scan.md).
 
 ## Softcap
 

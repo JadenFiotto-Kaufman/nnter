@@ -20,8 +20,9 @@ Llama, Llama 4 (text), GPT-NeoX, Mistral, Mixtral, MiniMax-M2, Qwen2, Qwen2-MoE,
 Gemma-2, Gemma-3 (text), GPT-OSS, DeepSeek-V2, DeepSeek-V3, DeepSeek-V3.2, GLM-4.5/4.6,
 GLM-4.7-Flash, GLM-5, DBRX, Phi, Phi-3,
 OLMo, OLMo-2, OLMo-3, OLMoE, EXAONE 4.0, SmolLM3, StableLM, Cohere (Command-R), Cohere-2, Granite, GPT-J, BLOOM, MPT, Falcon (7B and 40B
-layouts), OPT, and the gated DeltaNet hybrids Qwen3-Next, Qwen3.5,
-Qwen3.5-MoE (text) and OLMo-Hybrid, on transformers 5.17. The vocabulary is Llama's block names, with the containers
+layouts), OPT, the gated DeltaNet hybrids Qwen3-Next, Qwen3.5,
+Qwen3.5-MoE (text) and OLMo-Hybrid, and the Mamba-1 state-space models Mamba,
+Falcon-Mamba and Jamba (with attention and experts), on transformers 5.17. The vocabulary is Llama's block names, with the containers
 lifted out of the inner `.model`:
 
 | standard name                              | GPT-2                     | Llama                   | GPT-NeoX                          |

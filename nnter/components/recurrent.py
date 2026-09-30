@@ -9,8 +9,8 @@ share is how the call is found, which kernel names must be transformers'
 pure-torch ones for there to be a call to read inside, how the family's
 kernels are rebound (`route_kernels`), and, when the token-by-token kernel
 materializes it, the state after every token. That shared part is
-`RecurrentMixer`; a subclass (`LinearAttention`) names its kernels in four
-class constants and declares its values.
+`RecurrentMixer`; a subclass (`LinearAttention`, `SelectiveScan`) names its
+kernels in class constants and declares its values.
 """
 
 from __future__ import annotations
@@ -96,11 +96,14 @@ def route_kernels(family, kernel: str = "torch") -> None:
     family's modeling module to transformers' pure-torch kernels, the
     functions the dispatcher falls back to: the slower path, and the only one
     with Python source to read values inside. On a mixer whose token-by-token
-    kernel materializes the state after every token (``STATE_OP`` set), both
-    names are bound to that kernel, so a prompt runs through it too and
+    kernel materializes the state after every token (``STATE_OP`` set), the
+    prompt's name is bound to that kernel, so a prompt runs through it and
     `RecurrentMixer.state`, `states`, `state_after` and `set_state_after`
-    read and write the state at any position. ``"default"`` restores what the
-    module bound at import. Like installing a kernel, it applies to every
+    read and write the state at any position. On a gated DeltaNet that is
+    the decode kernel, so both names are bound to it; on Mamba-1 the
+    pure-torch selective scan is itself the token loop, and each name keeps
+    its own (`RecurrentMixer.STEP_STATE_OP`). ``"default"`` restores what
+    the module bound at import. Like installing a kernel, it applies to every
     model of the family; call it before tracing a layer, since a forward
     ``.source`` has already instrumented keeps the binding it was compiled
     with. ``family`` is the family module (``model.family``, or
@@ -112,11 +115,9 @@ def route_kernels(family, kernel: str = "torch") -> None:
     for name in names:
         originals.setdefault(name, getattr(module, name))
     if kernel == "torch":
+        bindings = {name: _torch_function(originals[name]) for name in names}
         if mixer.STATE_OP is not None:
-            loop = _torch_function(originals[_name(mixer.RECURRENT_KERNEL)])
-            bindings = dict.fromkeys(names, loop)
-        else:
-            bindings = {name: _torch_function(originals[name]) for name in names}
+            bindings[names[0]] = _torch_function(originals[_name(mixer._loop_kernel())])
     elif kernel == "default":
         bindings = {name: originals[name] for name in names}
     else:
@@ -165,7 +166,14 @@ def needs_recurrent_routing(envoy: Envoy) -> str | None:
     if reason:
         return reason
     module = _modeling_module(envoy)
-    loop = _torch_function(getattr(module, _name(cls.RECURRENT_KERNEL)))
+    loop = _torch_function(getattr(module, _name(cls._loop_kernel())))
+    step = getattr(module, _name(cls.RECURRENT_KERNEL))
+    if cls.STEP_STATE_OP and (getattr(module, _name(cls.CHUNK_KERNEL)) is not loop or step is not _torch_function(step)):
+        return (
+            "the state after each token is read inside the kernels' pure-torch bodies, which this process "
+            "reaches through transformers' kernel dispatcher. Call nnter.route_kernels(model.family, 'torch') "
+            "before tracing this layer"
+        )
     if getattr(module, _name(cls.CHUNK_KERNEL)) is not loop:
         return (
             "the state after each token is materialized only by the token-by-token kernel; "
@@ -208,6 +216,9 @@ class RecurrentMixer(Standard):
     * `STATE_OP`: inside the token-by-token kernel, the binding of the state
       after each token's update; ``None`` when the mixer's kernels do not
       materialize it.
+    * `STEP_STATE_OP`: set when the decode kernel is a single-step update
+      rather than the token loop (Mamba-1): the binding of the new state
+      inside it. The prompt's kernel is then the token loop.
 
     `KERNEL` reads `BRANCH` once per call and names the call that fires on
     this step, so the same values work in a ``trace`` and at every step of
@@ -232,6 +243,10 @@ class RecurrentMixer(Standard):
     RECURRENT_KERNEL: str | None = None
     #: Inside the token-by-token kernel, the binding of the state after each token's update, or ``None``.
     STATE_OP: str | None = None
+    #: Inside a decode kernel that updates the state once instead of looping over tokens, the binding of the
+    #: new state; ``None`` when the decode kernel is the token loop and binds `STATE_OP`. Set, the prompt's
+    #: kernel is the token loop (Mamba-1's pure-torch selective scan).
+    STEP_STATE_OP: str | None = None
     #: Whichever kernel fires on this call, chosen by `BRANCH`; built from the constants.
     KERNEL: Callable[[Envoy], str]
 
@@ -241,6 +256,16 @@ class RecurrentMixer(Standard):
         if "KERNEL" not in declared and any(name in declared for name in ("BRANCH", "CHUNK_KERNEL", "RECURRENT_KERNEL")):
             if cls.CHUNK_KERNEL and cls.RECURRENT_KERNEL:
                 cls.KERNEL = staticmethod(branched(cls.BRANCH, {False: cls.CHUNK_KERNEL, True: cls.RECURRENT_KERNEL}))
+
+    @classmethod
+    def _loop_kernel(cls) -> str:
+        """The kernel whose pure-torch function is the token loop: the decode kernel, unless it is a single step."""
+        return cls.CHUNK_KERNEL if cls.STEP_STATE_OP else cls.RECURRENT_KERNEL
+
+    @classmethod
+    def _state_op(cls, kernel: str) -> str:
+        """The binding of the state after a token inside ``kernel``."""
+        return cls.STEP_STATE_OP if cls.STEP_STATE_OP and kernel == cls.RECURRENT_KERNEL else cls.STATE_OP
 
     @EProperty(key="output", description="What the mixer adds to the residual stream")
     def attention_output(self, value: Any) -> Residual:
@@ -265,7 +290,7 @@ class RecurrentMixer(Standard):
         cls = type(envoy)
         step = Mediator.current("state").iteration
         kernel = cls.KERNEL(envoy) if step in (None, 0) else cls.CHUNK_KERNEL
-        return f"source.{kernel}.source.{cls.STATE_OP}.output"
+        return f"source.{kernel}.source.{cls._state_op(kernel)}.output"
 
     @EProperty(_token_state_op, description="The recurrent state after one token of the prompt; iterate it with tracer.iter; needs route_kernels(family, 'torch')", unavailable=needs_recurrent_routing)
     def state(self, value: torch.Tensor) -> State:
@@ -301,7 +326,8 @@ class RecurrentMixer(Standard):
 
         def compute():
             seq = self._seq()
-            op = getattr(getattr(self.source, type(self).KERNEL(self)).source, self.STATE_OP)
+            kernel = type(self).KERNEL(self)
+            op = getattr(getattr(self.source, kernel).source, self._state_op(kernel))
             location = f"{op.path}.output"
             return seq, Mediator.current(location).occurrence(location)
 
@@ -310,7 +336,8 @@ class RecurrentMixer(Standard):
     def _token_op(self) -> tuple[SourceEnvoy, int]:
         """This call's state-update op and the occurrence its first token is (see `_call`)."""
         _, first = self._call()
-        op = getattr(getattr(self.source, type(self).KERNEL(self)).source, self.STATE_OP)
+        kernel = type(self).KERNEL(self)
+        op = getattr(getattr(self.source, kernel).source, self._state_op(kernel))
         return op, first
 
     def _states(self) -> States:

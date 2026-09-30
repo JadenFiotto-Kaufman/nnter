@@ -357,9 +357,12 @@ let a function key name the op that fires *on this call*:
   declares.
 - `per_call(envoy, key, compute)` (`:308-325`) caches `compute()` on the
   envoy under `key`, telling calls apart by fact 4: the cache entry is
-  `(mediator, step, value)`; another mediator is another run; a step that is
-  `None` (relaxed) is the same call; a pinned step different from the cached
-  one is a new call. So inside `tracer.iter[:]` the first read of a step body
+  `(mediator, step, value)`; another mediator is another run; a pinned step
+  different from the cached one is a new call; a step that is `None`
+  (relaxed) counts as the step of the envoy's last pinned read, which
+  `per_call` records under the key `None`, so a value first computed after
+  the step's first read (a recurrent mixer's per-token offset read after
+  `state_input`) is this step's, not a stale entry from the step before. So inside `tracer.iter[:]` the first read of a step body
   is pinned to that step and misses the cache, and every later read in the
   same body is relaxed and hits it. Reading the variable as the step's first,
   pinned read also keeps the kernel read sequential, which is what lets an op

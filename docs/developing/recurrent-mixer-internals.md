@@ -1,9 +1,9 @@
 ---
 title: Recurrent Mixer Internals
-one_liner: How RecurrentMixer reaches a recurrent mixer's values — the branch-chosen kernel op, the pure-torch kernels .source needs, process-wide kernel routing, and per-token state through occurrence arithmetic — and how LinearAttention (gated DeltaNet) sits on it.
-tags: [developing, internals, hybrids, deltanet, linear-attention, recurrent, occurrences]
-related: [docs/developing/eproperty-internals.md, docs/developing/architecture.md, docs/developing/gotchas.md, docs/usage/delta-net.md]
-sources: [nnter/components/recurrent.py, nnter/components/linear_attention.py, nnter/components/eproperty.py, nnter/families/qwen3_5_text.py, tests/families/test_qwen3_5_text.py, tests/test_base.py, nnsight src/nnsight/intervention/interleaver.py, nnsight src/nnsight/intervention/iterator.py]
+one_liner: How RecurrentMixer reaches a recurrent mixer's values — the branch-chosen kernel op, the pure-torch kernels .source needs, process-wide kernel routing, and per-token state through occurrence arithmetic — and how LinearAttention (gated DeltaNet) and SelectiveScan (Mamba-1) sit on it.
+tags: [developing, internals, hybrids, deltanet, linear-attention, mamba, selective-scan, recurrent, occurrences]
+related: [docs/developing/eproperty-internals.md, docs/developing/architecture.md, docs/developing/gotchas.md, docs/usage/delta-net.md, docs/usage/selective-scan.md]
+sources: [nnter/components/recurrent.py, nnter/components/linear_attention.py, nnter/components/selective_scan.py, nnter/families/mamba.py, tests/families/scan_suite.py, nnter/components/eproperty.py, nnter/families/qwen3_5_text.py, tests/families/test_qwen3_5_text.py, tests/test_base.py, nnsight src/nnsight/intervention/interleaver.py, nnsight src/nnsight/intervention/iterator.py]
 ---
 
 # Recurrent Mixer Internals
@@ -30,6 +30,10 @@ declare only their values:
   values: `attention_queries`, `attention_keys`, `attention_values`,
   `decays`, `betas`, `state_input`, `attention_head_outputs`,
   `state_output`.
+- `SelectiveScan` (`nnter/components/selective_scan.py`), the Mamba-1 mixer
+  (`linear_attn` on Mamba, Falcon-Mamba and Jamba's Mamba blocks), declares
+  the same names over a selective scan; the section
+  [Mamba-1: `SelectiveScan`](#mamba-1-selectivescan) is what it adds.
 
 This page is how the base handles each property, told through the DeltaNet
 subclass with the transformers lines it depends on
@@ -100,6 +104,7 @@ A subclass names these in class constants (`recurrent.py:227-236`):
 | `CHUNK_KERNEL` | the call a prompt runs through | `"torch_chunk_gated_delta_rule_0"` |
 | `RECURRENT_KERNEL` | the call a decode step runs through | `"torch_recurrent_gated_delta_rule_0"` |
 | `STATE_OP` | inside the token-by-token kernel, the binding of the state after each token's update, or `None` | `"last_recurrent_state_3"` |
+| `STEP_STATE_OP` | set when the decode kernel is a single-step update, not the token loop: the binding of the new state inside it; the prompt's kernel is then the loop | `None` (Mamba-1: `"ssm_state_0"`) |
 
 - `KERNEL` is built from them in `__init_subclass__` (`:238-243`) as
   `branched(BRANCH, {False: CHUNK_KERNEL, True: RECURRENT_KERNEL})`, when a
@@ -180,9 +185,12 @@ names in its modeling module, process-wide:
 - The module's original bindings of both names are stashed once in
   `module.__dict__["_nnter_kernels"]`, so `"default"` restores them and
   repeated `"torch"` calls are idempotent.
-- `"torch"` binds the names to the pure-torch kernels. On a mixer with a
-  `STATE_OP`, **both** names are bound to the token-by-token kernel, the
-  `torch_function` behind `RECURRENT_KERNEL`: the forward's op names stay
+- `"torch"` binds each name to its own pure-torch kernel, and on a mixer
+  with a `STATE_OP` the prompt's name to the token loop, `_loop_kernel()`'s
+  `torch_function`: `RECURRENT_KERNEL`'s on a gated DeltaNet, so **both**
+  names are bound to the token-by-token kernel; `CHUNK_KERNEL`'s own on
+  Mamba-1 (`STEP_STATE_OP` set), whose pure-torch scan is the loop. On the
+  DeltaNet: the forward's op names stay
   `torch_chunk_gated_delta_rule_0` / `torch_recurrent_gated_delta_rule_0`
   whatever the globals hold (the name in the source is the label, the
   global is what runs), so after routing a prompt's
@@ -226,8 +234,10 @@ answers, in order:
    `state`, `states`, `state_after` and `set_state_after` report that.
 2. `needs_torch_kernels`' reason, when an optimized kernel is bound.
 3. The live binding of `CHUNK_KERNEL`'s name is not the token-by-token
-   loop: the instruction to call `route_kernels(model.family, 'torch')`.
-   Checked on the live binding, so `status()` follows the routing.
+   loop (or, with `STEP_STATE_OP`, `RECURRENT_KERNEL`'s is still the
+   dispatcher, whose body has no state binding): the instruction to call
+   `route_kernels(model.family, 'torch')`. Checked on the live binding, so
+   `status()` follows the routing.
 
 ## Occurrence arithmetic
 
@@ -284,6 +294,68 @@ before it and positions after it come after; `states` reads every position,
 so it goes in its own trace
 (`test_qwen3_5_text.py:133-144`).
 
+## Mamba-1: `SelectiveScan`
+
+transformers' Mamba mixer (`models/mamba/modeling_mamba.py`; Falcon-Mamba's
+and Jamba's are copies in their own modules) computes `dt`, `B`, `C` from the
+conv output and calls `mamba_selective_scan(x, dt, A, B, C, D=, z=,
+delta_bias=, ...)` on a prompt, `mamba_selective_state_update(state, x, dt,
+A, B, C, D, z=, dt_bias=, ...)` when `use_precomputed_states and seq_len ==
+1`. Both are decorated with the same hub dispatcher over `mamba_ssm`. Four
+things differ from the DeltaNet, and each is handled where it arises:
+
+- **The branch is not one boolean.** `SelectiveScan.KERNEL` is its own
+  staticmethod: through `per_call` it reads `seq_len_0` and then
+  `use_precomputed_states_0` (in forward order) and names the decode kernel
+  only when both hold. `__init_subclass__` leaves a declared `KERNEL` alone,
+  and a family's subclass inherits it.
+- **The prompt's kernel is the token loop.** The pure-torch
+  `mamba_selective_scan` loops over tokens, rebinding `ssm_state` after each
+  (`ssm_state_3`: the pscan and associative-scan branches bind `_0` and `_1`
+  first, the zero init `_2`), and returns `(scan_output, ssm_state)`. The
+  decode kernel updates once (`ssm_state_0`) and copies the result into the
+  cache's buffer in place. So `STATE_OP = "ssm_state_3"`, `STEP_STATE_OP =
+  "ssm_state_0"`; `_state_op(kernel)` picks the one for the kernel that
+  fires, and `_token_state_op`, `_call` and `_token_op` go through it.
+  `route_kernels` binds each name to its own `torch_function`, and
+  `needs_recurrent_routing` compares the chunk name with the chunk kernel's
+  own function. With `use_mambapy` and `mambapy` installed the scan runs a
+  parallel scan with no per-token binding; `needs_token_loop` reports it.
+- **The arguments sit at different positions.** `x` is argument 0 of the
+  scan and 1 of the decode kernel (the state is 0), and so on down to `C`;
+  the bias is `delta_bias` in one and `dt_bias` in the other. `EProperty`'s
+  `select` may be a function of the envoy, evaluated at read time after the
+  key; `_argument(name)` looks the position up in `ARGUMENTS` by
+  `_decoding(envoy)`.
+- **The tensors are channel-first.** `x` and `dt` are `[batch, channels,
+  seq]`, `B` and `C` `[batch, state_dim, seq]`, and a decode step drops the
+  sequence axis. The preprocess returns `_tokens_first(value)` (a transpose,
+  or an `unsqueeze(1)` on a decode step), a view, so in-place edits reach
+  the kernel; the postprocess lays a written value back out
+  (`_channels_first`). `B` and `C` get a `groups` axis of 1. The base's
+  `_seq()` then reads the sequence off `attention_queries.shape[1]` as on
+  the DeltaNet, and needs no override.
+
+`betas` and `decays` are `DerivedEProperty`s: `softplus(dt + dt_bias)` and
+`A * betas`, computed from the call's arguments (`_read(name)`) the same way
+the kernel computes them, and read-only. `state_input` is `None` on a prompt
+(the scan starts from zeros and takes no state; assigning raises) and a clone
+of the decode kernel's argument 0. Two values live inside the kernels and
+need the names bound to the pure-torch functions, not the dispatcher
+(`needs_kernel_source`): `attention_head_outputs` at `READ_OPS` (`y` after
+the `D` skip, before `silu(z)`: `scan_output_5` in the scan, `out_1` in the
+decode kernel), and `state_output` on a decode step at `STEP_OUTPUT_OP`
+(`ssm_state_to_0`, the state as it is copied into the cache). `state_output`
+there cannot be `ssm_state_0`: `states` reads that binding on the same step,
+and a location is served once. The consequence is a read order that differs
+by kernel: in the scan `y` comes before the returned state, in the decode
+step after the updated one.
+
+`per_call` resolves a relaxed read to the envoy's last pinned step, so a
+step body that reads `state_input` first (pinned: it computes the branch)
+and `states` second (relaxed) computes this step's `(seq, first)` under
+`"call"` rather than reusing step 0's, on either mixer.
+
 ## Adding a recurrent mixer
 
 A new mixer subclasses `RecurrentMixer`, sets `CHUNK_KERNEL` and
@@ -312,6 +384,9 @@ tests in about 13 s on CPU. The methods that pin the claims above:
 | under `generate`, the prompt is an inner loop on step 0 and each later step one token; a decode step's `states` is its own token | `test_per_token_state_within_a_generate` (`:180-205`) |
 | a mixer with no `STATE_OP` reports `state`/`states` unavailable and still serves its kernel values | `tests/test_base.py::test_recurrent_mixer_without_a_state_op_reports_the_state_unavailable` |
 | `route_kernels` `"torch"` / `"default"` round-trip the module's bindings, and `route_delta_rule` spells the same | `tests/test_base.py::test_route_kernels_round_trips_the_bindings` |
+| with `STEP_STATE_OP` (Mamba-1) each name is bound to its own pure-torch function | `tests/test_base.py::test_route_kernels_binds_a_single_step_decode_kernel_to_its_own` |
+| `select` given as a function of the host reads and writes | `tests/test_base.py::test_select_can_be_a_function_of_the_host` |
+| the Mamba-1 values recompute the scan's own states and `y`; views take writes and in-place edits; the decode step, the per-token state and a `state_input` read before `states` in a step | `tests/families/scan_suite.py` (run by `test_mamba.py`, `test_falcon_mamba.py`, `test_jamba.py`) |
 
 The canonical pattern above is the offset experiment in isolation; it ran
 on `yujiepan/qwen3.5-tiny-random` with the printed `[0, 0, 1]`.
