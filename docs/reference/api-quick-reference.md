@@ -111,7 +111,7 @@ Each is a `StandardizedProperty`: it reads the config by the plain rule unless t
 | `num_kv_heads` | `config.num_key_value_heads`, else `num_heads`. | Falcon: `config.num_kv_heads` under `new_decoder_architecture`, `1` under `multi_query`, else `num_heads`. |
 | `head_dim` | `config.head_dim` when the config says (Qwen3, Gemma), else `hidden_size // num_heads`. | DeepSeek-V2/V3: `config.v_head_dim`. |
 | `qk_head_dim` | `head_dim`. | DeepSeek-V2/V3: `qk_nope_head_dim + qk_rope_head_dim`. |
-| `intermediate_size` | `config.intermediate_size`. A mixture of experts' experts are `config.moe_intermediate_size` wide instead. | GPT-2, GPT-J: `config.n_inner`, `4 * hidden_size` when `None`; Falcon: `config.ffn_hidden_size`; OPT: `config.ffn_dim`; MPT: `expansion_ratio * hidden_size`; BLOOM: `4 * hidden_size`. |
+| `intermediate_size` | `config.intermediate_size`. A mixture of experts' experts are `config.moe_intermediate_size` wide instead. | GPT-2, GPT-J: `config.n_inner`, `4 * hidden_size` when `None`; GPT-Neo: `config.intermediate_size`, `4 * hidden_size` when `None`; Falcon: `config.ffn_hidden_size`; OPT: `config.ffn_dim`; MPT: `expansion_ratio * hidden_size`; BLOOM: `4 * hidden_size`. |
 
 | Name | Signature | What |
 |---|---|---|
