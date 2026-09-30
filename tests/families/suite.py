@@ -290,7 +290,7 @@ class FamilySuite:
             std_logits = model.lm_head.output.save()
         with raw_model.trace(PROMPT):
             raw_first = raw_model.get(model.layers[0].path.removeprefix(raw_model.path + ".")).output.save()
-            raw_logits = raw_model.lm_head.output.save()
+            raw_logits = raw_model.get(model.lm_head.path.removeprefix(raw_model.path + ".")).output.save()  # the head by its native name
         torch.testing.assert_close(std_first, raw_first[0] if isinstance(raw_first, tuple) else raw_first)
         torch.testing.assert_close(std_logits, raw_logits)
 
