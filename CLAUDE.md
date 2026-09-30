@@ -9,7 +9,8 @@ whose envoy tree answers to one set of names on every transformer family, with s
 (`layer_output`, `attention_output`, `attention_probabilities`, ...) that mean the same thing
 everywhere. Everything nnsight does (`trace`, `generate`, `.save()`, `tracer.iter`, invokes,
 `.source`, remote) works unchanged; nnsight's own guide is `~/wd/nnsight/CLAUDE.md` and its docs
-`~/wd/nnsight/docs/`. This file covers only what nnter adds.
+`~/wd/nnsight/docs/`. `StandardizedVLLM` is the same over nnsight's `VLLM` engine. This file covers
+only what nnter adds.
 
 ---
 
@@ -30,7 +31,7 @@ everywhere. Everything nnsight does (`trace`, `generate`, `.save()`, `tracer.ite
 - [docs/reference/families.md](docs/reference/families.md) — the 92 families, their native names and quirks
 
 ### "Read or edit the residual stream / a sublayer's contribution"
-- [docs/usage/residual-stream.md](docs/usage/residual-stream.md) — `layer_output`, `attention_output`, `mlp_output`; `input + attention_output + mlp_output == layer_output`
+- [docs/usage/residual-stream.md](docs/usage/residual-stream.md) — `layer_input`, `layer_output`, `attention_output`, `mlp_output`; `layer_input + attention_output + mlp_output == layer_output`
 
 ### "Read or edit attention: the pattern, queries, keys, values, scores, heads"
 - [docs/usage/attention-interior.md](docs/usage/attention-interior.md) — `attention_probabilities`, `attention_queries/keys/values/scores/head_outputs`; needs eager; per-family caveats
@@ -70,6 +71,9 @@ everywhere. Everything nnsight does (`trace`, `generate`, `.save()`, `tracer.ite
 
 ### "Run a research pattern across families"
 - [docs/patterns/index.md](docs/patterns/index.md) — logit lens, steering, attention patterns, ablation, activation patching, contribution decomposition, cross-family sweep, probing, DeltaNet state
+
+### "Run on the vLLM engine"
+- [docs/usage/vllm.md](docs/usage/vllm.md) — `StandardizedVLLM(repo_id, dispatch=True, ...)`: the same names, values and layouts (batch axis 1) on nnsight's `VLLM`; what is unavailable; the families under `nnter/families/vllm/` and how to add one
 
 ### "Run remotely on NDIF"
 - [docs/usage/remote.md](docs/usage/remote.md) — `remote=True`; nnter installed server-side, never shipped by value
@@ -119,6 +123,7 @@ everywhere. Everything nnsight does (`trace`, `generate`, `.save()`, `tracer.ite
 - **DeltaNet per-token state needs `nnter.route_kernels(model.family, "torch")` (or `route_delta_rule(model.family, "recurrent")`) before the first trace of a linear block**; write the state by assignment from a tensor you already hold (a token's `state` is served once, so reading it and then assigning it in the same `tracer.iter` step cuts the block), never in place.
 - **Mamba-1 families (Mamba, Falcon-Mamba, Jamba) need `nnter.route_kernels(model.family, "torch")` before the first trace** when `mamba_ssm` is installed: its CUDA kernels have no source and do not run on CPU. In a decode step the state (`state_output`) comes before `attention_head_outputs`; in the prompt's scan, after.
 - **A mixture's routing is the sparse pair `[batch, seq, top_k]`**: ablate expert `e` with `moe.expert_weights = moe.expert_weights.masked_fill(moe.expert_indices == e, 0)`; a rerouted index keeps the old slot's weight. Read a mixture's values in forward order (`router_logits`, weights/indices, `expert_outputs`, `routed_output`); where `shared_expert_output` falls differs per family. ZAYA's skipped slots read as expert 0 with weight 0. Under two or more invokes, edit the routing in place; an assignment there needs nnsight PR #738.
+- **On `StandardizedVLLM` use `layer_input` / `layer_output`, never `layers[i].input` / `.output`**: natively the input is the positions and the output a `(hidden_states, residual)` pair on most families. Values there are `[1, tokens, ...]` private copies, `logits` is `[1, 1, vocab]`, sampling settings go on `trace` (vLLM's defaults otherwise), the pattern and scores are unavailable, and an assigned value must keep the shape it was served with. The suite is `tests/vllm_families/` and needs vLLM and a GPU.
 - **`envoys=` keys match by module type or native path, never by alias**; to displace a family's envoy, key yours on the type.
 - **Import nnter (or nnsight) before any `transformers.models...` module**; the reverse order segfaults on this stack.
 - **Every snippet in `docs/` ran against the tiny checkpoints in `tests/families/`**; when a page and the code disagree, the suite is the arbiter: `HF_HUB_OFFLINE=1 pytest tests/families/test_<family>.py`.
