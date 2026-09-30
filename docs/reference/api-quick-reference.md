@@ -3,7 +3,7 @@ title: API Quick Reference
 one_liner: Every public nnter symbol in one place: the model class, the standard values by host with their layouts and availability, the descriptors, the registry, the helper modules and the exceptions.
 tags: [reference, api, values, layouts, availability]
 related: [docs/usage/loading.md, docs/usage/vocabulary.md, docs/usage/root-values.md, docs/usage/methods.md, docs/usage/availability.md, docs/usage/layouts.md, docs/usage/attention-interior.md, docs/usage/delta-net.md, docs/usage/prompt-utils.md, docs/usage/activations.md, docs/extending/custom-values.md, docs/extending/registering.md, docs/developing/eproperty-internals.md, docs/reference/families.md, docs/reference/glossary.md]
-sources: [nnter/__init__.py, nnter/standardized.py, nnter/components/__init__.py, nnter/components/eproperty.py, nnter/components/standard.py, nnter/components/layer.py, nnter/components/attention.py, nnter/components/mlp.py, nnter/components/linear_attention.py, nnter/families/__init__.py, nnter/prompt_utils.py, nnter/nnsight_utils.py]
+sources: [nnter/__init__.py, nnter/standardized.py, nnter/components/__init__.py, nnter/components/eproperty.py, nnter/components/standard.py, nnter/components/layer.py, nnter/components/attention.py, nnter/components/mlp.py, nnter/components/linear_attention.py, nnter/components/recurrent.py, nnter/families/__init__.py, nnter/prompt_utils.py, nnter/nnsight_utils.py]
 ---
 
 # API Quick Reference
@@ -44,10 +44,12 @@ Reads within one trace follow the forward: the pattern is produced inside block 
 | Name | What it is |
 |---|---|
 | `StandardizedTransformer` | The model class: a `TransformersModel` renamed to the standard vocabulary and wrapped in the family's envoys. |
-| `Layer`, `Attention`, `Mlp`, `LinearAttention` | The base envoys a family subclasses; the hosts of the standard values. |
-| `Standard` | The envoy base of the four, with `values()`, `status()` and the `sourced` flag. |
+| `Layer`, `Attention`, `Mlp`, `LinearAttention`, `StateSpace` | The base envoys a family subclasses; the hosts of the standard values. |
+| `RecurrentMixer` | The base of `LinearAttention` and `StateSpace`: how a recurrent mixer's values are reached at its kernel call, the per-token state and the kernel routing. |
+| `Standard` | The envoy base of them all, with `values()`, `status()` and the `sourced` flag. |
 | `EProperty`, `DerivedEProperty` | The descriptors a value is made of: one keyed on a path from the host, one computed. |
-| `unavailable`, `branched`, `route_delta_rule` | A value a family lacks; an op picked by the forward's own branch; the DeltaNet kernel switch. |
+| `unavailable`, `route_kernels`, `route_delta_rule` | A value a family lacks; the recurrent kernel switch, and its DeltaNet spelling. |
+| `chunk_per_token` | A Mamba-2 model's chunk scan with a chunk size of 1, so `StateSpace.states` reads the state after every token. |
 | `Unavailable`, `UnsupportedFamily` | The two exceptions nnter raises itself. |
 
 `nnter.families`, `nnter.components`, `nnter.prompt_utils` and `nnter.nnsight_utils` are imported as modules.
@@ -114,13 +116,13 @@ Each is a `StandardizedProperty`: it reads the config by the plain rule unless t
 | Name | Signature | What |
 |---|---|---|
 | `StandardizedProperty` | `nnter.standardized.StandardizedProperty(fget)` | The descriptor each size is. `__get__` calls `getattr(model.family, <name>)(model)` when the family defines it, else `fget(model)`; on the class it returns itself (`StandardizedTransformer.head_dim`). `__set__` raises `AttributeError("<name> is read off the config; a family defines `def <name>(model)` to say it otherwise")`. Not an `EProperty`: no location, nothing served inside a trace, no entry in the repr or `status()`. |
-| `StandardizedCapability` | `nnter.standardized.StandardizedCapability(func)` | `StandardizedProperty` for a method: on attribute access it binds `getattr(model.family, <name>)` to the model when the family defines it, else `func`; on the class it returns itself (`StandardizedTransformer.project_on_vocab`). `project_on_vocab` is the one today. |
+| `StandardizedCapability` | `nnter.standardized.StandardizedCapability(fget)` | `StandardizedProperty` for a method, and its subclass: on attribute access it binds `getattr(model.family, <name>)` to the model when the family defines it, else `fget`; on the class it returns itself (`StandardizedTransformer.project_on_vocab`). `project_on_vocab` is the one today. |
 
 ### Other attributes
 
 | Attribute | What it is |
 |---|---|
-| `model.family` | The family module the checkpoint resolved to (`nnter.families.llama`); what `route_delta_rule` takes. |
+| `model.family` | The family module the checkpoint resolved to (`nnter.families.llama`); what `route_kernels` takes. |
 | `model.layers` | The decoder blocks, `Sequence[Layer]` of the family's `Layer`. |
 | `model.embed_tokens`, `model.norm`, `model.lm_head` | The embedding, the final norm, the unembedding, as envoys. |
 | `model.layers[i].self_attn`, `.mlp`, `.linear_attn` | The family's `Attention`, `Mlp`, `LinearAttention`; `linear_attn` on a hybrid's DeltaNet blocks only, `mlp` absent on OPT. |
@@ -130,7 +132,7 @@ Each is a `StandardizedProperty`: it reads the config by the plain rule unless t
 
 ## `Layer`
 
-The decoder block. `Layer.returns_tuple` (class attribute, default `False`) says whether the block returns `(hidden_states, ...)`; GPT-J, BLOOM, MPT and Falcon set it.
+The decoder block. `Layer.returns_tuple` (class attribute, default `False`) says whether the block returns `(hidden_states, ...)`; GPT-J, BLOOM, MPT, Falcon, GLM-5, Bamba and Falcon-H1 set it.
 
 | Value | Layout | Assignable | Description |
 |---|---|---|---|
@@ -169,20 +171,40 @@ Each layout is the alias `.layout` returns (`Attention.attention_keys.layout is 
 |---|---|---|---|---|
 | `mlp_output` | `Residual` | the module's `.output`, first tensor (a mixture of experts returns router scores beside it) | yes; in place reaches the model (Falcon: through a transform, on a copy) | always where the block has an MLP module; OPT has none, so `status()` lists no `mlp.*` key |
 
+## `RecurrentMixer`
+
+The base of a recurrent mixer's envoy (`nnter/components/recurrent.py`): how its values are reached at the kernel call its forward makes, apart from what they are. A subclass sets the constants and declares its values at `kernel("inputs")` / `kernel("output")`; the base provides `attention_output`, the per-token state, the availability predicates and `route_kernels`.
+
+| Constant | Default | What |
+|---|---|---|
+| `BRANCH` | `"use_precomputed_states_0"` | The binding the forward makes before it branches: `True` when the call continues from a cached state. |
+| `SEQ_OP` | `"apply_mask_to_padding_states_0"` | The forward's masking of its input, once per call on every mixer: `[batch, seq, ...]`, the call's length. |
+| `CHUNK_KERNEL` | `None` | The call a prompt runs through. |
+| `RECURRENT_KERNEL` | `None` | The call each decode step of `generate` runs through. |
+| `STATE_OP` | `None` | Inside the token-by-token kernel, the binding of the state after each token's update; `None` when the kernels do not materialize it, and then `state`, `states`, `state_after` and `set_state_after` are unavailable. |
+| `STEP_STATE_OP` | `None` | Set when the decode kernel is a single-step update rather than the token loop (Mamba-1): the binding of the new state inside it. The prompt's kernel is then the token loop, and `route_kernels(..., "torch")` binds each name to its own pure-torch function. |
+| `KERNEL` | a `staticmethod` of the base | Whichever kernel fires on this call, by the forward's own test (`use_precomputed_states and seq_len == 1`), decided once per call (`per_call`): `RECURRENT_KERNEL` when `BRANCH` is true and the sequence axis at `SEQ_OP` is 1, `CHUNK_KERNEL` otherwise, a prompt or several tokens over a cached state. The two bindings are read in the order the forward makes them. |
+
+| Value | Layout | Location | Assignable | Availability |
+|---|---|---|---|---|
+| `attention_output` | `Residual` | the module's `.output`, first tensor | yes | always |
+| `state` | `State` | `STATE_OP` inside the token-by-token kernel: one occurrence per token, walked with `tracer.iter` | yes: the following tokens continue from the write | `needs_recurrent_routing` |
+| `states` | `States` | every occurrence of `STATE_OP` in this call, stacked; a `DerivedEProperty` | no (`AttributeError`; use `set_state_after`) | `needs_recurrent_routing` |
+
+`_seq()` is the call's number of tokens, `attention_queries.shape[1]` in the base; a mixer whose kernel is laid out otherwise overrides it.
+
 ## `LinearAttention`
 
-A hybrid's gated DeltaNet mixer (`layers[i].linear_attn`). Everything but `attention_output` is read at the delta-rule kernel call, whichever fires on this step.
+A hybrid's gated DeltaNet mixer (`layers[i].linear_attn`), a `RecurrentMixer` that sets the constants and declares eight values; `attention_output`, `state`, `states`, `state_after` and `set_state_after` are the base's. Everything but `attention_output` is read at the delta-rule kernel call, whichever fires on this step.
 
 | Constant | Value | What |
 |---|---|---|
 | `CHUNK_KERNEL` | `"torch_chunk_gated_delta_rule_0"` | The call a prompt runs through. |
 | `RECURRENT_KERNEL` | `"torch_recurrent_gated_delta_rule_0"` | The call each decode step of `generate` runs through. |
-| `KERNEL` | `branched("use_precomputed_states_0", {False: CHUNK_KERNEL, True: RECURRENT_KERNEL})` | Whichever fires on this call, read off the forward's own branch variable. |
 | `STATE_OP` | `"last_recurrent_state_3"` | Inside the token-by-token kernel, the binding of the state after each token. |
 
 | Value | Layout | Location | Assignable | Availability |
 |---|---|---|---|---|
-| `attention_output` | `Residual` | the module's `.output`, first tensor | yes | always |
 | `attention_queries` | `LinearQK` | `KERNEL` argument 0 | yes | `needs_torch_kernels` |
 | `attention_keys` | `LinearQK` | `KERNEL` argument 1 | yes | `needs_torch_kernels` |
 | `attention_values` | `LinearV` | `KERNEL` argument 2 | yes | `needs_torch_kernels` |
@@ -191,8 +213,8 @@ A hybrid's gated DeltaNet mixer (`layers[i].linear_attn`). Everything but `atten
 | `state_input` | `State`, or `None` on a fresh prompt | `KERNEL` keyword `initial_state`, read as a clone of the cache's buffer | yes | `needs_torch_kernels` |
 | `attention_head_outputs` | `LinearV` | `KERNEL` return 0, before the gated norm and `out_proj` | yes | `needs_torch_kernels` |
 | `state_output` | `State` | `KERNEL` return 1 | yes | `needs_torch_kernels` |
-| `state` | `State` | `STATE_OP` inside the token-by-token kernel: one occurrence per token, walked with `tracer.iter` | yes: the following tokens continue from the write | `needs_recurrent_routing` |
-| `states` | `States` | every occurrence of `STATE_OP` in this call, stacked; a `DerivedEProperty` | no (`AttributeError`; use `set_state_after`) | `needs_recurrent_routing` |
+
+The base's methods, on every `RecurrentMixer`:
 
 | Method | Signature | What |
 |---|---|---|
@@ -200,6 +222,63 @@ A hybrid's gated DeltaNet mixer (`layers[i].linear_attn`). Everything but `atten
 | `set_state_after` | `set_state_after(t: int, value: Tensor) -> None` | Assign `state` at token `t`; positions after `t` continue from `value`. Reads follow the forward: read earlier positions before the write, later ones after, and `states` only before it. |
 
 `heads` on these layouts is the module's `num_v_heads`, `key_dim` its `head_k_dim` and `value_dim` its `head_v_dim`. On a decode step the sequence axis is 1.
+
+## `SelectiveScan`
+
+A Mamba-1 mixer (`layers[i].linear_attn` on Mamba, Falcon-Mamba and Jamba's Mamba blocks), a `RecurrentMixer` over `mamba_selective_scan` (a prompt) and `mamba_selective_state_update` (a decode step). The kernel's tensors are channel-first; each value is a tokens-first view of its argument, a write laid back out. `KERNEL` is the base's: the decode kernel when the call is cached and one token long (the forward's condition), the scan otherwise.
+
+| Constant | Value | What |
+|---|---|---|
+| `CHUNK_KERNEL` | `"mamba_selective_scan_0"` | The scan a prompt runs through; its pure-torch function is the token loop. |
+| `RECURRENT_KERNEL` | `"mamba_selective_state_update_0"` | The single-step update each decode step runs through. |
+| `STATE_OP` | `"ssm_state_3"` | Inside the scan's token loop, the state after each token. |
+| `STEP_STATE_OP` | `"ssm_state_0"` | Inside the decode kernel, the updated state. |
+| `STEP_OUTPUT_OP` | `"ssm_state_to_0"` | Inside the decode kernel, the updated state as it is copied into the cache. |
+| `READ_OPS` | `("scan_output_5", "out_1")` | Inside the scan and the decode kernel, `y` after the `D` skip and before the gate. |
+| `ARGUMENTS` | `{"x": (0, 1), "dt": (1, 2), "A": (2, 3), "B": (3, 4), "C": (4, 5), "dt_bias": ("delta_bias", "dt_bias")}` | Each argument's position or keyword in the scan and in the decode kernel. |
+
+| Value | Layout | Location | Assignable | Availability |
+|---|---|---|---|---|
+| `attention_queries` | `ScanQK` | `C`: `KERNEL` argument 4 (scan) or 5 (decode), `[batch, seq, 1, state_dim]` | yes | `needs_torch_kernels` |
+| `attention_keys` | `ScanQK` | `B`: argument 3 or 4 | yes | `needs_torch_kernels` |
+| `attention_values` | `ScanValues` | `x`: argument 0 or 1 | yes | `needs_torch_kernels` |
+| `betas` | `ScanSteps` | `softplus(dt + dt_bias)` from the call's arguments; a `DerivedEProperty` | no | `needs_torch_kernels` |
+| `decays` | `ScanDecays` | `A * betas`; a `DerivedEProperty` | no | `needs_torch_kernels` |
+| `state_input` | `ScanState`, or `None` on a prompt | the decode kernel's argument 0, a clone | on a decode step | `needs_torch_kernels` |
+| `attention_head_outputs` | `ScanValues` | `READ_OPS` inside the kernel: `y = C.h + D x` before `silu(z)` and `out_proj` | yes | `needs_kernel_source` |
+| `state_output` | `ScanState` | the scan's return 1, or `STEP_OUTPUT_OP` inside the decode kernel | yes: what the cache receives | `needs_kernel_source` |
+| `state` / `states` | `ScanState` / `ScanStates` | the base's, at `STATE_OP` or `STEP_STATE_OP` | as the base | `needs_token_loop` |
+
+## `StateSpace`
+
+A Mamba-2 (SSD) mixer (`layers[i].linear_attn` on Mamba-2, Nemotron-H, Bamba and Falcon-H1), a `RecurrentMixer` with SSD's `h = exp(dt·A)·h + dt·x Bᵀ`, `y = h C + D·x` mapped onto the shared names ([../usage/state-space.md](../usage/state-space.md)). Everything but `attention_output` is read at the scan kernel call. The two kernels take their arguments in different places and the decode update has no sequence axis, so each value selects by the kernel that fires (`select=argument(name)`) and a decode step's tensors get a sequence axis of 1 (removed again on assignment).
+
+| Constant | Value | What |
+|---|---|---|
+| `CHUNK_KERNEL` | `"mamba2_chunk_scan_0"` | The call a prompt runs through. |
+| `RECURRENT_KERNEL` | `"mamba2_selective_state_update_0"` | The call a decode step runs through. |
+| `STATE_OP` | `None` | Neither kernel binds the state once per token: `state` (a per-occurrence value) is unavailable. |
+| `CHUNK_STATES` | `"new_states_0"` | Inside the chunk scan, the state at every chunk boundary, `[batch, chunks + 1, heads, head_dim, state_dim]`: what `states` reads under `chunk_per_token`. |
+| `UPDATED_STATE` | `"ssm_states_0"` | Inside the update, the new state before it is copied into the cache. |
+| `CHUNK_ARGUMENTS`, `RECURRENT_ARGUMENTS` | name -> position or keyword | Where each kernel's call site passes `hidden_states`, `dt`, `A`, `B`, `C`, `dt_bias` and the state. |
+
+| Value | Layout | Location | Assignable | Availability |
+|---|---|---|---|---|
+| `attention_queries` | `SSDQueries` | `C`: argument 4 of the scan, 5 of the update | yes | `needs_torch_kernels` |
+| `attention_keys` | `SSDKeys` | `B`: argument 3 of the scan, 4 of the update | yes | `needs_torch_kernels` |
+| `attention_values` | `SSDValues` | `x` (`hidden_states`): argument 0 of the scan, 1 of the update | yes | `needs_torch_kernels` |
+| `betas` | `Gates` | `dt`: argument 1 of the scan, 2 of the update, read as `softplus(dt + dt_bias)`, clamped to `dt_limit` on a prompt | yes: written back as `dt = log(expm1(betas)) - dt_bias`; positive; clamped by the scan on a prompt | `needs_torch_kernels` |
+| `decays` | `Gates` | `dt`, read as `A * betas`; float32, non-positive | yes: written back as the `betas` it implies, `decays / A` | `needs_torch_kernels` |
+| `state_input` | `State`, or `None` on a fresh prompt | the scan's keyword `initial_states`, the update's argument 0; a transposed clone | yes | `needs_torch_kernels` |
+| `attention_head_outputs` | `SSDHeadOutputs` | `y`: the scan's return 0 (the whole return without a cache), the update's return | yes | `needs_torch_kernels` |
+| `state_output` | `State` | the scan's return 1; inside the update, `UPDATED_STATE`; transposed | yes | `needs_torch_kernels`; `Unavailable` at the read on a prompt run with `use_cache=False` |
+| `states` | `States` | inside the scan, `CHUNK_STATES[:, 1:]`, transposed (a copy); on a decode step `state_output` with a sequence axis of 1; a `DerivedEProperty` | no (`AttributeError`) | `needs_per_token_chunks` |
+| `state` | | `unavailable(...)`: the scan has no per-token occurrence of the state | no | never: `"the chunk scan computes every token's state in one tensor per call, ..."` |
+| `set_state_after` | | `unavailable(...)` in place of the base's method, so `status()` lists it | no | never: `"the chunk scan computes every boundary state in one cumulative step from the initial state, ..."` |
+
+`state_after(t)` is `states[:, t]`, and raises `Unavailable` with `needs_per_token_chunks`' reason without `chunk_per_token`. `KERNEL` is the base's: the update when the call is cached and one token long, the chunk scan otherwise. The kernel's arguments are read from the model once per call (`_arguments`, through `per_call`), on the call's first need, so any forward-order combination of values reads in one trace, and a value that needs another argument (`betas` needs `dt_bias`) finds it after the model has moved into the kernel.
+
+`heads` is the module's `num_heads`, `groups` its `n_groups`, `head_dim` its `head_dim`, `state_dim` (the state's `key_dim`) its `ssm_state_size`; the state's `value_dim` is `head_dim`.
 
 ## `Standard`
 
@@ -223,7 +302,7 @@ The base of the four hosts.
 | `UnsupportedFamily` | `ValueError` subclass | No module of that name and nothing registered. |
 | `nnter.families.<model_type>` | module attribute | The family module, imported on first access (`nnter.families.qwen3_5_text`). |
 
-A family module declares `MODEL_TYPES: tuple[str, ...]`, `RENAME: dict[str, str]`, `Layer`, `Attention`, `Mlp` (and `LinearAttention` on a hybrid) subclassing `nnter.components`'s, and `ENVOYS: dict[type, type]` keying them on its transformers module types. It may also define a module-level function named after any root size, `def <size>(model) -> int`, which the root's `StandardizedProperty` calls in place of its plain rule (`falcon.num_kv_heads`, `deepseek_v2.head_dim`, `gpt2.intermediate_size`), and likewise `def project_on_vocab(model, hidden)`, which its `StandardizedCapability` binds in place of the root's norm, head and softcap (`cohere.project_on_vocab`, `granite.project_on_vocab`).
+A family module declares `MODEL_TYPES: tuple[str, ...]`, `RENAME: dict[str, str]`, `Layer`, `Attention`, `Mlp` (and `LinearAttention` on a DeltaNet hybrid, `SelectiveScan` on a Mamba-1 mixer, `StateSpace` on a Mamba-2 mixer; a pure state-space family such as Mamba or Mamba-2 has no `Attention` or `Mlp`) subclassing `nnter.components`'s, and `ENVOYS: dict[type, type]` keying them on its transformers module types. It may also define a module-level function named after any root size, `def <size>(model) -> int`, which the root's `StandardizedProperty` calls in place of its plain rule (`falcon.num_kv_heads`, `deepseek_v2.head_dim`, `gpt2.intermediate_size`), and likewise `def project_on_vocab(model, hidden)`, which its `StandardizedCapability` binds in place of the root's norm, head and softcap (`cohere.project_on_vocab`, `granite.project_on_vocab`).
 
 ## `nnter.components`
 
@@ -231,14 +310,14 @@ A family module declares `MODEL_TYPES: tuple[str, ...]`, `RENAME: dict[str, str]
 
 | Descriptor | Signature | What |
 |---|---|---|
-| `EProperty` | `EProperty(key=None, description=None, unavailable=None, select=None)` | nnsight's `eproperty` plus availability and a path for a key. `key` is a path from the host envoy, dotted segments ending in `output`, `input` or `inputs`: `"output"` is the host's own output; a leading `../` (repeatable) steps to the parent by native name; another segment is a child module (aliases included) or, after a `source` segment, an operation; `source` drills into the current module's or operation's forward, instrumenting it for this run (`"source.attention_interface_1.source.nn_functional_softmax_0.output"`, `"../post_attention_layernorm.output"`, `"embed_tokens.output"`, `"../source.hidden_states_view_0.output"`). A function of the envoy returning such a path is allowed (`branched`, Falcon's `by_alibi`). `None` means the attribute name. `select` picks an element: with `inputs` an int is a positional argument and a str a keyword, with `output` an int indexes the returned tuple; `input` is the call's first argument. A write with `select` (or on `input`) repacks the element and writes the whole value back. `unavailable` is a reason string, or a function of the envoy returning one or `None`, checked on every read and write; `reason(obj)` returns it. `path(obj)` and `inside_forward(obj=None)` describe the key. A path is walked before every read or write; a missing op raises nnsight's `SourceNotAvailable`. |
+| `EProperty` | `EProperty(key=None, description=None, unavailable=None, select=None)` | nnsight's `eproperty` plus availability and a path for a key. `key` is a path from the host envoy, dotted segments ending in `output`, `input` or `inputs`: `"output"` is the host's own output; a leading `../` (repeatable) steps to the parent by native name; another segment is a child module (aliases included) or, after a `source` segment, an operation; `source` drills into the current module's or operation's forward, instrumenting it for this run (`"source.attention_interface_1.source.nn_functional_softmax_0.output"`, `"../post_attention_layernorm.output"`, `"embed_tokens.output"`, `"../source.hidden_states_view_0.output"`). A function of the envoy returning such a path is allowed (a `RecurrentMixer`'s `kernel("inputs")`, Falcon's `by_alibi`). `None` means the attribute name. `select` picks an element: with `inputs` an int is a positional argument and a str a keyword, with `output` an int indexes the returned tuple; `input` is the call's first argument; a function of the envoy returning one of those (or `None`, the whole value) selects per access, before the served read (`SelectiveScan`'s `_argument(name)` and `StateSpace`'s `argument(name)`, whose two kernels take an argument in different places). A write with `select` (or on `input`) repacks the element and writes the whole value back. `unavailable` is a reason string, or a function of the envoy returning one or `None`, checked on every read and write; `reason(obj)` returns it. `path(obj)` and `inside_forward()` describe the key. A path is walked before every read or write; a missing op raises nnsight's `SourceNotAvailable`. |
 | `DerivedEProperty` | `DerivedEProperty(compute, description=None, unavailable=None)` | `compute(envoy)` runs at read time inside the trace over any served values; read-only (assignment raises `AttributeError`). Its layout is read off `compute`'s return annotation. |
 
 Every descriptor exposes `.layout` (the layout alias the defining function's return annotation names, or `None`), `.dims` (its axis names as a tuple), `.description`, `.reason(envoy)`.
 
 ### Layouts
 
-The fourteen `jaxtyping` types every standard value is annotated with, each defined in the file of the envoy that serves it. `nnter.components` re-exports the eleven envoy-level names; the root's three are importable from `nnter.standardized` only. `value.layout` is the alias itself (`Attention.attention_probabilities.layout is Pattern`), `value.dims` its axes split; a redefinition in a family and a value of your own annotate with the same name (`-> Residual`). `isinstance(tensor, Pattern)` checks rank and dtype.
+The twenty `jaxtyping` types every standard value is annotated with, each defined in the file of the envoy that serves it. `nnter.components` re-exports the seventeen envoy-level names; the root's three are importable from `nnter.standardized` only. `value.layout` is the alias itself (`Attention.attention_probabilities.layout is Pattern`), `value.dims` its axes split; a redefinition in a family and a value of your own annotate with the same name (`-> Residual`). `isinstance(tensor, Pattern)` checks rank and dtype.
 
 | Name | Axes | Defined in | Carried by |
 |---|---|---|---|
@@ -252,12 +331,20 @@ The fourteen `jaxtyping` types every standard value is annotated with, each defi
 | `Pattern` | `batch heads query key` | `components/attention.py` | `attention_scores`, `attention_probabilities` |
 | `HeadOutputs` | `batch seq heads head_dim` | `components/attention.py` | `attention_head_outputs` |
 | `LinearQK` | `batch seq heads key_dim` | `components/linear_attention.py` | `linear_attn.attention_queries`, `linear_attn.attention_keys` |
+| `SSDQueries` / `SSDKeys` | `batch seq groups state_dim` | `components/state_space.py` | a Mamba-2 `linear_attn.attention_queries` (`C`) / `attention_keys` (`B`) |
+| `SSDValues` / `SSDHeadOutputs` | `batch seq heads head_dim` | `components/state_space.py` | a Mamba-2 `linear_attn.attention_values` (`x`) / `attention_head_outputs` (`y`) |
 | `LinearV` | `batch seq heads value_dim` | `components/linear_attention.py` | `linear_attn.attention_values`, `linear_attn.attention_head_outputs` |
 | `Gates` | `batch seq heads` | `components/linear_attention.py` | `decays`, `betas` |
-| `State` | `batch heads key_dim value_dim` | `components/linear_attention.py` | `state_input`, `state_output`, `state` |
-| `States` | `batch seq heads key_dim value_dim` | `components/linear_attention.py` | `states` |
+| `State` | `batch heads key_dim value_dim` | `components/recurrent.py` | `state_input`, `state_output`, `state` |
+| `States` | `batch seq heads key_dim value_dim` | `components/recurrent.py` | `states` |
+| `ScanQK` | `batch seq groups state_dim` | `components/selective_scan.py` | a Mamba-1 `attention_queries`, `attention_keys` |
+| `ScanValues` | `batch seq channels` | `components/selective_scan.py` | a Mamba-1 `attention_values`, `attention_head_outputs` |
+| `ScanSteps` | `batch seq channels` | `components/selective_scan.py` | a Mamba-1 `betas` |
+| `ScanDecays` | `batch seq channels state_dim` | `components/selective_scan.py` | a Mamba-1 `decays` |
+| `ScanState` | `batch channels state_dim` | `components/selective_scan.py` | a Mamba-1 `state_input`, `state_output`, `state` |
+| `ScanStates` | `batch seq channels state_dim` | `components/selective_scan.py` | a Mamba-1 `states` |
 
-The axis names are the same on every layout (`batch` axis 0 everywhere, `seq` the token axis, `heads` the query heads, `kv_heads` the key/value heads, `head_dim` the width of values and head outputs, `qk_head_dim` that of queries and keys, `query`/`key` a pattern's two token axes, `key_dim`/`value_dim` a DeltaNet state's two sides); the comments above each alias state them, and [../usage/layouts.md](../usage/layouts.md) is the page.
+The axis names are the same on every layout (`batch` axis 0 everywhere, `seq` the token axis, `heads` the query heads, `kv_heads` the key/value heads, `head_dim` the width of values and head outputs, `qk_head_dim` that of queries and keys, `query`/`key` a pattern's two token axes, `key_dim`/`value_dim` a DeltaNet state's two sides, `channels`/`state_dim` a Mamba-1 state's, `groups` the `B`/`C` groups); the comments above each alias state them, and [../usage/layouts.md](../usage/layouts.md) is the page.
 
 ### Availability predicates and constants
 
@@ -266,8 +353,11 @@ The axis names are the same on every layout (`batch` axis 0 everywhere, `seq` th
 | `unavailable` | `unavailable(reason: str) -> EProperty` | A value a family does not have: assign it in the class body in place of the inherited one. The name stays in the tree and the repr (`"Unavailable: <reason>"`), and every access raises `Unavailable`. |
 | `needs_eager` | `needs_eager(envoy) -> str \| None` | The reason when `config._attn_implementation != "eager"`. |
 | `interface_reason` | `interface_reason(envoy) -> str \| None` | `envoy.off_interface()`: the predicate of the base `Attention`'s interior values. |
-| `needs_torch_kernels` | `needs_torch_kernels(envoy) -> str \| None` | The reason when the family's delta-rule names dispatch to an optimized kernel (`flash-linear-attention` / `causal-conv1d`) with no Python source. |
-| `needs_recurrent_routing` | `needs_recurrent_routing(envoy) -> str \| None` | `needs_torch_kernels`, then the reason when the prompt kernel is not the token-by-token loop: call `route_delta_rule`. |
+| `needs_torch_kernels` | `needs_torch_kernels(envoy) -> str \| None` | The reason when the mixer's `CHUNK_KERNEL` or `RECURRENT_KERNEL` name dispatches to an optimized kernel (`flash-linear-attention`, `mamba_ssm`) with no Python source. |
+| `needs_per_token_chunks` | `needs_per_token_chunks(envoy) -> str \| None` | `needs_torch_kernels`, then, when the mixer's `chunk_size` is not 1, the reason naming the chunk size and `chunk_per_token`: the predicate of `StateSpace.states`. |
+| `needs_recurrent_routing` | `needs_recurrent_routing(envoy) -> str \| None` | The reason when `STATE_OP` is `None` (the kernels do not materialize the state per token), then `needs_torch_kernels`, then the reason when the prompt kernel is not the token-by-token loop (or, with `STEP_STATE_OP`, the decode kernel is still the dispatcher): call `route_kernels`. |
+| `needs_kernel_source` | `needs_kernel_source(envoy) -> str \| None` | `needs_torch_kernels`, then the reason when either kernel name is still transformers' dispatcher, whose body is not the kernel's: a `SelectiveScan` value read inside a kernel (`attention_head_outputs`, `state_output`). |
+| `needs_token_loop` | `needs_token_loop(envoy) -> str \| None` | `needs_recurrent_routing`, then the reason when a Mamba-1 checkpoint sets `use_mambapy` with `mambapy` installed (a parallel scan, no per-token binding). |
 | `INTERFACE` | `"attention_interface_1"` | The shared attention call every interface family makes. |
 | `NOT_ON_INTERFACE` | `"The attention does its own arithmetic rather than transformers' shared attention interface; not mapped for this family yet"` | The reason for `unavailable(NOT_ON_INTERFACE)` in a family that has not mapped an interior value onto its own arithmetic. No shipped family uses it: all four own-arithmetic families map every interior value. |
 
@@ -275,10 +365,11 @@ The axis names are the same on every layout (`batch` axis 0 everywhere, `seq` th
 
 | Name | Signature | What |
 |---|---|---|
-| `branched` | `branched(variable: str, ops: dict[Any, str]) -> Callable[[Envoy], str]` | A key function for `EProperty` whose op is chosen by a binding the forward makes before it branches: `ops[value of <variable>]`, decided once per module call (`per_call`). |
-| `per_call` | `per_call(envoy, key: str, compute: Callable[[], Any]) -> Any` | `compute()` once per module call, cached on the envoy under `key`; a call is told apart by the worker's mediator and its step. |
-| `at_occurrence` | `at_occurrence(t: int)` | The `for step in tracer.iter[t]` stretch as an object: one occurrence of a location inside a call. What `states`, `state_after` and `set_state_after` iterate with. |
-| `route_delta_rule` | `route_delta_rule(family, kernel: str = "recurrent") -> None` | Bind a hybrid family's delta-rule names process-wide: `"recurrent"` to transformers' token-by-token torch loop (the only kernel that materializes `state`, `states`, `state_after`, `set_state_after`), `"chunked"` back to what the modeling module bound at import. `family` is `model.family`, `nnter.families.<name>` or the modeling module. Call it before tracing a layer. |
+| `per_call` | `per_call(envoy, key: str, compute: Callable[[], Any]) -> Any` | `compute()` once per call of the envoy's module. The record, `(call, value)` per `(envoy.path, key)`, lives on the worker (the greenlet running the intervention code): each run of each invoke has its own, a replayed `model.edit` included, and nothing stays on the envoy. One rule names the call: the step a read is pinned to by `tracer.iter`, and, relaxed, on step 0 or outside `tracer.iter`, how many times the module's `.output` has been passed (inside call c that is c; between calls, the one about to start). Defined in `nnter.components.recurrent`. |
+| `pinned` | `pinned(n: int \| None)` | A context manager that pins the worker's reads to occurrence `n` of their location, as `tracer.iter[n]` does (`None` relaxes the pin), and restores the pin the worker had on the way out. A pinned read relaxes the pin, so one read per `with`. What `states`, `state_after` and `set_state_after` read each token with. Defined in `nnter.components.recurrent`. |
+| `route_kernels` | `route_kernels(family, kernel: str = "torch") -> None` | Bind a family's recurrent kernel names process-wide: `"torch"` to transformers' pure-torch kernels (on a mixer with a `STATE_OP`, the prompt's name to the token-by-token loop, the only kernel that materializes `state`, `states`, `state_after`, `set_state_after`: the decode kernel's function on a gated DeltaNet, so both names; the scan's own on Mamba-1, where each name keeps its own), `"default"` back to what the modeling module bound at import. `family` is `model.family`, `nnter.families.<name>` or the modeling module. Call it before tracing a layer. |
+| `route_delta_rule` | `route_delta_rule(family, kernel: str = "recurrent") -> None` | `route_kernels` in the delta rule's words: `"recurrent"` is `"torch"`, `"chunked"` is `"default"`. |
+| `chunk_per_token` | `chunk_per_token(model, enabled: bool = True) -> None` | Set every `StateSpace` mixer's module `chunk_size` to 1, so the chunk scan's boundaries are the tokens and `states` / `state_after` read the state after each; `enabled=False` restores the chunk size each mixer was built with (`config.chunk_size`, or `mamba_chunk_size`). Per model, unlike `route_kernels`; slower on long prompts (the inter-chunk recurrence is quadratic in the number of chunks). `ValueError` on a model with no `StateSpace`. |
 | `seq_first` | `seq_first(value: Tensor) -> Tensor` | `value.transpose(1, 2)`: `[batch, heads, seq, d]` to `[batch, seq, heads, d]` as a view, and its own inverse. Used by families whose arithmetic keeps heads first. |
 | `first_tensor` | `first_tensor(value) -> Tensor` | The first element of a tuple output, or the tensor itself. |
 | `rewrap` | `rewrap(envoy, value: Tensor) -> Any` | `value` back in the module's current output tuple, if any. |
@@ -333,7 +424,7 @@ nnterp's activation helpers on the standard values. `GetActivations = Callable[[
 - GPT-2's and MPT's queries, keys and values are views of one fused tensor: assign, do not edit in place. Falcon's `mlp_output` is a copy; assignment and in-place edits reach the model through a transform.
 - `model.logits` is the output's `.logits` (softcapped on Gemma-2, scaled on Cohere and Granite); `model.lm_head.output` is the raw projection, and `model.project_on_vocab(model.layers[-1].layer_output)` is `logits`.
 - `next_token_probs`, `input_size` and `states` are read-only.
-- `route_delta_rule(model.family, "recurrent")` before tracing a DeltaNet layer whose `state` you want; a forward `.source` has already instrumented keeps the binding it was compiled with.
+- `route_kernels(model.family, "torch")` before tracing a DeltaNet layer whose `state` you want; a forward `.source` has already instrumented keeps the binding it was compiled with.
 - `import nnter` (or `nnsight`) before any `transformers.models...modeling_*` import; the reverse order segfaults at import on this stack.
 
 ## Related

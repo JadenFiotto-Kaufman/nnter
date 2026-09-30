@@ -3,7 +3,7 @@ title: Layouts
 one_liner: "Every standard value has one axis layout on every family, one of fourteen named `jaxtyping` types defined beside the envoy that serves them (`Residual`, `Pattern`, `Keys`, ... from `nnter.components`) you can read (`value.dims`), check (`isinstance(t, value.layout)`) and annotate your own values with."
 tags: [usage, layouts, shapes, jaxtyping, dims, heads, kv_heads, Residual, Pattern]
 related: [docs/usage/root-values.md, docs/usage/residual-stream.md, docs/usage/availability.md, docs/extending/custom-values.md]
-sources: [nnter/components/eproperty.py, nnter/components/layer.py, nnter/components/attention.py, nnter/components/linear_attention.py, nnter/standardized.py, nnter/components/__init__.py]
+sources: [nnter/components/eproperty.py, nnter/components/layer.py, nnter/components/attention.py, nnter/components/linear_attention.py, nnter/components/recurrent.py, nnter/standardized.py, nnter/components/__init__.py]
 ---
 
 # Layouts
@@ -11,7 +11,7 @@ sources: [nnter/components/eproperty.py, nnter/components/layer.py, nnter/compon
 ## What this is for
 
 A value's shape is part of what it means. Each standard value is annotated with one of
-fourteen named layouts, each defined in the file of the envoy that serves it (`Residual` in `nnter/components/layer.py`; `Queries`, `Keys`, `Values`, `Pattern`, `HeadOutputs` in `nnter/components/attention.py`; `LinearQK`, `LinearV`, `Gates`, `State`, `States` in `nnter/components/linear_attention.py`; `Logits`, `NextTokenProbs`, `Tokens` beside the root values in `nnter/standardized.py`); `nnter.components`
+twenty named layouts, each defined in the file of the envoy that serves it (`Residual` in `nnter/components/layer.py`; `Queries`, `Keys`, `Values`, `Pattern`, `HeadOutputs` in `nnter/components/attention.py`; `LinearQK`, `LinearV`, `Gates` in `nnter/components/linear_attention.py`; `ScanQK`, `ScanValues`, `ScanSteps`, `ScanDecays`, `ScanState`, `ScanStates` in `nnter/components/selective_scan.py`; `State`, `States` in `nnter/components/recurrent.py`; `Logits`, `NextTokenProbs`, `Tokens` beside the root values in `nnter/standardized.py`); `nnter.components`
 re-exports the eleven envoy-level names, and the root's three come from `nnter.standardized`.
 They are `jaxtyping` types such as `Residual = Float[Tensor, "batch seq hidden"]` and
 `Pattern = Float[Tensor, "batch heads query key"]`. `value.layout` returns that alias itself
@@ -73,6 +73,12 @@ The fourteen names, their axes, and the values that carry each:
 | `Gates` | `batch seq heads` | `linear_attn.decays`, `betas` |
 | `State` | `batch heads key_dim value_dim` | `state_input`, `state_output`, `state` |
 | `States` | `batch seq heads key_dim value_dim` | `states` |
+| `ScanQK` | `batch seq groups state_dim` | a Mamba-1 `linear_attn.attention_queries` (`C`), `attention_keys` (`B`) |
+| `ScanValues` | `batch seq channels` | a Mamba-1 `linear_attn.attention_values` (`x`), `attention_head_outputs` (`y`) |
+| `ScanSteps` | `batch seq channels` | a Mamba-1 `linear_attn.betas` (`dt`) |
+| `ScanDecays` | `batch seq channels state_dim` | a Mamba-1 `linear_attn.decays` (`dt * A`) |
+| `ScanState` | `batch channels state_dim` | a Mamba-1 `state_input`, `state_output`, `state` |
+| `ScanStates` | `batch seq channels state_dim` | a Mamba-1 `states` |
 
 An axis name means the same thing on every layout: `batch` is axis 0 everywhere, `seq`
 the token axis, `heads` the query heads and `kv_heads` the key/value heads, `head_dim`

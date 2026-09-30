@@ -1,9 +1,9 @@
 ---
 title: Gated DeltaNet Hybrids
-one_liner: The `linear_attn` values on Qwen3-Next and Qwen3.5 blocks, the two kernels a prompt and a decode step run, and the per-token recurrent state behind `route_delta_rule`.
+one_liner: The `linear_attn` values on Qwen3-Next and Qwen3.5 blocks, the two kernels a prompt and a decode step run, and the per-token recurrent state behind `route_kernels`.
 tags: [usage, hybrid, delta-net, linear-attention, state, qwen3_5_text, qwen3_next]
 related: [docs/usage/vocabulary.md, docs/usage/availability.md, docs/usage/layouts.md, docs/usage/attention-interior.md, docs/usage/generation.md, docs/usage/remote.md]
-sources: [nnter/components/linear_attention.py, nnter/components/eproperty.py, nnter/families/qwen3_5_text.py, nnter/families/qwen3_next.py, nnter/families/qwen3_5_moe_text.py, nnter/families/olmo_hybrid.py, tests/families/test_qwen3_5_text.py]
+sources: [nnter/components/linear_attention.py, nnter/components/recurrent.py, nnter/components/eproperty.py, nnter/families/qwen3_5_text.py, nnter/families/qwen3_next.py, nnter/families/qwen3_5_moe_text.py, nnter/families/olmo_hybrid.py, tests/families/test_qwen3_5_text.py]
 ---
 
 # Gated DeltaNet Hybrids
@@ -19,6 +19,9 @@ and no scores. `nnter.components.LinearAttention` gives such a block the same
 names attention has where they mean the same thing, plus the gate, the beta
 and the state entering and leaving the layer; and, routed through
 transformers' token-by-token kernel, the state after every token of a prompt.
+It is a `RecurrentMixer`, the base that reaches a recurrent mixer's values at
+its kernel call, so the kernel switch and the per-token state below are the
+base's.
 
 ## Canonical pattern
 
@@ -83,10 +86,11 @@ trace ends.
 
 A prompt runs `torch_chunk_gated_delta_rule`, and each decode step of
 `generate` runs `torch_recurrent_gated_delta_rule`: two different operations
-in the forward, chosen by the binding `use_precomputed_states`. The values
-read that binding and name the call that fires on this step
-(`nnter.components.branched("use_precomputed_states_0", {False: chunked, True:
-recurrent})`), so the same value works in a `trace` and at every step of
+in the forward, chosen by the forward's test `use_precomputed_states and
+seq_len == 1`. The values read that binding and the call's length and name
+the call that fires on this step (`RecurrentMixer.KERNEL`: the recurrent
+kernel for one token over a cached state, the chunked one otherwise), so
+the same value works in a `trace` and at every step of
 `tracer.iter`, and the state hands off from one step to the next:
 
 ```python
@@ -105,9 +109,9 @@ mix.attention_queries.shape[1]                   # prompt_len on step 0, then 1 
 The kernels have to be transformers' pure-torch ones. With
 `flash-linear-attention` or `causal-conv1d` installed, the forward dispatches
 to a compiled kernel with no Python source, and every value reports `read
-inside transformers' pure-torch gated delta rule, but this process dispatches
-to an optimized kernel (flash-linear-attention / causal-conv1d) with no Python
-source; uninstall it to read these`.
+inside transformers' pure-torch torch_chunk_gated_delta_rule, but this process
+dispatches it to an optimized kernel (fla) with no Python source; uninstall it,
+or call nnter.route_kernels(model.family, 'torch'), to read these`.
 
 ## The state after every token
 
@@ -117,19 +121,21 @@ cost, and like eager attention that is a choice made before tracing:
 
 ```python
 import nnter
-from nnter import StandardizedTransformer, route_delta_rule
+from nnter import StandardizedTransformer, route_kernels
 
-route_delta_rule(nnter.families.qwen3_5_text, "recurrent")     # process-wide, like installing a kernel
+route_kernels(nnter.families.qwen3_5_text, "torch")     # process-wide, like installing a kernel
 model = StandardizedTransformer("Qwen/Qwen3.5-9B", attn_implementation="eager")
 mix = model.layers[0].linear_attn
 ```
 
-`route_delta_rule(family, kernel)` binds both kernel names in the family's
-modeling module to the torch loop (`"recurrent"`) or back to what the module
-bound at import (`"chunked"`). `family` is the family module
-(`nnter.families.qwen3_5_text`, or `model.family` on a loaded model) or the
-modeling module. Call it before the layer's forward is traced: loading, then
-`route_delta_rule(model.family, "recurrent")`, then tracing works; a model
+`route_kernels(family, kernel)` binds both kernel names in the family's
+modeling module to the token-by-token torch loop (`"torch"`) or back to what
+the module bound at import (`"default"`); `route_delta_rule(family,
+"recurrent" | "chunked")` is the same switch in the delta rule's words.
+`family` is the family module (`nnter.families.qwen3_5_text`, or
+`model.family` on a loaded model) or the modeling module. Call it before the
+layer's forward is traced: loading, then `route_kernels(model.family,
+"torch")`, then tracing works; a model
 whose layer has already been traced keeps the kernel it was instrumented with
 (see Gotchas). It applies to every model of the family in the process. The two
 kernels compute the same rule: the logits agree to float error.
@@ -207,8 +213,8 @@ it, so a name bound later is undefined when the block exits.
 
 Without the switch, `state` and `states` report `the state after each token
 is materialized only by the token-by-token kernel; the chunked kernel a prompt
-runs through keeps one state per 64 tokens. Call
-nnter.route_delta_rule(model.family, 'recurrent') before tracing this layer
+runs through carries it between chunks. Call
+nnter.route_kernels(model.family, 'torch') before tracing this layer
 (slower, like attn_implementation='eager')`, and reading one, or calling
 `state_after` / `set_state_after`, raises `Unavailable` with it. With an
 optimized kernel installed they report the kernel reason above, like every
@@ -225,7 +231,7 @@ this block`.
   same token as calls.
 - **`state` takes assignment, not in-place edits.** `mix.state[:] = 0` raises
   `OutOfOrderError`; assign a tensor.
-- **Route before the layer is traced.** `route_delta_rule` after a model has
+- **Route before the layer is traced.** `route_kernels` after a model has
   already traced that layer leaves the forward on the kernel it was
   instrumented with: `states` then raises `AttributeError: 'LinearAttention'
   object (nor its module) has attribute 'states'` and `state` raises

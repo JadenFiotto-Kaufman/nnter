@@ -22,7 +22,7 @@ class TestQwen3Next(FamilySuite):
     EXPECTED_UNAVAILABLE = {
         **{name: "no self_attn module" for name in VALUES if name.startswith("self_attn.")},
         **{f"linear_attn.{name}": "no linear_attn module" for name in LINEAR if name not in ("state", "states")},
-        "linear_attn.state": "",    # missing on the attention block, and needing route_delta_rule on the others
+        "linear_attn.state": "",    # missing on the attention block, and needing route_kernels on the others
         "linear_attn.states": "",
     }
 
@@ -111,9 +111,9 @@ class TestQwen3Next(FamilySuite):
 
     def test_per_token_state_needs_the_recurrent_kernel(self, model):
         reason = model.status()["linear_attn.states"]
-        assert all("route_delta_rule(model.family, 'recurrent')" in reason[i] for i in LINEAR_BLOCKS)
+        assert all("route_kernels(model.family, 'torch')" in reason[i] for i in LINEAR_BLOCKS)
         assert "no linear_attn module" in reason[ATTENTION_BLOCK]
-        with pytest.raises(Unavailable, match="route_delta_rule"):
+        with pytest.raises(Unavailable, match="route_kernels"):
             model.layers[0].linear_attn.state_after(0)
 
     def test_per_token_state_with_the_recurrent_kernel(self):

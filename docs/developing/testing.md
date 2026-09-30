@@ -77,7 +77,8 @@ once per class: `model` (`suite.py:87-91`), a `StandardizedTransformer` with
 
 Three helpers: `mixer(layer)` (`:30-33`) is `self_attn` or, on a linear
 block, `linear_attn`; `has_mlp(model)` (`:99-100`) reads `status()`;
-`attn_blocks(model)` (`:102-104`) is the blocks with softmax attention;
+`attn_blocks(model)` is the blocks with softmax attention and `attn_block(model)` the first of them, skipping the test when there is none;
+`recurrent_mixers(model)` is the family's `RecurrentMixer` classes from its `ENVOYS`;
 `expected_values(model)` (`:106-112`) adds the `linear_attn.*` names on a
 hybrid and drops `mlp.mlp_output` when no block has an MLP module (OPT). `VALUES`, `INTERIOR` and `LINEAR` (`:20-27`) are the value name sets.
 
@@ -220,7 +221,16 @@ The hybrid files (`test_qwen3_next.py`, `test_qwen3_5_text.py`,
 `test_qwen3_5_moe_text.py`) are one file with three headers: they override
 `test_every_layer_is_renamed` for the per-block `self_attn`/`linear_attn`
 split and add the DeltaNet tests
-([linear-attention-internals.md](linear-attention-internals.md)).
+([recurrent-mixer-internals.md](recurrent-mixer-internals.md)).
+The Mamba-1 files (`test_mamba.py`, `test_falcon_mamba.py`, `test_jamba.py`)
+mix `SelectiveScanSuite` (`tests/families/scan_suite.py`) in before
+`FamilySuite`: a class-scoped autouse fixture routes the family to the
+pure-torch kernels for the whole class, and its tests check the values
+against the recurrence recomputed from them, the writes, the decode step and
+the per-token state on `SCAN_BLOCK`, and meta-build a real checkpoint's config
+(`REAL`). On a model with no softmax attention (Mamba), `attn_block(model)`
+skips the pattern and interior tests and `expected_values` drops the
+`self_attn.*` names.
 
 ## The root tests
 
@@ -278,8 +288,9 @@ session collector agrees; `compute_next_token_probs` rows sum to one.
   its own class (`_alibi_checkpoint()`, `test_falcon.py:47-57`;
   `_patched_checkpoint()`, `test_olmo3.py:14-32`) rather than mutating the
   fixture's.
-- `route_delta_rule(..., "recurrent")` is process-wide; the hybrid tests load
-  a second model after routing and restore `"chunked"` in a `finally`.
+- `route_delta_rule(..., "recurrent")` (`route_kernels(..., "torch")`) is
+  process-wide; the hybrid tests load a second model after routing and restore
+  `"chunked"` in a `finally`.
 - pytest imports `tests/families/suite.py` as the bare module `suite`
   (`from suite import FamilySuite`); do not name another test helper that.
 - Run from the repository root: `git rev-parse --show-toplevel` is
@@ -289,5 +300,5 @@ session collector agrees; `compute_next_token_probs` rows sum to one.
 
 - [contributing.md](contributing.md) — the workflow around the suite
 - [transformers-compat.md](transformers-compat.md) — the tests that guard op names
-- [linear-attention-internals.md](linear-attention-internals.md) — what the hybrid tests pin
+- [recurrent-mixer-internals.md](recurrent-mixer-internals.md) — what the hybrid tests pin
 - nnsight `docs/developing/testing.md` — the suite of the library underneath

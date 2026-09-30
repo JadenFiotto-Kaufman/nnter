@@ -4,9 +4,7 @@ An `EProperty` is nnsight's ``eproperty`` with two additions: availability
 (`Unavailable`, ``unavailable=``) and a *path* for a key, so one descriptor
 serves a value wherever it lives: on the host module, on another module named
 relative to it, or at an operation inside a forward. `DerivedEProperty`
-computes one from several served values. `branched` and `per_call` are what a
-forward that branches needs: a decision made once per module call and reused
-by every value read in it."""
+computes one from several served values."""
 
 from __future__ import annotations
 
@@ -16,7 +14,7 @@ from typing import Any, Callable
 from nnsight.intervention.envoy import Envoy
 from nnsight.intervention.eproperty import eproperty
 from nnsight.intervention.interleaver import Mediator
-from nnsight.intervention.source import SourceEnvoy, SourceNotAvailable
+from nnsight.intervention.source import SourceNotAvailable
 from nnsight.intervention.util import first_input, replace_first_input
 
 
@@ -52,7 +50,7 @@ class EProperty(eproperty):
             instruments at build (`Standard.sourced`); a call inside that
             forward cannot be drilled from a child. A function of the host returning such a path, for a
             forward that branches: it runs at read time, inside the trace, so it
-            can read the forward's own branch variable (`branched`) or the
+            can read the forward's own branch variable (`RecurrentMixer.KERNEL`) or the
             config (a family's ``by_alibi``). ``None`` means the attribute's
             name, for a bare marker (`unavailable`).
         description: Shown in the model's repr, like any eproperty's.
@@ -67,7 +65,11 @@ class EProperty(eproperty):
             indexes the returned tuple. A write repacks the element into the
             current value, so assigning one argument of a call replaces just
             that argument. ``input`` is the call's first argument, ``inputs``
-            with the first element selected.
+            with the first element selected. A function of the host returning
+            one of those (or ``None``, the whole value) selects per access, for
+            a value whose position differs between the calls a forward branches
+            to (`SelectiveScan`'s prompt and decode kernels, `StateSpace`'s
+            two kernels).
 
     The location is served by nnsight the way any eproperty's is, whatever the
     path: a module's output, a sibling norm's, or an operation's arguments,
@@ -86,7 +88,7 @@ class EProperty(eproperty):
         key: str | Callable[[Envoy], str] | None = None,
         description: str | None = None,
         unavailable: str | Callable[[Envoy], str | None] | None = None,
-        select: int | str | None = None,
+        select: int | str | Callable[[Envoy], int | str | None] | None = None,
     ) -> None:
         self.locate = key if callable(key) else None
         self.unavailable = unavailable
@@ -153,13 +155,9 @@ class EProperty(eproperty):
         """The key for ``obj``: the path itself, or what the key function returns for it."""
         return self.locate(obj) if self.locate is not None else self.key
 
-    def inside_forward(self, obj: Envoy | None = None) -> bool:
-        """Whether the value is an operation inside a forward (a ``source`` segment on its path)."""
-        key = (self.path(obj) if obj is not None else self.key) or ""
-        return self.locate is not None or "source" in key.lstrip("./").split(".")
-
-    def _location(self, obj: Envoy) -> str:
-        return self._resolve(obj, self.path(obj))
+    def inside_forward(self) -> bool:
+        """Whether the value is an operation inside a forward (a key function, or a ``source`` segment on its path)."""
+        return self.locate is not None or "source" in (self.key or "").lstrip("./").split(".")
 
     def _resolve(self, obj: Envoy, key: str) -> str:
         """The served location ``key`` names from ``obj``, walking (and drilling) the path."""
@@ -182,15 +180,9 @@ class EProperty(eproperty):
                     "a path above the host reaches the parent's own operations only"
                 )
             return ".".join([*parts, *walk, attribute])
-        node: Any = obj
         try:
-            for segment in walk:
-                if segment == "source":
-                    node = _drill(obj, node)
-                elif isinstance(node, Envoy):
-                    node = node.get(segment)
-                else:
-                    node = getattr(node, segment)
+            # Every segment is an attribute: a child module, ``source``, an operation.
+            node = obj.get(".".join(walk)) if walk else obj
         except AttributeError as error:
             raise SourceNotAvailable(
                 f"{obj.path}.{self.name} reads {key!r}, which this run does not have: "
@@ -200,30 +192,34 @@ class EProperty(eproperty):
 
     # -- select -----------------------------------------------------------------
 
-    def _pick(self, attribute: str, value: Any) -> Any:
+    def _selection(self, obj: Envoy) -> int | str | None:
+        """The element this access selects: `select` itself, or what it returns for ``obj``."""
+        return self.select(obj) if callable(self.select) else self.select
+
+    def _pick(self, attribute: str, value: Any, select: int | str | None) -> Any:
         if attribute == "input":
             return first_input(*value)
-        if self.select is None:
+        if select is None:
             return value
         if attribute == "inputs":
             args, kwargs = value
-            return kwargs[self.select] if isinstance(self.select, str) else args[self.select]
-        return value[self.select]
+            return kwargs[select] if isinstance(select, str) else args[select]
+        return value[select]
 
-    def _put(self, attribute: str, current: Any, element: Any) -> Any:
+    def _put(self, attribute: str, current: Any, element: Any, select: int | str | None) -> Any:
         if attribute == "input":
             return replace_first_input(*current, element)
-        if self.select is None:
+        if select is None:
             return element
         if attribute == "inputs":
             args, kwargs = current
-            if isinstance(self.select, str):
-                return args, {**kwargs, self.select: element}
+            if isinstance(select, str):
+                return args, {**kwargs, select: element}
             args = list(args)
-            args[self.select] = element
+            args[select] = element
             return tuple(args), kwargs
         current = list(current)
-        current[self.select] = element
+        current[select] = element
         return tuple(current)
 
     # -- read and write -----------------------------------------------------------
@@ -237,8 +233,9 @@ class EProperty(eproperty):
         self._check(obj)
         key = self.path(obj)
         location = self._resolve(obj, key)
+        select = self._selection(obj)  # before the read: a select function may read an earlier value of the call
         raw = Mediator.value(location)
-        value = self._pick(key.rsplit(".", 1)[-1], raw)
+        value = self._pick(key.rsplit(".", 1)[-1], raw, select)
         if self._preprocess is not None:
             value = self._preprocess(obj, value)
         if self._transform is not None:
@@ -256,29 +253,10 @@ class EProperty(eproperty):
         key = self.path(obj)
         location = self._resolve(obj, key)
         attribute = key.rsplit(".", 1)[-1]
-        if self.select is not None or attribute == "input":
-            value = self._put(attribute, Mediator.value(location), value)
+        select = self._selection(obj)
+        if select is not None or attribute == "input":
+            value = self._put(attribute, Mediator.value(location), value, select)
         Mediator.swap(location, value)
-
-
-def _drill(obj: Envoy, node: Any) -> Any:
-    """``node.source``: the module's forward instrumented, or an operation's callee drilled into.
-
-    Drilling into a call resolves the callee from the live call, a served
-    read of the call's ``.fn``. A read pinned by ``tracer.iter`` to a token
-    index would ask for the call's *n-th occurrence*, which a call that fires
-    once per forward never reaches; the call is the one in flight, so the
-    first drill of a run is made with the mediator relaxed and the pin
-    restored for the value read that follows.
-    """
-    if not isinstance(node, SourceEnvoy) or node.path in obj.interleaver.sourced:
-        return node.source
-    mediator = Mediator.current(node.path)
-    pinned, mediator.iteration = mediator.iteration, None
-    try:
-        return node.source
-    finally:
-        mediator.iteration = pinned
 
 
 def unavailable(reason: str) -> EProperty:
@@ -289,52 +267,6 @@ def unavailable(reason: str) -> EProperty:
     access raise `Unavailable` with it.
     """
     return EProperty(description=f"Unavailable: {reason}", unavailable=reason)
-
-
-def branched(variable: str, ops: dict[Any, str]) -> Callable[[Envoy], str]:
-    """An op name a forward's own branch variable picks, for a key function (see `EProperty`).
-
-    ``variable`` names a binding the forward makes before it branches (a
-    binding is an operation, so its value is served like any other), and
-    ``ops`` maps that value to the op that fires on that branch.
-
-    The variable is read once per step: the model serves a location once, so
-    a second value read in the same call must not ask for it again after the
-    model has moved on. The choice is cached on the envoy against the worker's
-    mediator and its step: inside ``tracer.iter`` a step body starts pinned to
-    its step and relaxes after its first read, and a plain trace stays at 0,
-    so a pinned step different from the cached one is a new call, a relaxed
-    one is the same call, and another mediator is another run. Reading the
-    variable as the step's first, pinned read also leaves the kernel read
-    sequential, which is what makes an op that never fires on step 0 resolve
-    on later steps.
-    """
-
-    def choose(envoy: Envoy) -> str:
-        return per_call(envoy, f"branch:{variable}", lambda: ops[getattr(envoy.source, variable).output])
-
-    choose.__name__ = f"branched({variable})"
-    return choose
-
-
-def per_call(envoy: Envoy, key: str, compute: Callable[[], Any]) -> Any:
-    """``compute()`` once per module call, cached on the envoy under ``key``.
-
-    For a served value several reads in one call depend on, when the model
-    serves it once: the branch a forward takes, the sequence length of a call.
-    A call is told apart by the worker's mediator and its step (see
-    `branched`): a pinned step different from the cached one is a new call, a
-    relaxed one the same call, another mediator another run.
-    """
-    from nnsight.intervention.interleaver import Mediator
-
-    mediator = Mediator.current(key)
-    step = mediator.iteration
-    cache = envoy.__dict__.setdefault("_per_call", {})
-    cached = cache.get(key)
-    if cached is None or cached[0] is not mediator or (step is not None and step != cached[1]):
-        cache[key] = cached = (mediator, step, compute())
-    return cached[2]
 
 
 class DerivedEProperty(EProperty):
@@ -349,9 +281,6 @@ class DerivedEProperty(EProperty):
         super().__init__(key=f"<{compute.__name__}>", description=description, unavailable=unavailable)
         self.compute = compute
         self._preprocess = compute  # what `layout` reads the annotation from; never called as a preprocess
-
-    def __set_name__(self, owner: type, name: str) -> None:
-        self.name = name
 
     def __get__(self, obj: Envoy | None, owner: Any = None) -> Any:
         if obj is None:

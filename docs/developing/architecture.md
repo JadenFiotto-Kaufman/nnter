@@ -2,7 +2,7 @@
 title: Architecture
 one_liner: The map of nnter — how a checkpoint's model_type becomes a renamed envoy tree whose blocks carry standard values, and which layer owns what.
 tags: [developing, architecture, internals, families, components]
-related: [docs/developing/eproperty-internals.md, docs/developing/linear-attention-internals.md, docs/developing/testing.md, docs/developing/gotchas.md, docs/extending/index.md]
+related: [docs/developing/eproperty-internals.md, docs/developing/recurrent-mixer-internals.md, docs/developing/testing.md, docs/developing/gotchas.md, docs/extending/index.md]
 sources: [nnter/standardized.py, nnter/families/__init__.py, nnter/components/__init__.py, nnter/components/standard.py, nnter/components/layer.py, nnter/components/attention.py, nnter/components/mlp.py, nnter/families/gpt2.py, nnter/families/llama.py, nnsight src/nnsight/intervention/envoy.py]
 ---
 
@@ -57,7 +57,7 @@ rest of this page says which.
 ```
  checkpoint / nn.Module
         │
-        ▼  StandardizedTransformer.__init__                    nnter/standardized.py:103-130
+        ▼  StandardizedTransformer.__init__                    nnter/standardized.py:128-155
  ┌──────────────────────────────────────────────────────────────────────────────┐
  │ config = _read_config(repo_id, kwargs)            AutoConfig, before any build │
  │ family = families.lookup(config.model_type)        REGISTRY, else import module │
@@ -85,7 +85,7 @@ rest of this page says which.
    EProperty.__get__ ── _check(unavailable) ── _resolve(path) ── Mediator.value(location) ── _pick(select)
         key "output"                              → "{path}.output"                        (boundary values)
         key "../post_attention_layernorm.output"  → the sibling's ".output"                (a sibling's value)
-        key "source.<call>.source.<op>.output"    → _drill per run → the op's location     (values inside a forward)
+        key "source.<call>.source.<op>.output"    → drilled per run → the op's location    (values inside a forward)
         │
         ▼  outside a trace, a size read
    StandardizedProperty.__get__ ── family.<name>(model) if the family module defines it, else the plain rule over config
@@ -93,31 +93,31 @@ rest of this page says which.
 
 ## Data flow through `__init__`
 
-`StandardizedTransformer.__init__` (`nnter/standardized.py:103-130`) runs in
+`StandardizedTransformer.__init__` (`nnter/standardized.py:128-155`) runs in
 this order, and the order matters:
 
-1. **Config first.** `_read_config` (`standardized.py:421-436`) returns a
+1. **Config first.** `_read_config` (`standardized.py:450-466`) returns a
    ready module's own `config`, or `AutoConfig.from_pretrained(repo_id,
    revision=, trust_remote_code=)`. It runs before nnsight builds anything, so
    a config transformers cannot parse fails here with transformers' own error,
    and so the family is known before the meta build.
 2. **Family lookup.** `families.lookup(getattr(config, "text_config",
-   config).model_type)` (`standardized.py:117`). A multimodal config nests the
+   config).model_type)` (`standardized.py:142`). A multimodal config nests the
    language model's config as `text_config`; the text-generation task builds
    that model, so its `model_type` is the one that decides.
 3. **Merge and hand to nnsight.** `rename={**self.family.RENAME, **(rename
    or {})}` and `envoys={**self._base_envoys(...), **self.family.ENVOYS,
-   **(envoys or {})}` (`standardized.py:121-126`). Later keys win: a user's
+   **(envoys or {})}` (`standardized.py:146-151`). Later keys win: a user's
    entry replaces the family's on the same key
    (`tests/test_registry.py:61-77`). `_base_envoys`
-   (`standardized.py:132-141`) starts from nnsight's tensor-parallel envoys
+   (`standardized.py:157-166`) starts from nnsight's tensor-parallel envoys
    when the load shards, because `TransformersModel` only *defaults*
    `envoys` to `tp_envoys()` (nnsight `modeling/transformers.py:339-343`;
    `modeling/tp/envoys.py:117`, `:131`): passing any map of our own would
    otherwise drop them on a sharded load.
-4. **`task` defaults to `"text-generation"`** (`standardized.py:112`), and
+4. **`task` defaults to `"text-generation"`** (`standardized.py:137`), and
    `tokenizer_kwargs` become attributes on the loaded tokenizer
-   (`standardized.py:129-130`).
+   (`standardized.py:154-155`).
 
 ## What nnsight does with the two maps
 
@@ -162,36 +162,36 @@ eproperty that carries a `description` (`envoy.py:1066-1095`), which is how
 |---|---|---|
 | `nnter/families/<model_type>.py` | `MODEL_TYPES`; `RENAME` (native name → standard name); `Layer`/`Attention`/`Mlp`/`LinearAttention` subclasses that point a value at *this family's* op or sibling; `ENVOYS` keyed on transformers types; a module-level `def <size>(model)` for each root size *this family's* config spells its own way (`falcon.py`: `num_kv_heads`, `intermediate_size`; `deepseek_v2.py`: `head_dim`, `qk_head_dim`) | what a value means, how nnsight serves it; the plain rule for a size |
 | `nnter/components/` | what each standard value **means** (`layer_output` is the residual stream leaving the block, `attention_output` the contribution, `attention_probabilities` the post-dropout pattern); how to read/write it (`EProperty` with a path for a key, `DerivedEProperty`); availability (`unavailable=`, `status`); the default op on transformers' shared interface (`INTERFACE`, `attention.py:28`) | any one family's module names or classes |
-| `nnter/standardized.py` | the root values (`logits`, `token_embeddings`, `next_token_probs`, `input_ids`, `attention_mask`, `input_size`); the methods (`skip_layers`, `steer`, `project_on_vocab`, `get_topk_closest_tokens`); the sizes (`num_layers` … `intermediate_size`, `standardized.py:365-403`), each a `StandardizedProperty` (`:19-43`) holding the plain rule over the config and yielding on read to a same-named function in `model.family`; `status()` over the tree (`:254-318`: `_hosts` unions each block's `Standard` children under their standard names, a mounted alias such as DBRX's `norm_attn_norm.attn` included, so a value installed through `envoys=` is listed and a module no block has is not); the remote key (`:407-416`) | op names inside a forward; any one family's config keys |
+| `nnter/standardized.py` | the root values (`logits`, `token_embeddings`, `next_token_probs`, `input_ids`, `attention_mask`, `input_size`); the methods (`skip_layers`, `steer`, `project_on_vocab`, `get_topk_closest_tokens`); the sizes (`num_layers` … `intermediate_size`, `standardized.py:399-433`), each a `StandardizedProperty` (`:26-50`) holding the plain rule over the config and yielding on read to a same-named function in `model.family`; `status()` over the tree (`:287-348`: `_hosts` unions each block's `Standard` children under their standard names, each alias read off its own binding on the block, a mounted alias such as DBRX's `norm_attn_norm.attn` and a module another block owns (shared weights) included, so a value installed through `envoys=` is listed and a module no block has is not); the remote key (`:437-446`) | op names inside a forward; any one family's config keys |
 
 Two examples of the boundary. Gemma-2's contribution is the post-attention
 norm's output: the *family* says so with an `EProperty` keyed
 `"../post_attention_layernorm.output"` on its `Attention`
 (`families/gemma2.py:30-36`), while the *component* only knows how to walk a
 path: `../` to the parent, a name to a child, `source` into a forward
-(`components/eproperty.py:161-180`). BLOOM's contribution is the first
+(`components/eproperty.py:162-191`). BLOOM's contribution is the first
 argument of `dropout_add`: the family names the op,
 `"source.dropout_add_0.input"` (`families/bloom.py:73-78`), the component
 drills to it and reads the call's first argument. A family that keeps transformers' shared
 path overrides nothing (`families/llama.py:22-31`: three empty subclasses)
 and its module is three dict entries plus the type keys. The sizes draw the
 same line: the *root* holds the plain rule (`num_kv_heads` is
-`config.num_key_value_heads` or `num_heads`, `standardized.py:385-388`), and
+`config.num_key_value_heads` or `num_heads`, `standardized.py:415-418`), and
 Falcon, whose config says `num_kv_heads`, `multi_query` or neither, says so
 in a function of that name in its own module (`families/falcon.py`, the
-`sizes` section at its end); `StandardizedProperty.__get__` (`:36-40`)
+`sizes` section at its end); `StandardizedProperty.__get__` (`:43-47`)
 looks it up on `model.family` and calls it, or falls back to the rule;
-`__set__` (`:42-43`) refuses an assignment, so the family module is the only
+`__set__` (`:49-50`) refuses an assignment, so the family module is the only
 place a size is said.
 
 ### The base envoys
 
-`Standard` (`components/standard.py:24-64`) is the `Envoy` subclass every
+`Standard` (`components/standard.py:34-69`) is the `Envoy` subclass every
 component derives from: `values()` collects the `EProperty`s of a class,
-base classes first (`:52-60`), `status()` maps each to its reason on
-this instance (`:62-64`), and `sourced` (`:40`, `False` here) is the flag a
+base classes first (`:62-65`), `status()` maps each to its reason on
+this instance (`:67-69`), and `sourced` (`:50`, `False` here) is the flag a
 family sets to `True` on an envoy whose forward holds a value read after
-the call has started; `__init__` and `_update` (`:42-50`) then instrument
+the call has started; `__init__` and `_update` (`:52-60`) then instrument
 that forward at build and again when real weights replace meta ones
 (Llama 4's `Layer`, for its `Mlp.mlp_output`). `Layer`
 (`components/layer.py`) adds `returns_tuple` (`:45`), `skip_with` (`:47-56`)
@@ -200,8 +200,12 @@ and `layer_output` (`:58-77`, `first_tensor` in, `rewrap` out). `Attention`
 interior values on `INTERFACE`; `off_interface` (`:87-89`) is the one method
 a family overrides to give another reason the interface does not run
 (`families/gpt2.py:50-53` for `reorder_and_upcast_attn`). `Mlp`
-(`components/mlp.py:15-32`) adds `mlp_output`. `LinearAttention` is its own
-page, [linear-attention-internals.md](linear-attention-internals.md).
+(`components/mlp.py:15-32`) adds `mlp_output`. `RecurrentMixer`
+(`components/recurrent.py`) adds `attention_output`, the kernel choice, the
+per-token state and the kernel routing for a mixer read at a kernel call, and
+`LinearAttention` (`components/linear_attention.py`) sets its kernel
+constants and declares the gated DeltaNet's values on it; both are their own
+page, [recurrent-mixer-internals.md](recurrent-mixer-internals.md).
 
 ## The registry
 
@@ -240,7 +244,7 @@ checkpoint of that type is looked up, and never earlier.
 | one family | `nnter/families/<model_type>.py` |
 | descriptors | `nnter/components/eproperty.py` ([eproperty-internals.md](eproperty-internals.md)) |
 | base envoys | `nnter/components/{standard,layer,attention,mlp}.py` |
-| DeltaNet mixer | `nnter/components/linear_attention.py` ([linear-attention-internals.md](linear-attention-internals.md)) |
+| recurrent mixers: the base, and the DeltaNet subclass | `nnter/components/recurrent.py`, `nnter/components/linear_attention.py` ([recurrent-mixer-internals.md](recurrent-mixer-internals.md)) |
 | helpers that use the values | `nnter/prompt_utils.py`, `nnter/nnsight_utils.py` |
 | the executable contract | `tests/families/suite.py` ([testing.md](testing.md)) |
 
@@ -250,14 +254,15 @@ checkpoint of that type is looked up, and never earlier.
   can only be displaced by a type key (nnsight `envoy.py:364-369`).
 - The family is chosen from `config.model_type` *before* the model is built,
   so an already-loaded `nn.Module` is looked up by its own `config`
-  (`standardized.py:428-429`; `tests/test_registry.py:54-58`).
+  (`standardized.py:458-459`; `tests/test_registry.py:54-58`).
 - Passing `envoys=` of your own to a plain `TransformersModel` drops
   nnsight's tensor-parallel envoys; `StandardizedTransformer` starts from
-  them (`standardized.py:132-141`), so do the same in a subclass.
+  them (`standardized.py:157-166`), so do the same in a subclass.
 - Reads inside one trace follow forward order, and a value inside a block
   (`attention_probabilities`) fires before the block's `layer_output`; the
   canonical example reads them in that order. Read out of order and the
-  block stops with a warning, not an error: see [gotchas.md](gotchas.md).
+  trace raises `OutOfOrderError` naming the attention call's `.fn`: see
+  [gotchas.md](gotchas.md).
 - `import nnter` before any `transformers.models...modeling_*` import in a
   script; the reverse order segfaults on this stack
   ([transformers-compat.md](transformers-compat.md)).
@@ -269,7 +274,7 @@ checkpoint of that type is looked up, and never earlier.
 ## Related
 
 - [eproperty-internals.md](eproperty-internals.md) — the four descriptors and the nnsight facts they use
-- [linear-attention-internals.md](linear-attention-internals.md) — the hybrid mixer and occurrence arithmetic
+- [recurrent-mixer-internals.md](recurrent-mixer-internals.md) — `RecurrentMixer`, the DeltaNet subclass, and occurrence arithmetic
 - [testing.md](testing.md) — `FamilySuite`, the contract every family passes
 - [transformers-compat.md](transformers-compat.md) — what a release can rename
 - [gotchas.md](gotchas.md) — contributor-facing traps

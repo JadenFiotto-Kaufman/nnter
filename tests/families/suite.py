@@ -13,7 +13,9 @@ from nnsight import TransformersModel  # nnsight before any transformers submodu
 from nnsight.intervention.envoy import Envoy
 
 from nnter import StandardizedTransformer, Unavailable
-from nnter.components import Attention, EProperty, Layer, LinearAttention, Mlp, Standard
+from nnter.components import (
+    Attention, EProperty, Layer, LinearAttention, Mlp, RecurrentMixer, SelectiveScan, Standard, StateSpace,
+)
 
 PROMPT = "Hello world there"
 
@@ -28,9 +30,21 @@ LINEAR = ("attention_output", "attention_queries", "attention_keys", "attention_
 
 
 def mixer(layer):
-    """The block's sequence mixer: ``self_attn`` or, on a hybrid's linear block, ``linear_attn``."""
+    """The block's sequence mixer: ``self_attn``, else ``linear_attn`` (a hybrid's recurrent block), else None (an MLP-only block)."""
     attn = getattr(layer, "self_attn", None)
-    return attn if attn is not None else layer.linear_attn
+    return attn if attn is not None else getattr(layer, "linear_attn", None)
+
+
+def contributions(layer):
+    """The block's contributions to the residual stream, as (host, value name): every sublayer the block has, in forward order."""
+    hosts = [(getattr(layer, name, None), value) for name, value in
+             (("linear_attn", "attention_output"), ("self_attn", "attention_output"), ("mlp", "mlp_output"))]
+    return [(host, value) for host, value in hosts if host is not None]
+
+
+def recurrent_mixer(family):
+    """The family's recurrent mixer envoy class (`LinearAttention`, `SelectiveScan` or `StateSpace`), or None."""
+    return next((envoy for envoy in family.ENVOYS.values() if issubclass(envoy, RecurrentMixer)), None)
 
 
 def rows(container, layers, embed, norm, attn="self_attn", mlp="mlp", ln1="input_layernorm", ln2="post_attention_layernorm"):
@@ -97,17 +111,31 @@ class FamilySuite:
         return TransformersModel(cls.REPO, task="text-generation", dispatch=True, attn_implementation="eager", **cls.LOAD_KWARGS)
 
     def has_mlp(self, model):
+        """Every block has an MLP."""
         return model.status().get("mlp.mlp_output", "absent") is None
 
+    def any_mlp(self, model):
+        """Some block has an MLP (Nemotron-H's MLP blocks are their own blocks)."""
+        return any(getattr(layer, "mlp", None) is not None for layer in model.layers)
+
     def attn_blocks(self, model):
-        """The blocks with softmax attention: all of them, or one in four on a hybrid."""
+        """The blocks with softmax attention: all of them, one in four on a hybrid, none on a pure state-space model."""
         return [layer for layer in model.layers if getattr(layer, "self_attn", None) is not None]
+
+    def attn_block(self, model, last=False):
+        """The first (or last) block with softmax attention; the test does not apply to a model with none."""
+        blocks = self.attn_blocks(model)
+        if not blocks:
+            pytest.skip("no softmax attention on any block")
+        return blocks[-1] if last else blocks[0]
 
     def expected_values(self, model):
         values = set(VALUES)
-        if hasattr(model.family, "LinearAttention"):
+        if not self.attn_blocks(model):  # a module no block has is not listed (Mamba-2's self_attn)
+            values -= {name for name in VALUES if name.startswith("self_attn.")}
+        if recurrent_mixer(model.family) is not None:
             values |= {f"linear_attn.{name}" for name in LINEAR}
-        if not self.has_mlp(model):  # a module no block has is not listed (OPT)
+        if not self.any_mlp(model):  # a module no block has is not listed (OPT, Mamba-2)
             values.discard("mlp.mlp_output")
         return values
 
@@ -134,15 +162,18 @@ class FamilySuite:
 
     def test_envoy_classes(self, model):
         assert all(type(layer) is self.FAMILY.Layer for layer in model.layers)
-        assert all(type(layer.self_attn) is self.FAMILY.Attention for layer in self.attn_blocks(model))
-        assert issubclass(self.FAMILY.Layer, Layer) and issubclass(self.FAMILY.Attention, Attention)
-        assert issubclass(self.FAMILY.Mlp, Mlp)
-        if self.has_mlp(model):
-            assert all(type(layer.mlp) is self.FAMILY.Mlp for layer in model.layers)
+        assert issubclass(self.FAMILY.Layer, Layer)
+        if self.attn_blocks(model):
+            assert all(type(layer.self_attn) is self.FAMILY.Attention for layer in self.attn_blocks(model))
+            assert issubclass(self.FAMILY.Attention, Attention)
+        if self.any_mlp(model):
+            assert issubclass(self.FAMILY.Mlp, Mlp)
+            assert all(type(layer.mlp) is self.FAMILY.Mlp for layer in model.layers if getattr(layer, "mlp", None) is not None)
+        recurrent = recurrent_mixer(self.FAMILY)
         for layer in model.layers:
             if getattr(layer, "linear_attn", None) is not None:
-                assert type(layer.linear_attn) is self.FAMILY.LinearAttention
-                assert issubclass(self.FAMILY.LinearAttention, LinearAttention)
+                assert type(layer.linear_attn) is recurrent
+                assert issubclass(recurrent, (LinearAttention, SelectiveScan, StateSpace))
 
     def test_trace_through_standard_names(self, model):
         with model.trace(PROMPT):
@@ -197,27 +228,35 @@ class FamilySuite:
 
     def test_every_value_reads_a_tensor_on_every_layer(self, model):
         read = {}  # filled inside the block: a name bound there does not survive the trace
+        expected = sum(len(contributions(layer)) + 1 for layer in model.layers)
         with model.trace(PROMPT):
             for layer in model.layers:
-                read[layer.path, "attention_output"] = mixer(layer).attention_output.save()
-                if self.has_mlp(model):
-                    read[layer.path, "mlp_output"] = layer.mlp.mlp_output.save()
+                for host, value in contributions(layer):
+                    read[host.path, value] = getattr(host, value).save()
                 read[layer.path, "layer_output"] = layer.layer_output.save()
-        assert len(read) == (3 if self.has_mlp(model) else 2) * len(model.layers)
+        assert len(read) == expected and expected >= 2 * len(model.layers)
         for (path, name), value in read.items():
             assert isinstance(value, torch.Tensor) and value.shape[-1] == model.hidden_size, (path, name)
 
     def test_contribution_identity(self, model):
-        """``input + attention_output + mlp_output == layer_output``: the definition of the contributions."""
-        if not self.has_mlp(model):
+        """``input + attention_output + mlp_output == layer_output``: the definition of the contributions.
+
+        Summed over the sublayers each block has: both mixers on a parallel
+        hybrid (Falcon-H1), the one sublayer of a block that holds one
+        (Nemotron-H). A model with no MLP anywhere has its own test (OPT's
+        feed-forward sits on the block; Mamba-2's block is the mixer alone)."""
+        if not self.any_mlp(model):
             pytest.skip("no mlp module on any block")
         parts = {}
         with model.trace(PROMPT):
             for i, layer in enumerate(model.layers):
-                parts[i] = (layer.input.save(), mixer(layer).attention_output.save(), layer.mlp.mlp_output.save(), layer.layer_output.save())
-        for i, (x, attn, mlp, out) in parts.items():
+                x = layer.input.save()
+                added = [getattr(host, value).save() for host, value in contributions(layer)]
+                parts[i] = (x, added, layer.layer_output.save())
+        for i, (x, added, out) in parts.items():
             eps = torch.finfo(out.dtype).eps  # the block may sum in another order in its own dtype
-            torch.testing.assert_close(x.float() + attn.float() + mlp.float(), out.float(), rtol=8 * eps, atol=8 * eps, msg=f"layer {i}")
+            total = x.float() + sum(part.float() for part in added)
+            torch.testing.assert_close(total, out.float(), rtol=8 * eps, atol=8 * eps, msg=f"layer {i}")
 
     def test_sublayer_inputs_are_the_normed_stream(self, model):
         """What enters each sublayer is `self_attn.input` / `mlp.input`; the norm that produces it is
@@ -225,7 +264,7 @@ class FamilySuite:
         follows the attention; a parallel block has one norm for both)."""
         layer = model.layers[0]
         attn_norm = mlp_norm = mlp_in = None  # bound outside: a None bound inside the block would not survive it
-        has_mlp = self.has_mlp(model)
+        has_mlp = getattr(layer, "mlp", None) is not None
         shared = has_mlp and self.MLP_NORM == self.ATTENTION_NORM  # a parallel block: one norm, fired once, feeds both
         with model.trace(PROMPT):  # in forward order: each norm fires before the sublayer it feeds
             block_in = layer.input.save()
@@ -257,7 +296,7 @@ class FamilySuite:
     def test_boundary_writes_land(self, model):
         with model.trace(PROMPT):
             clean = model.logits.save()
-        names = ["attention_output", "layer_output"] + (["mlp_output"] if self.has_mlp(model) else [])
+        names = ["attention_output", "layer_output"] + (["mlp_output"] if getattr(model.layers[0], "mlp", None) is not None else [])
         for name in names:
             with model.trace(PROMPT):
                 layer = model.layers[0]
@@ -273,7 +312,7 @@ class FamilySuite:
     # -- the attention pattern --------------------------------------------------
 
     def test_probabilities_are_a_pattern(self, model):
-        block = self.attn_blocks(model)[0]
+        block = self.attn_block(model)
         with model.trace(PROMPT):
             tokens = model.layers[0].input.save()
             probs = block.self_attn.attention_probabilities.save()
@@ -289,8 +328,8 @@ class FamilySuite:
         assert torch.equal(probs.tril(), probs)  # causal
 
     def test_pattern_across_layers_and_traces(self, model):
-        block = self.attn_blocks(model)[0]
-        last = self.attn_blocks(model)[-1]
+        block = self.attn_block(model)
+        last = self.attn_block(model, last=True)
         with model.trace(PROMPT):
             first = block.self_attn.attention_probabilities.save()
             last_probs = last.self_attn.attention_probabilities.save()
@@ -302,7 +341,7 @@ class FamilySuite:
 
     def test_written_pattern_moves_the_logits(self, model):
         """A read can be causally inert (weights a mixer merely returns); only a write tells."""
-        block = self.attn_blocks(model)[0]
+        block = self.attn_block(model)
         with model.trace(PROMPT):
             probs = block.self_attn.attention_probabilities.save()
             clean = model.logits.save()
@@ -319,7 +358,7 @@ class FamilySuite:
     def test_every_source_value_resolves_on_every_layer(self, model):
         """The op names inside a forward are what releases rename; every one must resolve."""
         blocks = self.attn_blocks(model)
-        status = model.status(layer=int(blocks[0].path.rsplit(".", 1)[1]))
+        status = model.status(layer=int(self.attn_block(model).path.rsplit(".", 1)[1]))
         names = [
             name for name, attr in self.FAMILY.Attention.values().items()
             if attr.inside_forward() and status[f"self_attn.{name}"] is None
@@ -336,7 +375,7 @@ class FamilySuite:
     # -- the attention interior -------------------------------------------------
 
     def _read_interior(self, model):
-        attn = self.attn_blocks(model)[0].self_attn
+        attn = self.attn_block(model).self_attn
         got = {}
         for name in INTERIOR + ("attention_probabilities",):
             with model.trace(PROMPT):  # one trace each: families bind these at different points of the forward
@@ -361,7 +400,7 @@ class FamilySuite:
         torch.testing.assert_close(self.pattern_from_scores(model, scores).to(probs.dtype), probs)
 
     def test_interior_writes_are_causal(self, model):
-        block = self.attn_blocks(model)[0]
+        block = self.attn_block(model)
         with model.trace(PROMPT):
             clean = model.logits.save()
         seen = {}
@@ -377,7 +416,7 @@ class FamilySuite:
         torch.testing.assert_close(heads_zeroed[:, 0], heads_zeroed[:, -1])
 
     def test_interior_in_place_edits(self, model):
-        block = self.attn_blocks(model)[0]
+        block = self.attn_block(model)
         with model.trace(PROMPT):
             clean = model.logits.save()
         with model.trace(PROMPT):
@@ -447,20 +486,30 @@ class FamilySuite:
     def axis_sizes(self, model, host):
         """What each axis name in a value's annotation must be on this model."""
         seq = len(model.tokenizer(PROMPT).input_ids)
-        sizes = {"batch": 1, "seq": seq, "query": seq, "key": seq, "hidden": model.hidden_size, "vocab": model.vocab_size,
-                 "heads": model.num_heads, "kv_heads": model.num_heads if self.KV_HEADS_EXPANDED else model.num_kv_heads,
-                 "head_dim": model.head_dim, "qk_head_dim": model.qk_head_dim}
+        sizes = {"batch": 1, "seq": seq, "query": seq, "key": seq, "hidden": model.hidden_size, "vocab": model.vocab_size}
+        if self.attn_blocks(model):  # a state-space model has no heads to size
+            sizes.update(heads=model.num_heads, kv_heads=model.num_heads if self.KV_HEADS_EXPANDED else model.num_kv_heads,
+                         head_dim=model.head_dim, qk_head_dim=model.qk_head_dim)
         module = getattr(host, "_module", None)
         if isinstance(host, LinearAttention):
             sizes.update(heads=module.num_v_heads, key_dim=module.head_k_dim, value_dim=module.head_v_dim)
+        if isinstance(host, SelectiveScan):
+            sizes.update(groups=1, channels=module.intermediate_size, state_dim=module.ssm_state_size)
+        if isinstance(host, StateSpace):
+            sizes.update(heads=module.num_heads, groups=module.n_groups, state_dim=module.ssm_state_size,
+                         head_dim=module.head_dim, key_dim=module.ssm_state_size, value_dim=module.head_dim)
         return sizes
 
     def test_values_match_their_annotations(self, model):
         """Every value's tensor has the rank, dtype and axis sizes its `Float[Tensor, "..."]` annotation says.
 
         One value per trace: the values fire at different points of the forward."""
-        block = self.attn_blocks(model)[0]
-        hosts = [model, block, block.self_attn] + ([block.mlp] if self.has_mlp(model) else [])
+        attention = bool(self.attn_blocks(model))
+        block = self.attn_blocks(model)[0] if attention else model.layers[0]
+        hosts = [model, block] + ([block.self_attn] if attention else [])
+        mlp = next((layer.mlp for layer in model.layers if getattr(layer, "mlp", None) is not None), None)
+        if mlp is not None:
+            hosts.append(mlp)
         linear = next((layer.linear_attn for layer in model.layers if getattr(layer, "linear_attn", None) is not None), None)
         if linear is not None:
             hosts.append(linear)
@@ -484,7 +533,7 @@ class FamilySuite:
                     if axis in sizes and not (axis == "head_dim" and self.KV_HEADS_EXPANDED):
                         assert size == sizes[axis], (host.path, name, axis, size, sizes[axis])
                 checked += 1
-        assert checked >= 11  # root 3 + layer 1 + attention 7, plus the MLP and linear hosts where present
+        assert checked >= (11 if attention else 4)  # root 3 + layer 1 + attention 7, plus the MLP and linear hosts where present
 
     # -- the input -----------------------------------------------------------------
 
@@ -555,28 +604,38 @@ class FamilySuite:
 
     def test_sizes_match_the_model(self, model):
         assert model.num_layers == len(model.layers) == model.config.num_hidden_layers
-        block = self.attn_blocks(model)[0]
-        attn = block.self_attn._module
-        with model.trace(PROMPT):
-            probs = block.self_attn.attention_probabilities.save()
-            resid = block.layer_output.save()
-        assert probs.shape[1] == model.num_heads and resid.shape[-1] == model.hidden_size
-        assert 1 <= model.num_kv_heads <= model.num_heads
-        if getattr(attn, "q_proj", None) is not None:  # latent attention carries a q_proj set to None
-            assert model.num_heads * model.qk_head_dim * (2 if self.QUERY_GATED else 1) == attn.q_proj.out_features
-        if getattr(attn, "o_proj", None) is not None:
-            assert model.num_heads * model.head_dim == attn.o_proj.in_features
+        blocks = self.attn_blocks(model)
+        block = blocks[0] if blocks else model.layers[0]
+        if blocks:
+            attn = block.self_attn._module
+            with model.trace(PROMPT):
+                probs = block.self_attn.attention_probabilities.save()
+                resid = block.layer_output.save()
+            assert probs.shape[1] == model.num_heads
+            assert 1 <= model.num_kv_heads <= model.num_heads
+            if getattr(attn, "q_proj", None) is not None:  # latent attention carries a q_proj set to None
+                assert model.num_heads * model.qk_head_dim * (2 if self.QUERY_GATED else 1) == attn.q_proj.out_features
+            if getattr(attn, "o_proj", None) is not None:
+                assert model.num_heads * model.head_dim == attn.o_proj.in_features
+        else:
+            with model.trace(PROMPT):
+                resid = block.layer_output.save()
+        assert resid.shape[-1] == model.hidden_size
         # The MLP's hidden width appears in some projection's shape, wherever the
-        # family keeps it (OPT: on the block; fused experts: a 3-d parameter).
-        block = self.attn_blocks(model)[0]._module
+        # family keeps it (OPT: on the block; fused experts: a 3-d parameter;
+        # Nemotron-H: its own block; Mamba: the mixer's inner width, its block's only one).
+        block = next((layer for layer in model.layers if getattr(layer, "mlp", None) is not None), block)._module
         dims = {d for p in block.parameters() for d in p.shape}
         assert isinstance(model.intermediate_size, int)  # resolves on every family, whatever the config calls it
         width = getattr(model.config, self.MLP_WIDTH_KEY) if self.MLP_WIDTH_KEY else model.intermediate_size
         assert width in dims, (self.MLP_WIDTH_KEY or "intermediate_size", width, dims)
 
     def test_repr_lists_the_values(self, model):
-        text = repr(self.attn_blocks(model)[0])
-        for name in ("layer_output", "attention_output", "attention_probabilities", "attention_queries", "attention_head_outputs"):
+        blocks = self.attn_blocks(model)
+        block = blocks[0] if blocks else model.layers[0]
+        text = repr(block)
+        own = ("attention_probabilities",) if blocks else ("betas", "decays", "state_output")
+        for name in ("layer_output", "attention_output", "attention_queries", "attention_head_outputs") + own:
             assert f"({name}):" in text, name
-        if self.has_mlp(model):
+        if getattr(block, "mlp", None) is not None:
             assert "(mlp_output):" in text

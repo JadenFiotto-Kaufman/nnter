@@ -144,6 +144,11 @@ relative to every envoy in the tree (nnsight docs/usage/rename-modules.md):
   such as `output`, an `nn.Module` attribute such as `config`) raises at construction.
   OPT keeps its block-level `final_layer_norm` native for a related reason: a
   single-component alias for it would also bind on the decoder's final norm.
+- A name that depends on the block goes in `RENAME` keyed on the child's *class*
+  (nnsight binds a class key on every envoy with exactly one direct child of that
+  class): Nemotron-H's one `mixer` per block is `linear_attn`, `self_attn` or `mlp` by
+  its class, `{NemotronHMamba2Mixer: "linear_attn", NemotronHAttention: "self_attn", ...}`.
+  A class that two children of one envoy share is an error there; key those by name.
 
 The standard names are `embed_tokens`, `layers`, `norm`, `lm_head`, and on blocks
 `self_attn`, `mlp`, `input_layernorm`, `post_attention_layernorm`, `linear_attn`. Bind
@@ -180,7 +185,12 @@ class Layer(Layer):
   `mlp_output` when the residual is added inside (BLOOM, MPT) or when a post-norm's
   output is what reaches the stream (Gemma-2/3, OLMo-2/3).
 - **`LinearAttention`** (hybrids only): the base holds for transformers' pure-torch gated
-  delta rule; Qwen3-Next and Qwen3.5 subclass it with a docstring and nothing else.
+  delta rule; Qwen3-Next, Qwen3.5 and OLMo-Hybrid subclass it with a docstring and nothing
+  else. It is a `RecurrentMixer`: a mixer with other kernels (a state-space layer) is a new
+  `RecurrentMixer` subclass that sets `CHUNK_KERNEL`, `RECURRENT_KERNEL` and `STATE_OP` and
+  declares its own values
+  ([../developing/recurrent-mixer-internals.md](../developing/recurrent-mixer-internals.md)).
+  Key it in `ENVOYS` like the others, so `route_kernels(model.family, ...)` finds it.
 
 ### `ENVOYS`
 

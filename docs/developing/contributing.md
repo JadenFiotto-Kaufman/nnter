@@ -81,11 +81,11 @@ the ones that matter most here:
 - **Present tense.** The source and the docs describe what is; no "used
   to", no "fixed", no issue numbers, no TODO in prose. When code exists
   because something once broke, write the constraint, not the incident
-  (`nnter/components/eproperty.py:92-98` says why a predicate's
+  (`nnter/components/eproperty.py:116-118` says why a predicate's
   `AttributeError` becomes a `RuntimeError`, not when it bit).
 - **Docstrings state the contract; comments say why.** A module docstring
   teaches the family or the concept (`nnter/families/falcon.py:1-11`,
-  `nnter/components/linear_attention.py:112-141`); a value's docstring says
+  `nnter/components/recurrent.py:1-14`); a value's docstring says
   what the tensor is, its layout, and how writes behave; an inline comment
   names the failure mode averted or the alternative rejected. A comment that
   paraphrases the line under it is deleted.
@@ -106,7 +106,8 @@ the ones that matter most here:
   `-> Pattern`, `-> Keys`), never an inline `Float[Tensor, "..."]`. Each name
   is defined in the file of the envoy that serves it (`Residual` in
   `components/layer.py`, the attention interior's in `components/attention.py`,
-  the DeltaNet ones in `components/linear_attention.py`, the root's in
+  the DeltaNet ones in `components/linear_attention.py`, the recurrent state's in
+  `components/recurrent.py`, the root's in
   `standardized.py`) and re-exported from `nnter.components`, which is where a
   family imports it in its one components import line. A family that
   redefines a value writes the base's name, so `layout` and `dims` cannot
@@ -204,7 +205,7 @@ deliberately does not do the way nnterp does, and things that remain open.
 - **A `model.require(...)` / `model.available(...)` helper** that answers
   for a set of values at once, instead of reading `status()` by hand and
   meeting `Unavailable` from `hasattr` (§2a "Availability before any
-  trace"; the note under `Unavailable` in `nnter/components/eproperty.py:26-30`).
+  trace"; the note under `Unavailable` in `nnter/components/eproperty.py:28-32`).
 - **Sequence-first normalization of softmax q/k/v**: the sequence axis is 2
   on `attention_queries`/`keys`/`values` and 1 everywhere else, the layout
   transformers hands its interface; a `seq_axis`-style layout fact or a view
@@ -223,8 +224,8 @@ deliberately does not do the way nnterp does, and things that remain open.
   in [transformers-compat.md](transformers-compat.md) moves the module.
 - A docs page other than `transformers-compat.md` does not mention versions
   or history.
-- `route_delta_rule(..., "recurrent")` in a test is process-wide: restore
-  `"chunked"` in a `finally`.
+- `route_kernels(..., "torch")` (or `route_delta_rule(..., "recurrent")`) in a test is
+  process-wide: restore `"default"` (`"chunked"`) in a `finally`.
 - A tiny checkpoint can be degenerate (DBRX's fp16 weights make every
   pattern uniform); `LOAD_KWARGS` and a family-specific override are the
   tools, not a weaker suite assertion.
