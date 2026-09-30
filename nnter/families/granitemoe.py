@@ -6,7 +6,8 @@ the MLP: ``block_sparse_moe`` (``GraniteMoeMoE``, routed experts only) is
 ``attention_output`` and ``mlp_output`` are the module's output times the
 multiplier, computed copies that divide on assignment and carry an in-place edit
 back through a transform, as on Granite. The mixture keeps no config, so the
-multiplier is read off the block (`_block`). ``embedding_multiplier`` scales the
+block hands it the multiplier: the family's `Layer` sets ``residual_multiplier``
+on its `Mlp` child when it is built (`hand_residual_multiplier`). ``embedding_multiplier`` scales the
 embedding module's output before the first block and ``logits_scaling`` divides
 the head's output (the family's ``project_on_vocab``, Granite's). Every block has
 the mixture, so the config's ``intermediate_size`` is the experts' width.
@@ -16,7 +17,8 @@ import torch
 from nnsight.intervention.envoy import Envoy
 from transformers.models.granitemoe.modeling_granitemoe import GraniteMoeAttention, GraniteMoeDecoderLayer, GraniteMoeMoE
 
-from ..components import Attention, EProperty, Layer, Mlp, Residual, first_tensor, rewrap
+from ..components import EProperty, Layer, Mlp, RecurrentMixer, Residual, first_tensor, rewrap
+from ..components import Mlp as BaseMlp
 from .granite import Attention as GraniteAttention
 from .granite import project_on_vocab  # noqa: F401  the logit lens divides by logits_scaling, as Granite's
 
@@ -30,10 +32,15 @@ RENAME = {
 }
 
 
-def _block(envoy: Envoy) -> torch.nn.Module:
-    """The decoder block module ``envoy``'s module sits in: its parent by path, in the same tree."""
-    parent = envoy.path.rsplit(".", 1)[0]
-    return next(other._module for other in list(envoy.interleaver.envoys.values()) if other.path == parent)
+def hand_residual_multiplier(layer: Envoy) -> None:
+    """Set the block's ``residual_multiplier`` on its `Mlp` and `RecurrentMixer` children, whose modules keep no config.
+
+    Called by a family's `Layer` once its children are built; the child envoys
+    outlive a weight swap (`Envoy._update`), and the multiplier is the config's.
+    """
+    for _, child in layer._named_children():
+        if isinstance(child, (BaseMlp, RecurrentMixer)):  # the base: `Mlp` here is rebound to this family's
+            child.residual_multiplier = layer._module.residual_multiplier
 
 
 def scaled_back(edited: torch.Tensor, raw, multiplier: float):
@@ -46,7 +53,11 @@ def scaled_back(edited: torch.Tensor, raw, multiplier: float):
 
 
 class Layer(Layer):
-    """GraniteMoE's decoder block; returns a bare tensor, so the base holds."""
+    """GraniteMoE's decoder block; returns a bare tensor. It hands its mixture the multiplier the mixture's module does not keep."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        hand_residual_multiplier(self)
 
 
 class Attention(GraniteAttention):
@@ -54,19 +65,22 @@ class Attention(GraniteAttention):
 
 
 class Mlp(Mlp):
-    """GraniteMoE's mixture of experts; the block adds its output times ``residual_multiplier``."""
+    """GraniteMoE's mixture of experts; the block adds its output times ``residual_multiplier``, which the block hands it."""
+
+    #: Set by the block (`hand_residual_multiplier`): the mixture's module keeps no config.
+    residual_multiplier: float
 
     @EProperty(key="output", description="What the MLP adds to the residual stream: its output times residual_multiplier")
     def mlp_output(self, value) -> Residual:
-        return first_tensor(value) * _block(self).residual_multiplier
+        return first_tensor(value) * self.residual_multiplier
 
     @mlp_output.postprocess
     def mlp_output(self, value):
-        return rewrap(self, value / _block(self).residual_multiplier)
+        return rewrap(self, value / self.residual_multiplier)
 
     @mlp_output.transform
     def mlp_output(self, value, raw):
-        return scaled_back(value, raw, _block(self).residual_multiplier)
+        return scaled_back(value, raw, self.residual_multiplier)
 
 
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.

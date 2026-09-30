@@ -22,7 +22,8 @@ output times it, computed copies divided on assignment and carried back by a
 transform. No module returns the feed-forward's sum, so ``mlp_output`` is the
 block's binding of it (``hidden_states_4`` with experts, ``hidden_states_5``
 without) times the multiplier, and the family's `Layer` sets ``sourced`` for
-it; a write lands on the sum, replacing both experts' contribution.
+it and hands the mixer and the shared expert, whose modules keep no config, the
+multiplier (and the `Mlp` whether routed experts run) when it is built; a write lands on the sum, replacing both experts' contribution.
 ``mlp.output`` is the shared expert's output alone and
 ``layers[i].block_sparse_moe.output`` the routed experts'. ``mlp.intermediate_size``
 and the root's ``intermediate_size`` are the shared expert's width,
@@ -45,7 +46,7 @@ from transformers.models.granitemoehybrid.modeling_granitemoehybrid import (
 from ..components import EProperty, Layer, Mlp, Residual, StateSpace, first_tensor, rewrap
 from .granite import Attention as GraniteAttention
 from .granite import project_on_vocab  # noqa: F401  the logit lens divides by logits_scaling, as Granite's
-from .granitemoe import _block, scaled_back
+from .granitemoe import hand_residual_multiplier, scaled_back
 
 if TYPE_CHECKING:
     from ..standardized import StandardizedTransformer
@@ -67,7 +68,7 @@ SHARED_ONLY = "hidden_states_5"
 
 
 def _feed_forward_sum(envoy: Envoy) -> str:
-    return f"../source.{EXPERTS_SUM if _block(envoy).has_experts else SHARED_ONLY}.output"
+    return f"../source.{EXPERTS_SUM if envoy.has_experts else SHARED_ONLY}.output"
 
 
 class Layer(Layer):
@@ -75,9 +76,17 @@ class Layer(Layer):
 
     `Mlp.mlp_output` is a binding in this forward, read after the block has
     started (its mixer has returned), so the forward is instrumented at build.
+    The Mamba-2 mixer's and the shared expert's modules keep no config, so the
+    block hands them the multiplier, and its `Mlp` whether routed experts run
+    beside the shared one.
     """
 
     sourced = True
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        hand_residual_multiplier(self)
+        self.mlp.has_experts = self._module.has_experts
 
 
 class Attention(GraniteAttention):
@@ -87,21 +96,28 @@ class Attention(GraniteAttention):
 class StateSpace(StateSpace):
     """GraniteMoE-Hybrid's Mamba-2 mixer: transformers' Mamba-2 scan; the block adds its output times ``residual_multiplier``."""
 
+    #: Set by the block (`hand_residual_multiplier`): the mixer's module keeps no config.
+    residual_multiplier: float
+
     @EProperty(key="output", description="What the Mamba-2 mixer adds to the residual stream: its output times residual_multiplier")
     def attention_output(self, value) -> Residual:
-        return first_tensor(value) * _block(self).residual_multiplier
+        return first_tensor(value) * self.residual_multiplier
 
     @attention_output.postprocess
     def attention_output(self, value):
-        return rewrap(self, value / _block(self).residual_multiplier)
+        return rewrap(self, value / self.residual_multiplier)
 
     @attention_output.transform
     def attention_output(self, value, raw):
-        return scaled_back(value, raw, _block(self).residual_multiplier)
+        return scaled_back(value, raw, self.residual_multiplier)
 
 
 class Mlp(Mlp):
     """GraniteMoE-Hybrid's shared expert, standing for the block's feed-forward: the block adds it plus the routed experts, times ``residual_multiplier``."""
+
+    #: Set by the block: its multiplier, and whether routed experts run beside the shared one.
+    residual_multiplier: float
+    has_experts: bool
 
     @property
     def intermediate_size(self) -> int:
@@ -110,15 +126,15 @@ class Mlp(Mlp):
 
     @EProperty(_feed_forward_sum, description="What the MLP adds to the residual stream: the routed experts plus the shared expert, times residual_multiplier")
     def mlp_output(self, value) -> Residual:
-        return value * _block(self).residual_multiplier
+        return value * self.residual_multiplier
 
     @mlp_output.postprocess
     def mlp_output(self, value):
-        return value / _block(self).residual_multiplier
+        return value / self.residual_multiplier
 
     @mlp_output.transform
     def mlp_output(self, value, raw):
-        return scaled_back(value, raw, _block(self).residual_multiplier)
+        return scaled_back(value, raw, self.residual_multiplier)
 
 
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.

@@ -14,9 +14,9 @@ from transformers.models.granitemoe_swa.modeling_granitemoe_swa import (
     GraniteMoeSWAMoE,
 )
 
-from ..components import Layer
 from .granite import project_on_vocab  # noqa: F401  the logit lens divides by logits_scaling, as Granite's
 from .granite_swa import Attention as GraniteSWAAttention
+from .granitemoe import Layer as GraniteMoeLayer
 from .granitemoe import Mlp as GraniteMoeMlp
 
 MODEL_TYPES = ("granitemoe_swa",)
@@ -29,8 +29,8 @@ RENAME = {
 }
 
 
-class Layer(Layer):
-    """GraniteMoE SWA's decoder block; returns a bare tensor, so the base holds."""
+class Layer(GraniteMoeLayer):
+    """GraniteMoE SWA's decoder block: GraniteMoE's, which hands its mixture the multiplier."""
 
 
 class Attention(GraniteSWAAttention):

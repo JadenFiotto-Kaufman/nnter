@@ -16,7 +16,8 @@ transform carrying an in-place edit back, as on Granite. The stream itself is
 also rescaled, so the contribution identity is
 ``layer_output == (h + residual_bias) * residual_scale + mlp_output`` with
 ``h == (input + residual_bias) * residual_scale + attention_output`` (each merge's
-own parameters, ``layers[i].post_*_residual_scale._module``), the plain one only
+own parameters, ``layers[i].post_*_residual_scale._module``, whose envoys the
+block hands each sublayer as ``merge``), the plain one only
 at their initial values (scales one, biases zero). The model also scales and
 shifts the embedding module's output before the first block.
 
@@ -40,7 +41,6 @@ from nnsight.intervention.envoy import Envoy
 from transformers.models.zaya.modeling_zaya import ZayaAttention, ZayaDecoderLayer, ZayaSparseMoeBlock
 
 from ..components import Attention, EProperty, Layer, Mlp, Residual, first_tensor, rewrap
-from .granitemoe import _block
 
 if TYPE_CHECKING:
     from ..standardized import StandardizedTransformer
@@ -52,10 +52,6 @@ RENAME = {
     "model.layers": "layers",
     "model.norm": "norm",
 }
-
-
-def _merge(envoy: Envoy, name: str) -> torch.nn.Module:
-    return getattr(_block(envoy), name)
 
 
 def _scale(value: torch.Tensor, merge: torch.nn.Module) -> torch.Tensor:
@@ -76,41 +72,58 @@ def _scaled_back(edited: torch.Tensor, raw, merge: torch.nn.Module):
 
 
 class Layer(Layer):
-    """ZAYA's decoder block; returns ``(hidden_states, prev_router_hidden_states)``."""
+    """ZAYA's decoder block; returns ``(hidden_states, prev_router_hidden_states)``.
+
+    Each sublayer's contribution is scaled by the merge that follows it, a sibling
+    module, so the block hands the attention and the MLP their merge's envoy
+    (``merge``) when it is built; the envoy outlives a weight swap, so its
+    ``_module`` is the loaded one.
+    """
 
     returns_tuple = True
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.self_attn.merge = self.post_attention_residual_scale
+        self.mlp.merge = self.post_mlp_residual_scale
 
 
 class Attention(Attention):
     """ZAYA's attention: the shared eager forward; the block adds its output shifted and scaled by ``post_attention_residual_scale``."""
 
+    #: Set by the block: the envoy of the merge that follows this sublayer.
+    merge: Envoy
+
     @EProperty(key="output", description="What the attention adds to the residual stream: its output plus the merge's hidden_states_bias, times its hidden_states_scale")
     def attention_output(self, value) -> Residual:
-        return _scale(first_tensor(value), _merge(self, "post_attention_residual_scale"))
+        return _scale(first_tensor(value), self.merge._module)
 
     @attention_output.postprocess
     def attention_output(self, value):
-        return rewrap(self, _unscale(value, _merge(self, "post_attention_residual_scale")))
+        return rewrap(self, _unscale(value, self.merge._module))
 
     @attention_output.transform
     def attention_output(self, value, raw):
-        return _scaled_back(value, raw, _merge(self, "post_attention_residual_scale"))
+        return _scaled_back(value, raw, self.merge._module)
 
 
 class Mlp(Mlp):
     """ZAYA's mixture of experts (``(hidden_states, router_state)``); the block adds its output shifted and scaled by ``post_mlp_residual_scale``."""
 
+    #: Set by the block: the envoy of the merge that follows this sublayer.
+    merge: Envoy
+
     @EProperty(key="output", description="What the MLP adds to the residual stream: its output plus the merge's hidden_states_bias, times its hidden_states_scale")
     def mlp_output(self, value) -> Residual:
-        return _scale(first_tensor(value), _merge(self, "post_mlp_residual_scale"))
+        return _scale(first_tensor(value), self.merge._module)
 
     @mlp_output.postprocess
     def mlp_output(self, value):
-        return rewrap(self, _unscale(value, _merge(self, "post_mlp_residual_scale")))
+        return rewrap(self, _unscale(value, self.merge._module))
 
     @mlp_output.transform
     def mlp_output(self, value, raw):
-        return _scaled_back(value, raw, _merge(self, "post_mlp_residual_scale"))
+        return _scaled_back(value, raw, self.merge._module)
 
 
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.

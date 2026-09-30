@@ -12,7 +12,9 @@ on assignment and carried back by a transform after an in-place edit; the write
 lands on the sum, so it replaces both experts' contribution. ``mlp.output`` is the
 mixture's output alone and ``layers[i].shared_mlp.output`` the shared expert's.
 The binding is in the block's forward, read after the block has started, so the
-family's `Layer` sets ``sourced``. The attention, ``embedding_multiplier`` and
+family's `Layer` sets ``sourced``; the mixture keeps no config, so the `Layer` also
+hands its `Mlp` the multiplier and whether the block has a shared expert
+(``residual_multiplier``, ``shared``) when it is built. The attention, ``embedding_multiplier`` and
 ``logits_scaling`` are as on Granite.
 """
 
@@ -26,7 +28,7 @@ from transformers.models.granitemoeshared.modeling_granitemoeshared import (
 from ..components import EProperty, Layer, Mlp, Residual
 from .granite import Attention as GraniteAttention
 from .granite import project_on_vocab  # noqa: F401  the logit lens divides by logits_scaling, as Granite's
-from .granitemoe import _block, scaled_back
+from .granitemoe import hand_residual_multiplier, scaled_back
 
 MODEL_TYPES = ("granitemoeshared",)
 
@@ -44,7 +46,7 @@ EXPERTS_ONLY = "hidden_states_3"
 
 
 def _experts_sum(envoy: Envoy) -> str:
-    return f"../source.{EXPERTS_SUM if _block(envoy).shared_mlp is not None else EXPERTS_ONLY}.output"
+    return f"../source.{EXPERTS_SUM if envoy.shared else EXPERTS_ONLY}.output"
 
 
 class Layer(Layer):
@@ -52,9 +54,16 @@ class Layer(Layer):
 
     `Mlp.mlp_output` is a binding in this forward, read after the block has
     started (its attention has returned), so the forward is instrumented at build.
+    The mixture's module keeps no config, so the block hands its `Mlp` the
+    multiplier and whether a shared expert runs beside it.
     """
 
     sourced = True
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        hand_residual_multiplier(self)
+        self.mlp.shared = self._module.shared_mlp is not None
 
 
 class Attention(GraniteAttention):
@@ -64,17 +73,21 @@ class Attention(GraniteAttention):
 class Mlp(Mlp):
     """GraniteMoE-Shared's mixture of experts; the block adds it plus the shared expert, times ``residual_multiplier``."""
 
+    #: Set by the block: its multiplier, and whether a shared expert runs beside the mixture.
+    residual_multiplier: float
+    shared: bool
+
     @EProperty(_experts_sum, description="What the MLP adds to the residual stream: the mixture plus the shared expert, times residual_multiplier")
     def mlp_output(self, value) -> Residual:
-        return value * _block(self).residual_multiplier
+        return value * self.residual_multiplier
 
     @mlp_output.postprocess
     def mlp_output(self, value):
-        return value / _block(self).residual_multiplier
+        return value / self.residual_multiplier
 
     @mlp_output.transform
     def mlp_output(self, value, raw):
-        return scaled_back(value, raw, _block(self).residual_multiplier)
+        return scaled_back(value, raw, self.residual_multiplier)
 
 
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.
