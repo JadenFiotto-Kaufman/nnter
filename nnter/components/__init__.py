@@ -49,15 +49,14 @@ from .attention import (
     seq_first,
 )
 from .eproperty import (
-    DerivedEProperty, EProperty, Unavailable, branched,
-    per_call, unavailable,
+    DerivedEProperty, EProperty, Unavailable, unavailable,
 )
 from .layer import Layer, Residual
 from .linear_attention import Gates, LinearAttention, LinearQK, LinearV
 from .mlp import Mlp
 from .recurrent import (
-    RecurrentMixer, State, States, at_occurrence, needs_recurrent_routing, needs_torch_kernels, route_delta_rule,
-    route_kernels,
+    RecurrentMixer, State, States, at_occurrence, branched, needs_recurrent_routing, needs_torch_kernels, per_call,
+    route_delta_rule, route_kernels,
 )
 from .selective_scan import (
     ScanDecays, ScanQK, ScanState, ScanStates, ScanSteps, ScanValues, SelectiveScan, needs_kernel_source,

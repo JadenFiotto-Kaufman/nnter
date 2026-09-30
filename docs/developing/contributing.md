@@ -81,7 +81,7 @@ the ones that matter most here:
 - **Present tense.** The source and the docs describe what is; no "used
   to", no "fixed", no issue numbers, no TODO in prose. When code exists
   because something once broke, write the constraint, not the incident
-  (`nnter/components/eproperty.py:92-98` says why a predicate's
+  (`nnter/components/eproperty.py:121-123` says why a predicate's
   `AttributeError` becomes a `RuntimeError`, not when it bit).
 - **Docstrings state the contract; comments say why.** A module docstring
   teaches the family or the concept (`nnter/families/falcon.py:1-11`,
@@ -205,7 +205,7 @@ deliberately does not do the way nnterp does, and things that remain open.
 - **A `model.require(...)` / `model.available(...)` helper** that answers
   for a set of values at once, instead of reading `status()` by hand and
   meeting `Unavailable` from `hasattr` (§2a "Availability before any
-  trace"; the note under `Unavailable` in `nnter/components/eproperty.py:26-30`).
+  trace"; the note under `Unavailable` in `nnter/components/eproperty.py:28-32`).
 - **Sequence-first normalization of softmax q/k/v**: the sequence axis is 2
   on `attention_queries`/`keys`/`values` and 1 everywhere else, the layout
   transformers hands its interface; a `seq_axis`-style layout fact or a view

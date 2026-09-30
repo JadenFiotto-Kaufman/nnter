@@ -26,7 +26,7 @@ from nnsight.intervention.source import SourceEnvoy
 from jaxtyping import Float
 from torch import Tensor
 
-from .eproperty import DerivedEProperty, EProperty, Unavailable, branched, per_call
+from .eproperty import DerivedEProperty, EProperty, Unavailable
 from .layer import Residual
 from .standard import Standard, first_tensor, rewrap
 
@@ -182,6 +182,61 @@ def needs_recurrent_routing(envoy: Envoy) -> str | None:
             "(slower, like attn_implementation='eager')"
         )
     return None
+
+
+def branched(variable: str, ops: dict[Any, str]) -> Callable[[Envoy], str]:
+    """An op name a forward's own branch variable picks, for a key function (see `EProperty`).
+
+    ``variable`` names a binding the forward makes before it branches (a
+    binding is an operation, so its value is served like any other), and
+    ``ops`` maps that value to the op that fires on that branch. The model
+    serves the binding once per call, so the choice is made once per call
+    (`per_call`) and every value read in that call reuses it.
+    """
+
+    def choose(envoy: Envoy) -> str:
+        return per_call(envoy, f"branch:{variable}", lambda: ops[getattr(envoy.source, variable).output])
+
+    choose.__name__ = f"branched({variable})"
+    return choose
+
+
+def per_call(envoy: Envoy, key: str, compute: Callable[[], Any]) -> Any:
+    """``compute()`` once per call of the envoy's module, cached on the envoy under ``key``.
+
+    For something several values in one call depend on and the model serves
+    once: the branch a forward takes, a call's sequence length. The record is
+    kept until the worker is in another call of the module, or another run.
+
+    Which call that is comes from two facts nnsight keeps. A read pinned by
+    ``tracer.iter`` to step k is served at the k-th occurrence of its
+    location, and a mixer's kernel fires once per call, so a pinned read is
+    in call k. After a step's first read the pin relaxes, and outside
+    ``tracer.iter`` (or on step 0) there is none; then the call is how many
+    times the module's ``.output`` has been passed, which nnsight counts for
+    every location whether or not it was read: inside call c that many have
+    returned, and between calls it names the one about to start.
+    """
+    from nnsight.intervention.interleaver import Mediator
+
+    # The worker's mediator: one per run, so a record from an earlier trace is never reused.
+    mediator = Mediator.current(key)
+
+    # The index of the module call the next read lands in (see the docstring).
+    # `iteration` is the pinned step, `None` once relaxed, and 0 both for step 0
+    # and for no `tracer.iter` at all, which is why 0 falls through to the count.
+    call = mediator.iteration or mediator.occurrence(f"{envoy.path}.output")
+
+    # One record per key, on the envoy itself: (run, call, value).
+    cache = envoy.__dict__.setdefault("_per_call", {})
+    cached = cache.get(key)
+
+    # Compute on the first use, in a new run, or in a new call of the module.
+    # `compute()` may park the worker until the model reaches what it reads;
+    # the record is filed under the call decided above, the one that read lands in.
+    if cached is None or cached[0] is not mediator or cached[1] != call:
+        cache[key] = cached = (mediator, call, compute())
+    return cached[2]
 
 
 def at_occurrence(t: int):

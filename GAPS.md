@@ -53,7 +53,7 @@ Status legend: **same** (name and semantics), **renamed** (same semantics, new s
 | `num_kv_heads` (`multi_query`→1; `num_key_value_heads/num_kv_heads/n_head_kv`; `ru.py:375-385`) | `num_kv_heads` (`:391-394`) + `fam/falcon.py:157-162` | same | Neither reads MPT/DBRX `attn_config.kv_n_heads`; both return `num_heads` there. Not verified against those modules' real head counts. |
 | `intermediate_size` (`n_inner` first, then `intermediate_size/ffn_hidden_size/ffn_dim`, DBRX `ffn_config`, MPT `expansion_ratio`, BLOOM 4×; `ru.py:388-409`) | `intermediate_size` = `config.intermediate_size` (`:406-409`) + family functions in `gpt2/gptj/falcon/opt/mpt/bloom.py` | changed | **DBRX has no family function and no `config.intermediate_size`: `model.intermediate_size` raises `AttributeError`** *(ran on `yujiepan/dbrx-tiny256-random`)*. `families.md:96` documents the width but no code publishes it. |
 | `linear_num_value_heads`, `linear_key_head_dim`, `linear_value_head_dim` (`st.py:245-248`) | none; the suite reads `module.num_v_heads/head_k_dim/head_v_dim` (`suite.py:455`) | missing | |
-| `linear_attention_kernels: dict` (`st.py:252`, `ru.py:1047-1099`) | none; `route_kernels` / `route_delta_rule` rebind module globals instead (`comp/recurrent.py:92-139`) | changed | See §3.9. |
+| `linear_attention_kernels: dict` (`st.py:252`, `ru.py:1047-1099`) | none; `route_kernels` / `route_delta_rule` rebind module globals instead (`comp/recurrent.py:92-140`) | changed | See §3.9. |
 | `block_structure: str` (`ru.py:1515-1532`) | none | missing | `contributing.md:217-218` marks trivial. |
 | `is_vllm: bool` | none | missing | No vLLM path. |
 | `remote: bool` | none | missing | |
@@ -101,7 +101,7 @@ nnterp spelling is `model.<row>[i]` (read) / `model.<row>[i] = v` (write); whole
 | `linear_attention_head_outputs[i]` (`:1279`) | `linear_attn.attention_head_outputs` (`:208`) | renamed | |
 | `linear_attentions_state_output[i]` (`:1282-1289`, input of `cache_params_update_recurrent_state_0`, with `.scan`) | `linear_attn.state_output` (`:213-216`, kernel return 1) | renamed | `.scan(layer, cuts, edit)` → `state`/`states`/`state_after`/`set_state_after` (§3.9). |
 | `linear_attentions_output[i]` (`:1290`) | `linear_attn.attention_output` (`:163-170`) | renamed | |
-| — | `linear_attn.state`, `.states`, `.state_after(t)`, `.set_state_after(t, v)` (`comp/recurrent.py:256-357`) | new | Per-token state via `tracer.iter`; needs `route_kernels(family, "torch")`. |
+| — | `linear_attn.state`, `.states`, `.state_after(t)`, `.set_state_after(t, v)` (`comp/recurrent.py:338-443`) | new | Per-token state via `tracer.iter`; needs `route_kernels(family, "torch")`. |
 
 ### 1e. Properties and methods on the model
 
@@ -165,8 +165,8 @@ nnterp spelling is `model.<row>[i]` (read) / `model.<row>[i] = v` (write); whole
 
 | nnterp | nnter | status | note |
 |---|---|---|---|
-| `RenamingError` (`ru.py:34`) | `Unavailable` (`comp/eproperty.py:23`, `RuntimeError`), `UnsupportedFamily` (`fam/__init__.py:35`, `ValueError`), nnsight `SourceNotAvailable` for a moved op | changed | Three typed errors replace one. |
-| `AttnProbFunction` (`:38-50`) / `RenameConfig.attn_prob_source` | `EProperty(key=callable)`, a key function returning a path (`comp/eproperty.py:81-91`, `:149-151`), e.g. `fam/falcon.py:51-58`, `comp/recurrent.py:186-193`, `:238-243` | changed | |
+| `RenamingError` (`ru.py:34`) | `Unavailable` (`comp/eproperty.py:21`, `RuntimeError`), `UnsupportedFamily` (`fam/__init__.py:35`, `ValueError`), nnsight `SourceNotAvailable` for a moved op | changed | Three typed errors replace one. |
+| `AttnProbFunction` (`:38-50`) / `RenameConfig.attn_prob_source` | `EProperty(key=callable)`, a key function returning a path (`comp/eproperty.py:91-101`, `:159-161`), e.g. `fam/falcon.py:51-58`, `comp/recurrent.py:249-256`, `:310-315` | changed | |
 | `RenameConfig(attn_name, mlp_name, ln_final_name, lm_head_name, model_name, layers_name, ...)` (`:142-147`) | `rename=` kwarg / `family.RENAME` | changed | |
 | `RenameConfig.ignore_mlp / ignore_attn` (`:149-150`) | none; a family simply omits the `Mlp` key (`fam/opt.py:44`) | changed | |
 | `RenameConfig.attn_head_config_key / hidden_size_config_key / vocab_size_config_key` (`:151-153`) | `def <size>(model)` in the family module (`S.py:25-49`; `fam/gpt2.py:63-65`) | changed | Via `families.register()` for a user family. |
@@ -176,9 +176,9 @@ nnterp spelling is `model.<row>[i]` (read) / `model.<row>[i] = v` (write); whole
 | `bloom_slow_but_exact` (`:187-195`) + `_NO_CONTRIBUTION` disable (`:1453-1458`) | none needed: `dropout_add_0` input is read on that path too *(ran, identity holds)* | changed (better) | |
 | `text_config(model)` (`:272-276`) | `_read_config` picks `text_config.model_type` (`S.py:123`); sizes read `model.config` directly | changed | On a VLM config nnter's `hidden_size` would read the top-level config; untested since nnter does not load VLMs. |
 | `get_num_attention_heads/get_hidden_size/get_vocab_size/get_head_dim/get_qk_head_dim/get_num_kv_heads/get_intermediate_size(model)` (`:279-409`) | the `StandardizedProperty` rows (`S.py:375-409`) | renamed | Free functions on a raw model are gone. |
-| `IOType {INPUT, INPUTS, OUTPUT}` (`:412-425`) | the last segment of an `EProperty` path, `input`\|`inputs`\|`output` (`comp/eproperty.py:161-180`) | renamed | |
+| `IOType {INPUT, INPUTS, OUTPUT}` (`:412-425`) | the last segment of an `EProperty` path, `input`\|`inputs`\|`output` (`comp/eproperty.py:171-206`) | renamed | |
 | `get_attention_layers(layers)` (`:428-439`), `linear_attention_error` (`:442-447`) | none | missing | |
-| `Selection`, `Index(*steps)`, `Copied()`, `FirstIfTuple()` (`:450-513`) | `select: int \| str` (one step only, `comp/eproperty.py:184-208`); `first_tensor`/`rewrap` (`comp/standard.py:13-21`); a `preprocess` that clones (`linear_attention.py:76-85`) | changed | No multi-step `Index(0, 1)`; nnter uses `"source.attention_interface_1.inputs", select=1`. |
+| `Selection`, `Index(*steps)`, `Copied()`, `FirstIfTuple()` (`:450-513`) | `select: int \| str` (one step only, `comp/eproperty.py:210-238`); `first_tensor`/`rewrap` (`comp/standard.py:13-21`); a `preprocess` that clones (`linear_attention.py:76-85`) | changed | No multi-step `Index(0, 1)`; nnter uses `"source.attention_interface_1.inputs", select=1`. |
 | `Address(module, io, op, select, order, unavailable, tags, per_layer, seq_axis, width, heads, keys, needs, scan)` (`:516-631`) | `EProperty(key, description, unavailable, select)` with a path for a key (`"output"`, `"../norm.output"`, `"source.<op>.inputs"`), `DerivedEProperty(compute, ...)` (`comp/eproperty.py`) | changed | Lost: `order`, `tags`, `seq_axis`, `width`, `heads`, `keys`, `needs`, `scan`. Gained: `.layout`/`.dims` (`:122-145`), `description` in the repr. |
 | `LayerAccessor.unavailable_on(layer)` (`:700-723`) | `EProperty.reason(envoy)` (`:103-105`), `Standard.status()` | renamed | |
 | `LayerAccessor.num_heads`, `.width` (`:734-752`) | none; `.dims` names axes but not sizes | missing | |
@@ -190,8 +190,8 @@ nnterp spelling is `model.<row>[i]` (read) / `model.<row>[i] = v` (write); whole
 | `LayerAccessor.print_source(layer)` (`:875-902`) | `print(envoy.source)` (`docs/extending/finding-source-ops.md`) | renamed | |
 | `check_attention_probabilities(model, layer, allow_dispatch, use_trace)` (`:905-986`) | `suite.py:275-289`, `:303-317` (tests only) | dropped | |
 | `_INTERFACE`/`INTERFACE_ROWS` (`:996-1001`) | `INTERFACE` (`comp/attention.py:28`); `INTERIOR` in `suite.py:26` | renamed | |
-| `delta_rule_call(mixer)` (`:1003-1044`, step-0 = chunked) | `RecurrentMixer.KERNEL = branched(BRANCH, ...)` (`recurrent.py:238-243`) | changed | nnter reads the forward's own branch variable, so a warm-cache single-token trace resolves; nnterp documents it as unsupported (`:1023-1029`). |
-| `pin_linear_attention_kernels(model)` (`:1047-1099`) | `route_kernels(family, "torch"\|"default")` / `route_delta_rule` (`recurrent.py:92-139`) + `needs_torch_kernels` (`:142-156`) | changed | §3.9. |
+| `delta_rule_call(mixer)` (`:1003-1044`, step-0 = chunked) | `RecurrentMixer.KERNEL = branched(BRANCH, ...)` (`recurrent.py:310-315`) | changed | nnter reads the forward's own branch variable, so a warm-cache single-token trace resolves; nnterp documents it as unsupported (`:1023-1029`). |
+| `pin_linear_attention_kernels(model)` (`:1047-1099`) | `route_kernels(family, "torch"\|"default")` / `route_delta_rule` (`recurrent.py:92-140`) + `needs_torch_kernels` (`:143-157`) | changed | §3.9. |
 | `delta_rule_scan(accessor, layer, cuts, edit)` (`:1102-1162`) | `states`, `state_after`, `set_state_after` | changed | §3.9. |
 | `DEFAULT_ADDRESSES` (`:1198-1291`) | `comp/layer.py`, `attention.py`, `mlp.py`, `linear_attention.py` base classes | renamed | |
 | `BlockStructure`, `get_block_structure` (`:1293`, `:1515-1532`) | none | missing | |
@@ -330,14 +330,15 @@ nnterp spelling is `model.<row>[i]` (read) / `model.<row>[i] = v` (write); whole
 
 - Families registry: one module per `model_type`, lazy import, `nnter.families.{lookup, register, known, all_families, REGISTRY}`, `UnsupportedFamily` (`fam/__init__.py`).
 - `model.status(layer=None)`, `Standard.values()`, `Standard.status()`, per-block dotted keys (`S.py:260-324`, `comp/standard.py`).
-- `Unavailable` and the `unavailable=` predicate on every descriptor; `unavailable("reason")` class-body marker; `needs_eager`, `interface_reason`, `needs_torch_kernels`, `needs_recurrent_routing`, `Attention.off_interface()` (`comp/eproperty.py:23-118`, `attention.py:18-89`, `recurrent.py:142-176`).
+- `Unavailable` and the `unavailable=` predicate on every descriptor; `unavailable("reason")` class-body marker; `needs_eager`, `interface_reason`, `needs_torch_kernels`, `needs_recurrent_routing`, `Attention.off_interface()` (`comp/eproperty.py:21-128`, `attention.py:18-89`, `recurrent.py:143-184`).
 - Layouts: fourteen `jaxtyping` aliases (`Residual`, `Logits`, `NextTokenProbs`, `Tokens`, `Queries`, `Keys`, `Values`, `Pattern`, `HeadOutputs`, `LinearQK`, `LinearV`, `Gates`, `State`, `States`), `value.layout`, `value.dims`, `isinstance(tensor, Pattern)` (`comp/eproperty.py:122-145`; `api-quick-reference.md:239-260`).
 - `StandardizedProperty` sizes a family may define (`S.py:25-49`; `fam/gpt2.py:63`, `falcon.py:157-167`, `deepseek_v2.py:44-51`, `opt.py:49`, `mpt.py:98`, `bloom.py:107`, `gptj.py:90`).
-- Descriptors: one `EProperty(key, description, unavailable, select)` whose key is a path (`"output"`, `"../norm.output"`, `"source.<op>.inputs"`, or a function returning one), `DerivedEProperty`, `branched`, `per_call`, `at_occurrence`, `seq_first`, `first_tensor`, `rewrap`; `Standard.sourced`, the flag a family sets on an envoy whose forward holds a value read after the call starts (`comp/eproperty.py`, `attention.py:48-57`, `standard.py:24-50`).
+- Descriptors: one `EProperty(key, description, unavailable, select)` whose key is a path (`"output"`, `"../norm.output"`, `"source.<op>.inputs"`, or a function returning one), `DerivedEProperty`, `seq_first`, `first_tensor`, `rewrap`; `Standard.sourced`, the flag a family sets on an envoy whose forward holds a value read after the call starts (`comp/eproperty.py`, `attention.py:48-57`, `standard.py:24-50`).
+- Keys for a forward that branches: `branched`, `per_call`, `at_occurrence` (`comp/recurrent.py:187-246`).
 - `attention_values` on every family (nnterp had queries/keys/scores/head outputs only).
 - Attention interior on GPT-J, BLOOM, MPT, Falcon mapped onto their own ops (`fam/gptj.py:47-77`, `bloom.py:46-86`, `mpt.py:49-78`, `falcon.py:75-124`); nnterp marks those `_no_interface` (`ru.py:1393-1404`, `:1448`, `:1462`, `:1489`, `:1498`).
 - Falcon alibi branch (`by_alibi`, `fam/falcon.py:51-58`) covering queries/keys/values/scores/head outputs; nnterp covered only the pattern on alibi (`ru.py:1491-1494`).
-- DeltaNet per-token state: `state`, `states`, `state_after`, `set_state_after`, `route_kernels` / `route_delta_rule` (`comp/recurrent.py:92-139`, `:256-357`); decode-step kernel chosen by the forward's own branch variable.
+- DeltaNet per-token state: `state`, `states`, `state_after`, `set_state_after`, `route_kernels` / `route_delta_rule` (`comp/recurrent.py:92-140`, `:338-443`); decode-step kernel chosen by the forward's own branch variable.
 - Assignable `input_ids`, `attention_mask`, `logits` (`S.py:151-165`, `:328-346`).
 - `envoys=` extension point; a user `EProperty` appears in `status()` (`test_registry.py:106-118`).
 - `Layer.skip_with(hidden)` (`comp/layer.py:47-56`); `Layer.returns_tuple` declared per family.
@@ -361,7 +362,7 @@ nnterp spelling is `model.<row>[i]` (read) / `model.<row>[i] = v` (write); whole
 
 1. **Op names are a transformers-version fact.** `INTERFACE = "attention_interface_1"` (`comp/attention.py:28`), `nn_functional_softmax_0`, `nn_functional_dropout_0` (`:118`, `:144`), GPT-OSS `attn_weights_1` (`fam/gpt_oss.py:40`), GPT-J `self__attn_0.source.self_attn_dropout_0` (`fam/gptj.py:72`), BLOOM `self__reshape_0`/`F_softmax_0`/`torch_bmm_0`/`dropout_add_0`/`self_attention_dropout_0` (`fam/bloom.py:46-86`), MPT `query_states_0`/`torch_matmul_1`/`F_dropout_0` (`fam/mpt.py:49-88`), Falcon `apply_rotary_pos_emb_0`/`value_layer_0`/`F_softmax_0|1`/`attn_output_1`/`flatten_0`/`self_attention_dropout_0` (`fam/falcon.py:75-124`), DeltaNet `torch_chunk_gated_delta_rule_0`/`torch_recurrent_gated_delta_rule_0`/`use_precomputed_states_0`/`last_recurrent_state_3` (`comp/linear_attention.py:45-49`). nnterp was broken twice this way (`_0`→`_1` under nnsight 0.8; `module_attn_dropout_0`→`nn_functional_dropout_0` under transformers 5; CHANGELOG `:203-217`) and DBRX/Qwen2-MoE moved onto the interface in 5.17 (`:182-187`). Constraint: `suite.py:319-334` must stay in CI for every family on every transformers bump; `docs/developing/transformers-compat.md` is the procedure. `last_recurrent_state_3` is an occurrence count inside the kernel body and will move with any edit to that loop.
 
-2. **`.source` snapshots module globals at first drill.** nnsight builds the instrumented forward over a copy of the globals (nnterp `ru.py:1052-1058`; nnter `gotchas.md` "`.source` snapshots module globals"). Constraint: `route_delta_rule` before the first trace of a linear block (`comp/recurrent.py:92-125`); any other runtime kernel/monkeypatch switch is invisible after the first trace. nnterp pinned at load and re-pinned on `dispatch()`; nnter has no re-pin, which is fine only because `route_kernels` rebinds the module globals themselves rather than swapping and restoring.
+2. **`.source` snapshots module globals at first drill.** nnsight builds the instrumented forward over a copy of the globals (nnterp `ru.py:1052-1058`; nnter `gotchas.md` "`.source` snapshots module globals"). Constraint: `route_delta_rule` before the first trace of a linear block (`comp/recurrent.py:92-126`); any other runtime kernel/monkeypatch switch is invisible after the first trace. nnterp pinned at load and re-pinned on `dispatch()`; nnter has no re-pin, which is fine only because `route_kernels` rebinds the module globals themselves rather than swapping and restoring.
 
 3. **`fla` / `causal_conv1d` installed = no DeltaNet values.** nnter reports them unavailable (`needs_torch_kernels`); nnterp sourced under the reference kernels and restored the globals. Constraint: a hybrid experiment on a GPU box with `fla` installed gets nothing but `attention_output`; `contributing.md:200-203` lists this as open.
 
@@ -379,9 +380,9 @@ nnterp spelling is `model.<row>[i]` (read) / `model.<row>[i] = v` (write); whole
 
 10. **Half-precision tolerances.** nnterp's pattern check widens to `atol=1e-2` under bf16 (`ru.py:960`) and its invariant suite loads in fp32 because the Falcon checkpoints are bf16 and the additive identity holds only to one ulp (`test_block_invariants.py:39-42`). nnter's suite loads in the checkpoint dtype with `8*eps` tolerances (`suite.py:219-220`, `:284-288`) and forces fp32 only for DBRX (`families.md:164`). Constraint: on a bf16 checkpoint the contribution identity and the row-sum check are one-ulp statements; a real bf16 Falcon/Gemma checkpoint may need `dtype=torch.float32` for the identity to hold to the suite's tolerance. Neither package handles fp16 NaN patterns (softmax over `-inf` rows under fp16 mask) specially; nnterp has no such handling either.
 
-11. **`branched` caching per call.** `per_call` keys the cached branch on `(mediator, step)` (`comp/eproperty.py:308-325`); a trace that fires a linear block twice in one step outside `tracer.iter` (two invokes of the same prompt) would reuse the first call's decision. Constraint: one invoke per trace on hybrids, or `tracer.iter`. nnterp's `delta_rule_call` had the mirror-image limit (step 0 = chunked, warm-cache trace unsupported, `ru.py:1023-1029`).
+11. **`branched` caching per call.** `per_call` keys the cached branch on `(mediator, call)` (`comp/recurrent.py:204-239`): the call is the step a read is pinned to by `tracer.iter`, and, relaxed, on step 0 or outside `tracer.iter`, the worker's count of passes of the module's `.output`. A second call of the block has another count and a second invoke another mediator, so the record is made again for each. nnterp's `delta_rule_call` had the mirror-image limit (step 0 = chunked, warm-cache trace unsupported, `ru.py:1023-1029`).
 
-12. **`hasattr` raising `Unavailable`** is a known trap (`comp/eproperty.py:30-34` TODO) that also breaks any third-party code doing `getattr(envoy, name, default)` inside a trace; `contributing.md:204-207` lists a `require/available` helper as open.
+12. **`hasattr` raising `Unavailable`** is a known trap (`comp/eproperty.py:28-32` TODO) that also breaks any third-party code doing `getattr(envoy, name, default)` inside a trace; `contributing.md:204-207` lists a `require/available` helper as open.
 
 13. **Out-of-order reads of source-located values warn instead of raising** (`gotchas.md` "An out-of-order read"), so a saved name silently goes unbound. nnterp raised on the same situation (or ranked reads via `Internals.rank`). Constraint: check every saved name after a trace that touches the attention interior.
 

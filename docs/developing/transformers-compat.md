@@ -109,7 +109,7 @@ argument names `g`, `beta`, `initial_state` are the `select` keys of
 kernel-dispatch closure names `torch_function` and `implementation`
 (`transformers/integrations/hub_kernels.py:847-859`) are what
 `needs_torch_kernels`, `route_kernels` and `needs_recurrent_routing` read
-through `_dispatch` (`recurrent.py:43-55`, `:92-176`).
+through `_dispatch` (`recurrent.py:43-55`, `:92-184`).
 
 ### Names, not ops
 
@@ -128,7 +128,7 @@ keys, and nnsight binds whichever resolves (`gpt_neox.py:17-20`).
   every available value on the family's `Attention` whose path is inside a
   forward reads a tensor on every attention block. A renamed op fails here
   with `SourceNotAvailable` naming the missing op and the ops that exist
-  (`nnter/components/eproperty.py:175-179`).
+  (`nnter/components/eproperty.py:201-205`).
 - `test_written_pattern_moves_the_logits` (`:303-317`): assigning a random
   pattern and zeroing a head in place both move the logits. An op that
   still resolves but is no longer what the values are mixed with (a copy, a

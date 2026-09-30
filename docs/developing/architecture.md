@@ -169,7 +169,7 @@ norm's output: the *family* says so with an `EProperty` keyed
 `"../post_attention_layernorm.output"` on its `Attention`
 (`families/gemma2.py:30-36`), while the *component* only knows how to walk a
 path: `../` to the parent, a name to a child, `source` into a forward
-(`components/eproperty.py:161-180`). BLOOM's contribution is the first
+(`components/eproperty.py:171-206`). BLOOM's contribution is the first
 argument of `dropout_add`: the family names the op,
 `"source.dropout_add_0.input"` (`families/bloom.py:73-78`), the component
 drills to it and reads the call's first argument. A family that keeps transformers' shared

@@ -11,8 +11,8 @@ from nnsight.intervention.envoy import Envoy
 from jaxtyping import Float
 from torch import Tensor
 
-from .eproperty import DerivedEProperty, EProperty, per_call
-from .recurrent import RecurrentMixer, _dispatch, _modeling_module, _name, kernel, needs_recurrent_routing, needs_torch_kernels
+from .eproperty import DerivedEProperty, EProperty
+from .recurrent import RecurrentMixer, _dispatch, _modeling_module, _name, kernel, needs_recurrent_routing, needs_torch_kernels, per_call
 
 #: The layouts at the scan, tokens before channels. ``B`` and ``C`` are one ``state_dim`` vector per token,
 #: shared by every channel: one group. The input, the step sizes and the read are one number per channel; the

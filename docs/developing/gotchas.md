@@ -47,11 +47,11 @@ but the model already ran past it). Falcon binds values before the rotary
 that produces queries and keys, so read `attention_values` first
 (`nnter/families/falcon.py:37-41`; `tests/families/test_falcon.py:33-38`);
 on DeltaNet, `states` reads every position, so it goes before any state
-write (`nnter/components/recurrent.py:316-334`).
+write (`nnter/components/recurrent.py:400-418`).
 
 **An out-of-order read of a *source-located* value is a warning, not an
 error.** The drill parks on `{op}.fn` with the mediator relaxed
-(`components/eproperty.py:213-230`), and a run that ends with a relaxed
+(`components/eproperty.py:292-309`), and a run that ends with a relaxed
 worker parked is treated as a loop that outran the run (nnsight
 `interleaver.py:554-572`): a `UserWarning` "'...attention_interface_1.fn.i0'
 was never reached … cut short", and every statement after the read silently
@@ -70,14 +70,14 @@ outside one (nnsight `source.py:809-813`). The `.fn` handoff also fires
 *before* the call runs, so drill before reading that op's `.output`.
 
 **`interleaver.sourced` is cleared per run.** Every drill is redone on
-every trace (`components/eproperty.py:194-207`); never cache a
+every trace (`components/eproperty.py:192-206`); never cache a
 `SourceEnvoy` on a descriptor or a family. A drilled op is reused within one
 run, across generation steps (nnsight `source.py:495-503`, `interleaver.py:710`).
 
 **A served location is re-read only while the worker is parked there.**
 `_call` reads `_seq()` (the queries, on DeltaNet) first *because* that read
 parks the worker at the kernel call's start, the one moment the state op's
-count is what earlier calls put through it (`recurrent.py:289-308`). A value computed from
+count is what earlier calls put through it (`recurrent.py:371-391`). A value computed from
 several served reads has to think about *when* each read happens.
 
 **Occurrence indices are absolute per location over the run.** The
@@ -93,7 +93,7 @@ occurrence `k - 1` of the recurrent op on step `k`, so `states`,
 **`hasattr(envoy, value)` raises `Unavailable`.** Only `AttributeError`
 counts as absence, and `Unavailable` is a `RuntimeError` on purpose: an
 `AttributeError` from a descriptor is rewritten by `Envoy.__getattr__` and
-the reason is lost (`components/eproperty.py:26-30`, `:89-100`; nnsight
+the reason is lost (`components/eproperty.py:28-32`, `:117-128`; nnsight
 `envoy.py:802-810`). Use `status()`.
 
 **`getattr(envoy, name, None)` inside a trace.** The default only covers
@@ -111,11 +111,11 @@ function built over the original's `__globals__` (nnsight `source.py:439-444`,
 `:447-471`) and cached per code object; a module-level name rebound
 afterwards (a kernel switch, a monkeypatch) is not what the instrumented copy
 sees. `route_kernels` must therefore run before the first trace of that
-layer (`recurrent.py:92-125`).
+layer (`recurrent.py:92-126`).
 
 **A key function stored on a class is a bound method through an instance.**
 `RecurrentMixer.__init_subclass__` stores `KERNEL` as a `staticmethod`
-(`recurrent.py:238-243`), so `self.KERNEL(self)` and `type(self).KERNEL(self)`
+(`recurrent.py:310-315`), so `self.KERNEL(self)` and `type(self).KERNEL(self)`
 are the same call. A subclass that sets `KERNEL` itself wraps it in
 `staticmethod` too, or reaches it through the class; a bare function reached
 through an instance passes the envoy twice and raises.
@@ -134,7 +134,7 @@ Key on the type to displace (`tests/test_registry.py:67-77`).
 
 **A bare `unavailable("...")` needs `__set_name__`.** The marker is never
 called on a stub, so nnsight's `eproperty.__call__` never set `name`/`key`;
-`EProperty.__set_name__` (`components/eproperty.py:52-58`) fills them from
+`EProperty.__set_name__` (`components/eproperty.py:103-109`) fills them from
 the class body. A descriptor subclass that overrides `__set_name__` must keep
 that.
 

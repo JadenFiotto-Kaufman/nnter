@@ -4,9 +4,7 @@ An `EProperty` is nnsight's ``eproperty`` with two additions: availability
 (`Unavailable`, ``unavailable=``) and a *path* for a key, so one descriptor
 serves a value wherever it lives: on the host module, on another module named
 relative to it, or at an operation inside a forward. `DerivedEProperty`
-computes one from several served values. `branched` and `per_call` are what a
-forward that branches needs: a decision made once per module call and reused
-by every value read in it."""
+computes one from several served values."""
 
 from __future__ import annotations
 
@@ -319,79 +317,6 @@ def unavailable(reason: str) -> EProperty:
     access raise `Unavailable` with it.
     """
     return EProperty(description=f"Unavailable: {reason}", unavailable=reason)
-
-
-def branched(variable: str, ops: dict[Any, str]) -> Callable[[Envoy], str]:
-    """An op name a forward's own branch variable picks, for a key function (see `EProperty`).
-
-    ``variable`` names a binding the forward makes before it branches (a
-    binding is an operation, so its value is served like any other), and
-    ``ops`` maps that value to the op that fires on that branch.
-
-    The variable is read once per step: the model serves a location once, so
-    a second value read in the same call must not ask for it again after the
-    model has moved on. The choice is cached on the envoy against the worker's
-    mediator and its step: inside ``tracer.iter`` a step body starts pinned to
-    its step and relaxes after its first read, and a plain trace stays at 0,
-    so a pinned step different from the cached one is a new call, a relaxed
-    one is the same call, and another mediator is another run. Reading the
-    variable as the step's first, pinned read also leaves the kernel read
-    sequential, which is what makes an op that never fires on step 0 resolve
-    on later steps.
-    """
-
-    def choose(envoy: Envoy) -> str:
-        return per_call(envoy, f"branch:{variable}", lambda: ops[getattr(envoy.source, variable).output])
-
-    choose.__name__ = f"branched({variable})"
-    return choose
-
-
-def per_call(envoy: Envoy, key: str, compute: Callable[[], Any]) -> Any:
-    """``compute()`` once per module call, cached on the envoy under ``key``.
-
-    For a served value several reads in one call depend on, when the model
-    serves it once: the branch a forward takes, the sequence length of a call.
-    A call is told apart by the worker's mediator and its step (see
-    `branched`): a pinned step different from the cached one is a new call,
-    another mediator another run. A relaxed read counts as the step of the
-    envoy's last pinned one, so a value first computed after the step's
-    first read (a DeltaNet's per-token offset, read after ``state_input``)
-    is not the previous step's.
-
-    A step whose first read is not a value of this envoy (the module's own
-    ``.input``) relaxes the pin before any value here is read, so the record
-    also carries how many of the module's calls had returned when it was
-    made, and a relaxed read that finds more is a new call. A read pinned to
-    a later step can run before the previous call has returned; its count is
-    taken once ``compute()`` has parked into the call, or, when it did not,
-    from the call's next relaxed read.
-    """
-    from nnsight.intervention.interleaver import Mediator
-
-    mediator = Mediator.current(key)
-    pinned = step = mediator.iteration
-    calls = f"{envoy.path}.output"  # passed once per call, after every value read inside it
-    cache = envoy.__dict__.setdefault("_per_call", {})
-    if step is not None:
-        cache[None] = (mediator, step)
-    elif cache.get(None, (None,))[0] is mediator:
-        step = cache[None][1]
-    cached = cache.get(key)
-    new = cached is None or cached[0] is not mediator or (step is not None and step != cached[1])
-    if not new and pinned is None:
-        returned = mediator.occurrence(calls)
-        if cached[2] is None:
-            cached[2] = returned
-        elif cached[2] != returned:
-            new = True
-    if new:
-        before = mediator.occurrence(calls)
-        value = compute()
-        returned = mediator.occurrence(calls)
-        known = not pinned or returned != before  # unpinned, or compute() parked into the call
-        cache[key] = cached = [mediator, step, returned if known else None, value]
-    return cached[3]
 
 
 class DerivedEProperty(EProperty):

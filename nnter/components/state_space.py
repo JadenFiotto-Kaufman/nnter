@@ -11,9 +11,9 @@ from nnsight.intervention.interleaver import Mediator
 from jaxtyping import Float
 from torch import Tensor
 
-from .eproperty import DerivedEProperty, EProperty, Unavailable, per_call, unavailable
+from .eproperty import DerivedEProperty, EProperty, Unavailable, unavailable
 from .linear_attention import Gates
-from .recurrent import RecurrentMixer, State, States, kernel, needs_torch_kernels
+from .recurrent import RecurrentMixer, State, States, kernel, needs_torch_kernels, per_call
 
 #: The layouts at the scan call, tokens before heads. SSD's ``C`` and ``B`` are projected once per *group* of
 #: heads (``n_groups``, which divides ``num_heads``) and live on the state's ``state_dim`` side; the values
@@ -30,11 +30,9 @@ def _this_call(envoy: Any) -> dict[str, Any]:
     """What is known about this call, decided at its first read and kept for the call's other reads.
 
     The kernel that fires, and what each location inside the forward served
-    (`StateSpace._serve`). `per_call` tells a new step by the step's pinned first read; a step whose first read
-    is something else (the mixer's own ``.input``) relaxes the pin before a
-    kernel value is read, so the record also carries how many of the mixer's
-    calls had returned when it was made, and a record from an earlier call is
-    made again.
+    (`StateSpace._serve`). The record is `per_call`'s, one per call of the
+    mixer; it also carries how many of the mixer's calls had returned when it
+    was made, and one made in an earlier call is made again.
     """
     from nnsight.intervention.interleaver import Mediator
 

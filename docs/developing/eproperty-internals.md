@@ -1,6 +1,6 @@
 ---
 title: EProperty Internals
-one_liner: How nnter's descriptors sit on nnsight's eproperty — one `EProperty` whose key is a path (`output`, `../norm.output`, `source.<op>.inputs`), availability, `_resolve`'s walk and the per-run drill into `.source`, `select`, the once-per-access key, the `Standard.sourced` flag, derived values, and the per-call cache a branching forward needs.
+one_liner: How nnter's descriptors sit on nnsight's eproperty — one `EProperty` whose key is a path (`output`, `../norm.output`, `source.<op>.inputs`), availability, `_resolve`'s walk and the per-run drill into `.source`, `select`, the once-per-access key, the `Standard.sourced` flag, and derived values.
 tags: [developing, internals, eproperty, source, descriptors]
 related: [docs/developing/architecture.md, docs/developing/recurrent-mixer-internals.md, docs/developing/gotchas.md, docs/usage/availability.md]
 sources: [nnter/components/eproperty.py, nnter/components/standard.py, nnter/components/layer.py, nnter/components/attention.py, nnter/components/linear_attention.py, nnter/components/recurrent.py, nnter/standardized.py, nnter/families/falcon.py, nnter/families/llama4_text.py, nnsight src/nnsight/intervention/eproperty.py, nnsight src/nnsight/intervention/envoy.py, nnsight src/nnsight/intervention/source.py, nnsight src/nnsight/intervention/interleaver.py, nnsight src/nnsight/intervention/iterator.py, nnsight src/nnsight/intervention/util.py]
@@ -105,14 +105,14 @@ Everything below is a consequence of these six.
 
 ## `EProperty`: one descriptor, a path for a key
 
-`EProperty(eproperty)` (`nnter/components/eproperty.py:37-242`) takes
-`key`, `description`, `unavailable` and `select` (`:81-91`). A string `key`
+`EProperty(eproperty)` (`nnter/components/eproperty.py:35-274`) takes
+`key`, `description`, `unavailable` and `select` (`:91-101`). A string `key`
 is stored as nnsight's `key`; a callable one is stored as `locate` and the
 `key` shown in the repr and in `.key` is `<its name>` (`<kernel.inputs>`,
 `<apply_rotary_pos_emb_0|query_layer_0>`, `<_token_state_op>`).
-`__set_name__` (`:93-99`) fills `name` and `key` from the class body when
+`__set_name__` (`:103-109`) fills `name` and `key` from the class body when
 they are still `None`: a bare marker `attention_probabilities =
-unavailable("...")` (`:272-279`) is never called on a stub, so nnsight's
+unavailable("...")` (`:312-319`) is never called on a stub, so nnsight's
 `__call__` never ran to set them; without this the marker would have no
 name in the repr and `status()`.
 
@@ -129,11 +129,11 @@ from the host envoy:
 | `../` (leading, repeatable) | the parent module, by native name | `"../post_attention_layernorm.output"`: Gemma-2's `attention_output` (`families/gemma2.py:30-36`) |
 | a name | a child module of the current node, aliases included; under a `source`, an operation | `"embed_tokens.output"`: `token_embeddings` (`standardized.py:167-175`) |
 | `source` | the current module's or operation's forward, instrumented for this run | `"source.attention_interface_1.source.nn_functional_dropout_0.output"`: `attention_probabilities` (`attention.py:147-153`); `"../source.hidden_states_view_0.output"`: Llama 4's `mlp_output` (`families/llama4_text.py:106-112`) |
-| a function of the host | returns a path, at read time, inside the trace | `branched(...)` (`:282-305`), Falcon's `by_alibi(without, with_alibi, attribute)` (`families/falcon.py:51-58`), a `RecurrentMixer`'s `kernel("inputs")` (`recurrent.py:186-193`) |
+| a function of the host | returns a path, at read time, inside the trace | `branched(...)` (`recurrent.py:187-201`), Falcon's `by_alibi(without, with_alibi, attribute)` (`families/falcon.py:51-58`), a `RecurrentMixer`'s `kernel("inputs")` (`recurrent.py:249-256`) |
 
 ### `_resolve`: the walk
 
-`_resolve(obj, key)` (`:161-180`) turns a path into the served location, and
+`_resolve(obj, key)` (`:171-206`) turns a path into the served location, and
 runs before every read and write, because of fact 5: an operation under a
 call is per run, so nothing about the walk can be cached on the descriptor.
 It strips every leading `../` (counting them), splits the rest on `.`, and,
@@ -142,9 +142,9 @@ below the host, walks every segment but the last: `source` is
 so an alias works); a segment on anything else (a `Source`, the object a
 drill returns) is `getattr`, which is how an operation is named. An
 `AttributeError` anywhere is re-raised as `SourceNotAvailable` naming the
-value, the path and nnsight's list of what is there (`:175-179`), because of
-fact 2. `_location(obj)` (`:158-159`) is `_resolve` over `path(obj)`
-(`:149-151`: the string, or the function applied to the host), for a caller
+value, the path and nnsight's list of what is there (`:201-205`), because of
+fact 2. `_location(obj)` (`:168-169`) is `_resolve` over `path(obj)`
+(`:159-161`: the string, or the function applied to the host), for a caller
 that wants only the location. Verified on tiny GPT-2: a wrong op
 reads `model.transformer.h.0.attn.broken reads 'source.no_such_op_0.output',
 which this run does not have: 'model.transformer.h.0.attn.source' has no
@@ -176,7 +176,7 @@ moves the logits.
 
 ### `_drill` and the relaxed mediator
 
-`_drill(obj, node)` (`:252-269`) is `node.source`, with one care. On the
+`_drill(obj, node)` (`:292-309`) is `node.source`, with one care. On the
 module envoy, or on an operation already drilled this run (its path is in
 `interleaver.sourced`), it is a plain `node.source`. The first drill of a
 run into a call is fact 4 meeting fact 5: the drill parks on `{path}.fn`, a
@@ -191,8 +191,8 @@ in `finally` for the value read that follows. This is what lets
 
 ### `_pick` / `_put`: `select`, and why `input` is the first argument
 
-`_pick(attribute, value)` (`:184-192`) takes one element of the served
-value and `_put(attribute, current, element)` (`:194-208`) puts one back;
+`_pick(attribute, value)` (`:214-222`) takes one element of the served
+value and `_put(attribute, current, element)` (`:224-238`) puts one back;
 `attribute` is the path's last segment, handed in by the caller:
 
 - `input` is `first_input(args, kwargs)` on read and
@@ -211,19 +211,19 @@ value and `_put(attribute, current, element)` (`:194-208`) puts one back;
   (`attention_head_outputs` is `select=0`, `attention.py:166`); with no
   `select` it is the value as returned.
 
-A write that selects (a `select`, or an `input` attribute, `:240`)
+A write that selects (a `select`, or an `input` attribute, `:272`)
 re-reads the current value with `Mediator.value`, puts the element in and
-swaps the whole back (`__set__`, `:233-242`), which is why assigning
+swaps the whole back (`__set__`, `:264-274`), which is why assigning
 `attention_keys` swaps in the keys and keeps every other argument.
 
 ### `__get__` / `__set__`: nnsight's machinery on every path
 
-`__get__` (`:215-231`) is `_check`, one `path(obj)`, `_resolve` over it,
+`__get__` (`:245-262`) is `_check`, one `path(obj)`, `_resolve` over it,
 `Mediator.value`, `_pick` with the key's last segment, the preprocess, and,
 when a `transform` is registered, the bind of fact 3 with the raw served
-value riding along (`:225-230`). `__set__` (`:233-242`) is `_check`, the
+value riding along (`:256-261`). `__set__` (`:264-274`) is `_check`, the
 postprocess, one `path(obj)`, `_resolve`, `_put` when selecting, and
-`Mediator.swap`. The key is computed **once per access** (`:211-213`) and
+`Mediator.swap`. The key is computed **once per access** (`:241-243`) and
 its last segment passed down, never re-derived: a key function may read a
 served value pinned to the current step (`branched` reads the forward's
 branch variable as a step's first, pinned read, fact 4), and a second
@@ -241,9 +241,9 @@ what a tuple-returning module would need to rebuild its container
 
 ### Introspection
 
-- `path(obj)` (`:149-151`): the key for this host, the string or what the
+- `path(obj)` (`:159-161`): the key for this host, the string or what the
   function returns.
-- `inside_forward(obj=None)` (`:153-156`): a `source` segment on the path,
+- `inside_forward(obj=None)` (`:163-166`): a `source` segment on the path,
   leading `../` stripped first, or any function key (every function key in
   the tree names an operation). So `"source.dropout_add_0.input"` and
   `"../source.hidden_states_view_0.output"` both answer `True`, and
@@ -255,20 +255,20 @@ what a tuple-returning module would need to rebuild its container
 ## Availability
 
 `unavailable` is a reason string, or a predicate `f(envoy) -> str | None`.
-`reason(obj)` evaluates it on the *instance* (`:103-105`), so a checkpoint's
+`reason(obj)` evaluates it on the *instance* (`:113-115`), so a checkpoint's
 config decides (`needs_eager`, `components/attention.py:18-23`, reads
 `envoy._module.config._attn_implementation`) and so a hybrid can answer per
 block.
 
-- `_check` (`:107-118`) runs before every read and write. A reason raises
-  `Unavailable` (a `RuntimeError`, `:23-34`) naming `{obj.path}.{name}` and
+- `_check` (`:117-128`) runs before every read and write. A reason raises
+  `Unavailable` (a `RuntimeError`, `:21-32`) naming `{obj.path}.{name}` and
   the reason. A predicate that itself raises `AttributeError` is re-raised as
-  `RuntimeError("the availability check of ... failed: ...")` (`:110-116`),
+  `RuntimeError("the availability check of ... failed: ...")` (`:120-126`),
   because of fact 2: left alone, a typo in a predicate would surface as "no
   attribute `attention_probabilities`" and hide the predicate's own bug.
   Verified: a predicate reading `config.no_such_flag` raises
   `RuntimeError: the availability check of model.transformer.h.0.attn.probe failed: 'GPT2Config' object has no attribute 'no_such_flag'`.
-- `layout` and `dims` (`:122-145`) read the return annotation of the stub with
+- `layout` and `dims` (`:132-155`) read the return annotation of the stub with
   `typing.get_type_hints(func, include_extras=True)`. The annotation is one
   of the fourteen layout aliases, each defined in the file of the envoy that
   serves it (`Residual = Float[Tensor, "batch seq hidden"]` in `layer.py`,
@@ -281,7 +281,7 @@ block.
   annotated `-> Keys` has the identical layout. An inline `Float[Tensor, "..."]`
   resolves the same way (`expanded_keys` above). A `State | None` annotation
   (`LinearAttention.state_input`, which is `None` on a fresh prompt) is a
-  `types.UnionType`, so the non-`None` member is taken (`:137-138`). `dims` is
+  `types.UnionType`, so the non-`None` member is taken (`:147-148`). `dims` is
   `layout.dim_str.split()`. Verified:
   `LinearAttention.state_input.layout is State` and
   `LinearAttention.state_input.dims == ('batch', 'heads', 'key_dim', 'value_dim')`.
@@ -332,48 +332,20 @@ first, and `status()` (`:62-64`) maps each to its reason on this instance.
 
 ## `DerivedEProperty`: computed, read-only
 
-`DerivedEProperty(EProperty)` (`:328-351`) has no location: `__get__`
-(`:344-348`) runs `_check` then `compute(obj)`, which may read any number of
+`DerivedEProperty(EProperty)` (`eproperty.py:322-345`) has no location: `__get__`
+(`:338-342`) runs `_check` then `compute(obj)`, which may read any number of
 served values in forward order; `__set__` raises `AttributeError("... is
-derived and read-only")` (`:350-351`), which is the one place an
+derived and read-only")` (`:344-345`), which is the one place an
 `AttributeError` is right (it is the assignment that fails). `_preprocess`
-is set to `compute` (`:339`) **only** so that `layout` reads its return
+is set to `compute` (`:333`) **only** so that `layout` reads its return
 annotation; it is never called as a preprocess. `RecurrentMixer.states`
-(`recurrent.py:330-334`) is the one instance.
+(`recurrent.py:414-418`) is the one instance.
 
-## `branched`, `per_call`, `at_occurrence`
-
-A forward that branches fires a different op on each branch, and the value
-of the branch variable is itself served once per module call. Three helpers
-let a function key name the op that fires *on this call*:
-
-- `branched(variable, ops)` (`:282-305`) returns a key function: read
-  `getattr(envoy.source, variable).output` (a binding is an operation,
-  nnsight `source.py:26-31`) and look it up in `ops`. The read is cached
-  through `per_call`. `RecurrentMixer.KERNEL`, built in
-  `__init_subclass__` from a subclass's constants (`recurrent.py:238-243`),
-  is the one instance, and `kernel(attribute)` (`recurrent.py:186-193`) turns
-  it into the path `source.<kernel>.<attribute>` every kernel-located value
-  declares.
-- `per_call(envoy, key, compute)` (`:308-325`) caches `compute()` on the
-  envoy under `key`, telling calls apart by fact 4: the cache entry is
-  `(mediator, step, value)`; another mediator is another run; a pinned step
-  different from the cached one is a new call; a step that is `None`
-  (relaxed) counts as the step of the envoy's last pinned read, which
-  `per_call` records under the key `None`, so a value first computed after
-  the step's first read (a recurrent mixer's per-token offset read after
-  `state_input`) is this step's, not a stale entry from the step before. So inside `tracer.iter[:]` the first read of a step body
-  is pinned to that step and misses the cache, and every later read in the
-  same body is relaxed and hits it. Reading the variable as the step's first,
-  pinned read also keeps the kernel read sequential, which is what lets an op
-  that never fires on step 0 resolve on later steps (`:290-298`).
-- `at_occurrence(t)` (`recurrent.py:179-183`) is `Iterations()[t : t + 1]`: the
-  `for step in tracer.iter[t]` stretch as a value, so library code can pin
-  one occurrence of a location and have the pin restored afterwards
-  (`iterator.py:121-144`).
-
-[recurrent-mixer-internals.md](recurrent-mixer-internals.md) is where all
-three are used.
+A forward that branches names its op with a function key decided once per
+module call: `branched`, `per_call` and `at_occurrence` live in
+`nnter/components/recurrent.py`, and
+[recurrent-mixer-internals.md](recurrent-mixer-internals.md#once-per-call-branched-and-per_call)
+describes them.
 
 ## Where it lives
 
@@ -432,6 +404,6 @@ to say it otherwise")`, so an assignment cannot shadow it. It is what lets `falc
 ## Related
 
 - [architecture.md](architecture.md) — where the descriptors sit in the tree
-- [recurrent-mixer-internals.md](recurrent-mixer-internals.md) — `branched`, `per_call`, `at_occurrence` in use
+- [recurrent-mixer-internals.md](recurrent-mixer-internals.md) — function keys in use: `branched`, `per_call`, `at_occurrence`
 - [gotchas.md](gotchas.md)
 - nnsight `docs/developing/extending-envoy.md`, `docs/developing/source-internals.md`, `docs/developing/interleaver-internals.md`
