@@ -10,7 +10,7 @@ from nnsight.intervention.envoy import Envoy
 from jaxtyping import Float
 from torch import Tensor
 
-from .eproperty import EProperty, SourceEProperty
+from .eproperty import EProperty
 from .layer import Residual
 from .standard import Standard, first_tensor, rewrap
 
@@ -88,7 +88,7 @@ class Attention(Standard):
         """Why the shared attention interface does not run on this module, or ``None``."""
         return needs_eager(self)
 
-    @SourceEProperty(INTERFACE, attribute="inputs", select=1, description="The queries entering attention, [batch, heads, seq, head_dim]", unavailable=interface_reason)
+    @EProperty(f"source.{INTERFACE}.inputs", select=1, description="The queries entering attention, [batch, heads, seq, head_dim]", unavailable=interface_reason)
     def attention_queries(self, value: torch.Tensor) -> Queries:
         """The queries the attention interface receives, ``[batch, heads, seq, head_dim]``.
 
@@ -100,7 +100,7 @@ class Attention(Standard):
         """
         return value
 
-    @SourceEProperty(INTERFACE, attribute="inputs", select=2, description="The keys entering attention, [batch, kv_heads, seq, qk_head_dim]", unavailable=interface_reason)
+    @EProperty(f"source.{INTERFACE}.inputs", select=2, description="The keys entering attention, [batch, kv_heads, seq, qk_head_dim]", unavailable=interface_reason)
     def attention_keys(self, value: torch.Tensor) -> Keys:
         """The keys the attention interface receives, ``[batch, kv_heads, seq, qk_head_dim]``.
 
@@ -110,7 +110,7 @@ class Attention(Standard):
         """
         return value
 
-    @SourceEProperty(INTERFACE, attribute="inputs", select=3, description="The values entering attention, [batch, kv_heads, seq, head_dim]", unavailable=interface_reason)
+    @EProperty(f"source.{INTERFACE}.inputs", select=3, description="The values entering attention, [batch, kv_heads, seq, head_dim]", unavailable=interface_reason)
     def attention_values(self, value: torch.Tensor) -> Values:
         """The values the attention interface receives, ``[batch, kv_heads, seq, head_dim]``.
 
@@ -119,7 +119,7 @@ class Attention(Standard):
         """
         return value
 
-    @SourceEProperty(f"{INTERFACE}.source.nn_functional_softmax_0", attribute="input", description="The attention scores entering the softmax, masked, [batch, heads, query, key]", unavailable=interface_reason)
+    @EProperty(f"source.{INTERFACE}.source.nn_functional_softmax_0.input", description="The attention scores entering the softmax, masked, [batch, heads, query, key]", unavailable=interface_reason)
     def attention_scores(self, value: torch.Tensor) -> Pattern:
         """The scaled, masked scores entering the softmax, ``[batch, heads, query, key]``.
 
@@ -144,8 +144,8 @@ class Attention(Standard):
     def attention_output(self, value: torch.Tensor) -> Any:
         return rewrap(self, value)
 
-    @SourceEProperty(
-        f"{INTERFACE}.source.nn_functional_dropout_0",
+    @EProperty(
+        f"source.{INTERFACE}.source.nn_functional_dropout_0.output",
         description="The attention pattern the values are mixed with, [batch, heads, query, key]",
         unavailable=interface_reason,
     )
@@ -163,7 +163,7 @@ class Attention(Standard):
         """
         return value
 
-    @SourceEProperty(INTERFACE, attribute="output", select=0, description="The per-head outputs before the output projection, [batch, seq, heads, head_dim]", unavailable=interface_reason)
+    @EProperty(f"source.{INTERFACE}.output", select=0, description="The per-head outputs before the output projection, [batch, seq, heads, head_dim]", unavailable=interface_reason)
     def attention_head_outputs(self, value: torch.Tensor) -> HeadOutputs:
         """Each head's output before they are concatenated and projected, ``[batch, seq, heads, head_dim]``.
 

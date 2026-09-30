@@ -145,6 +145,9 @@ def test_family_defines_finish_logits_instead_of_the_softcap():
     plain = StandardizedTransformer(GPT2, dispatch=True)
     raw = torch.randn(1, 3, plain.vocab_size)
     hidden = torch.randn(1, 3, plain.hidden_size).to(plain.lm_head.weight)
+    from nnter.standardized import StandardizedCapability
+
+    assert isinstance(StandardizedTransformer.finish_logits, StandardizedCapability)
     assert torch.equal(model.finish_logits(raw), raw * 2)
     torch.testing.assert_close(model.project_on_vocab(hidden), plain.project_on_vocab(hidden) * 2)
     assert torch.equal(plain.finish_logits(raw), raw)  # no cap on GPT-2's config: the head's output as is

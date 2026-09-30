@@ -3,14 +3,14 @@ title: Gated DeltaNet Hybrids
 one_liner: The `linear_attn` values on Qwen3-Next and Qwen3.5 blocks, the two kernels a prompt and a decode step run, and the per-token recurrent state behind `route_delta_rule`.
 tags: [usage, hybrid, delta-net, linear-attention, state, qwen3_5_text, qwen3_next]
 related: [docs/usage/vocabulary.md, docs/usage/availability.md, docs/usage/layouts.md, docs/usage/attention-interior.md, docs/usage/generation.md, docs/usage/remote.md]
-sources: [nnter/components/linear_attention.py, nnter/components/eproperty.py, nnter/families/qwen3_5_text.py, nnter/families/qwen3_next.py, nnter/families/qwen3_5_moe_text.py, tests/families/test_qwen3_5_text.py]
+sources: [nnter/components/linear_attention.py, nnter/components/eproperty.py, nnter/families/qwen3_5_text.py, nnter/families/qwen3_next.py, nnter/families/qwen3_5_moe_text.py, nnter/families/olmo_hybrid.py, tests/families/test_qwen3_5_text.py]
 ---
 
 # Gated DeltaNet Hybrids
 
 ## What this is for
 
-Qwen3-Next, Qwen3.5 (text) and Qwen3.5-MoE (text) replace three blocks in four
+Qwen3-Next, Qwen3.5 (text), Qwen3.5-MoE (text) and OLMo-Hybrid replace three blocks in four
 with a gated DeltaNet mixer, `layers[i].linear_attn`. It projects queries,
 keys and values like attention but mixes them through a per-head recurrent
 state: each token decays the state by a learned gate, writes its key/value
@@ -61,7 +61,7 @@ block', 7: ..., ...}`. `model.status(layer=i)` is flat for one block.
 | `attention_queries`, `attention_keys` | what the delta rule receives: after the short convolution, the activation and the repeat to the value heads | `LinearQK`: `batch seq heads key_dim` |
 | `attention_values` | the values the delta rule receives | `LinearV`: `batch seq heads value_dim` |
 | `decays` | the gate: the log of how much of the state each token keeps; float32, non-positive | `Gates`: `batch seq heads` |
-| `betas` | how strongly each token's key/value pair is written into the state; in `(0, 1)` | `Gates`: `batch seq heads` |
+| `betas` | how strongly each token's key/value pair is written into the state; in `(0, 1)`, or `(0, 2)` on OLMo-Hybrid with `linear_allow_neg_eigval` (the released checkpoints) | `Gates`: `batch seq heads` |
 | `state_input` | the state the call starts from: `None` on a fresh prompt, the cached state on a decode step (a copy) | `State`: `batch heads key_dim value_dim` |
 | `state_output` | the state after the call's last token: what the next decode step starts from | `State`: `batch heads key_dim value_dim` |
 | `attention_head_outputs` | each head's read of the state, before the gated norm and the output projection | `LinearV`: `batch seq heads value_dim` |
@@ -71,7 +71,8 @@ is Gates`); `state` is a `State` and `states` a `States`, `batch seq heads key_d
 value_dim`. `heads` is the mixer's `num_v_heads` (the queries and keys are repeated up to
 it), `key_dim` its `head_k_dim` and `value_dim` its `head_v_dim`. The state is
 float32 in the torch kernels. Everything but `attention_output` is read at the
-delta-rule kernel call, so these are `SourceEProperty` values; assign to
+delta-rule kernel call, so these are `EProperty` values keyed inside the
+forward (`kernel("inputs")`, the kernel that fires on this call); assign to
 replace them, or edit in place (`mix.attention_head_outputs[:, -1] = 0`
 reaches the model). `state_input` is a clone of the cache's buffer: the cache
 hands the kernel its own tensor and overwrites it with the new state

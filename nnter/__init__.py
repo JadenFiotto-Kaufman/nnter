@@ -22,13 +22,13 @@ Each family under `nnter.families` says how its own names map onto those, and
 """
 
 from .components import (
-    Attention, DerivedEProperty, EProperty, Layer, LinearAttention, Mlp, RelativeEProperty, SourceEProperty, Standard,
+    Attention, DerivedEProperty, EProperty, Layer, LinearAttention, Mlp, Standard,
     Unavailable, branched, route_delta_rule, unavailable,
 )
 from .families import UnsupportedFamily
 from .standardized import StandardizedTransformer
 
 __all__ = [
-    "Attention", "DerivedEProperty", "EProperty", "Layer", "LinearAttention", "Mlp", "RelativeEProperty", "SourceEProperty", "Standard",
+    "Attention", "DerivedEProperty", "EProperty", "Layer", "LinearAttention", "Mlp", "Standard",
     "StandardizedTransformer", "Unavailable", "UnsupportedFamily", "branched", "route_delta_rule", "unavailable",
 ]

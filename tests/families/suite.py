@@ -13,7 +13,7 @@ from nnsight import TransformersModel  # nnsight before any transformers submodu
 from nnsight.intervention.envoy import Envoy
 
 from nnter import StandardizedTransformer, Unavailable
-from nnter.components import Attention, EProperty, Layer, LinearAttention, Mlp, SourceEProperty, Standard
+from nnter.components import Attention, EProperty, Layer, LinearAttention, Mlp, Standard
 
 PROMPT = "Hello world there"
 
@@ -322,7 +322,7 @@ class FamilySuite:
         status = model.status(layer=int(blocks[0].path.rsplit(".", 1)[1]))
         names = [
             name for name, attr in self.FAMILY.Attention.values().items()
-            if isinstance(attr, SourceEProperty) and status[f"self_attn.{name}"] is None
+            if attr.inside_forward() and status[f"self_attn.{name}"] is None
         ]
         assert "attention_probabilities" in names
         read = {}

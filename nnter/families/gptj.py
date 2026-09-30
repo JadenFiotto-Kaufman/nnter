@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 from transformers.models.gptj.modeling_gptj import GPTJAttention, GPTJBlock, GPTJMLP
 
 from ..components import (
-    Attention, HeadOutputs, Keys, Layer, Mlp, Pattern, Queries, SourceEProperty, Values, needs_eager, seq_first,
+    Attention, EProperty, HeadOutputs, Keys, Layer, Mlp, Pattern, Queries, Values, needs_eager, seq_first,
 )
 
 if TYPE_CHECKING:
@@ -44,23 +44,23 @@ class Attention(Attention):
     # takes the masked scores, and its first return is the head outputs, heads
     # first.
 
-    @SourceEProperty("self__attn_0", attribute="inputs", select=0, description=Attention.attention_queries.description, unavailable=needs_eager)
+    @EProperty("source.self__attn_0.inputs", select=0, description=Attention.attention_queries.description, unavailable=needs_eager)
     def attention_queries(self, value) -> Queries:
         return value
 
-    @SourceEProperty("self__attn_0", attribute="inputs", select=1, description=Attention.attention_keys.description, unavailable=needs_eager)
+    @EProperty("source.self__attn_0.inputs", select=1, description=Attention.attention_keys.description, unavailable=needs_eager)
     def attention_keys(self, value) -> Keys:
         return value
 
-    @SourceEProperty("self__attn_0", attribute="inputs", select=2, description=Attention.attention_values.description, unavailable=needs_eager)
+    @EProperty("source.self__attn_0.inputs", select=2, description=Attention.attention_values.description, unavailable=needs_eager)
     def attention_values(self, value) -> Values:
         return value
 
-    @SourceEProperty("self__attn_0.source.nn_functional_softmax_0", attribute="input", description=Attention.attention_scores.description, unavailable=needs_eager)
+    @EProperty("source.self__attn_0.source.nn_functional_softmax_0.input", description=Attention.attention_scores.description, unavailable=needs_eager)
     def attention_scores(self, value) -> Pattern:
         return value
 
-    @SourceEProperty("self__attn_0", attribute="output", select=0, description=Attention.attention_head_outputs.description, unavailable=needs_eager)
+    @EProperty("source.self__attn_0.output", select=0, description=Attention.attention_head_outputs.description, unavailable=needs_eager)
     def attention_head_outputs(self, value) -> HeadOutputs:
         return seq_first(value)
 
@@ -68,8 +68,8 @@ class Attention(Attention):
     def attention_head_outputs(self, value):
         return seq_first(value)
 
-    @SourceEProperty(
-        "self__attn_0.source.self_attn_dropout_0",
+    @EProperty(
+        "source.self__attn_0.source.self_attn_dropout_0.output",
         description="The attention pattern the values are mixed with, [batch, heads, query, key]",
         unavailable=needs_eager,
     )

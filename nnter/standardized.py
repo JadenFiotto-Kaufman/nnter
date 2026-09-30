@@ -13,7 +13,7 @@ from nnsight.modeling.transformers import TransformersModel
 from torch import Tensor
 
 from . import families
-from .components import EProperty, Layer, RelativeEProperty, Residual, Standard
+from .components import EProperty, Layer, Residual, Standard
 
 #: The layouts of the root's values: the logits, the next-token distribution at the last position, and one
 #: integer per token (``input_ids``, ``attention_mask``).
@@ -47,6 +47,31 @@ class StandardizedProperty:
 
     def __set__(self, obj: Any, value: Any) -> None:
         raise AttributeError(f"{self.name} is read off the config; a family defines `def {self.name}(model)` to say it otherwise")
+
+
+class StandardizedCapability:
+    """A method of the model that a family may define instead.
+
+    `StandardizedProperty` for a method: on attribute access, a function of
+    the same name in the model's family module (``def finish_logits(model,
+    raw): ...`` in ``cohere.py``) is bound in place of the standard
+    implementation, so a family whose model does something of its own keeps
+    that beside its names and values, and the implementation here stays the
+    plain case.
+    """
+
+    def __init__(self, func: Callable[..., Any]) -> None:
+        self.func = func
+        functools.update_wrapper(self, func)
+
+    def __set_name__(self, owner: type, name: str) -> None:
+        self.name = name
+
+    def __get__(self, obj: Any, owner: type | None = None) -> Any:
+        if obj is None:
+            return self
+        override = getattr(obj.family, self.name, None)
+        return functools.partial(override if override is not None else self.func, obj)
 
 
 class StandardizedTransformer(TransformersModel):
@@ -89,7 +114,8 @@ class StandardizedTransformer(TransformersModel):
     sizes ``num_layers``, ``num_heads``, ``num_kv_heads``, ``head_dim``,
     ``qk_head_dim``, ``hidden_size``, ``intermediate_size`` and ``vocab_size``,
     read off the config, each a `StandardizedProperty` the family can define
-    instead.
+    instead; `finish_logits` is a `StandardizedCapability`, a method the family
+    can define the same way.
 
     Attributes:
         family: The toolkit module the checkpoint resolved to.
@@ -164,7 +190,7 @@ class StandardizedTransformer(TransformersModel):
         output.logits = value
         return output
 
-    @RelativeEProperty("embed_tokens.output", description="The token embeddings entering the first block, [batch, seq, hidden]")
+    @EProperty("embed_tokens.output", description="The token embeddings entering the first block, [batch, seq, hidden]")
     def token_embeddings(self, value: torch.Tensor) -> Residual:
         """The embedding module's output, ``[batch, seq, hidden]``.
 
@@ -239,6 +265,7 @@ class StandardizedTransformer(TransformersModel):
         """
         return self.finish_logits(self.lm_head(self.norm(hidden)))
 
+    @StandardizedCapability
     def finish_logits(self, raw: torch.Tensor) -> torch.Tensor:
         """What the model does to ``lm_head``'s output to make its logits: the final softcapping, if any.
 
@@ -246,12 +273,9 @@ class StandardizedTransformer(TransformersModel):
         own config; a multimodal checkpoint's ``text_config``). A family whose
         model does something else after the head (Cohere multiplies by
         ``logit_scale``, Granite divides by ``logits_scaling``) defines
-        ``def finish_logits(model, raw)`` in its module, which wins, like a
-        size (`StandardizedProperty`).
+        ``def finish_logits(model, raw)`` in its module, which is bound in
+        its place (`StandardizedCapability`).
         """
-        override = getattr(self.family, "finish_logits", None)
-        if override is not None:
-            return override(self, raw)
         cap = getattr(self.config.get_text_config(), "final_logit_softcapping", None)
         return cap * torch.tanh(raw / cap) if cap else raw
 
@@ -339,7 +363,7 @@ class StandardizedTransformer(TransformersModel):
 
     # -- the input (inside a trace) ----------------------------------------------
 
-    @EProperty(key="input", description="The token ids the model was called with, [batch, seq]")
+    @EProperty(key="inputs", description="The token ids the model was called with, [batch, seq]")
     def input_ids(self, value: Any) -> Tokens:
         """The token ids the model was called with, ``[batch, seq]``. Assign to run the model on other ids."""
         return value[1]["input_ids"]
@@ -349,7 +373,7 @@ class StandardizedTransformer(TransformersModel):
         args, kwargs = self.inputs
         return args, {**kwargs, "input_ids": value}
 
-    @EProperty(key="input", description="The attention mask the model was called with, [batch, seq]; zeros are padding")
+    @EProperty(key="inputs", description="The attention mask the model was called with, [batch, seq]; zeros are padding")
     def attention_mask(self, value: Any) -> Tokens:
         """The attention mask the model was called with, ``[batch, seq]``; zeros are padding. Assignable."""
         return value[1]["attention_mask"]
@@ -359,7 +383,7 @@ class StandardizedTransformer(TransformersModel):
         args, kwargs = self.inputs
         return args, {**kwargs, "attention_mask": value}
 
-    @EProperty(key="input", description="[batch, seq] of the current call; read-only")
+    @EProperty(key="inputs", description="[batch, seq] of the current call; read-only")
     def input_size(self, value: Any) -> torch.Size:
         """``[batch, seq]`` of the current call, from the ids; read-only."""
         return value[1]["input_ids"].shape

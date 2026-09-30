@@ -10,7 +10,7 @@ sources: [nnter/components/linear_attention.py, nnter/components/eproperty.py, n
 
 ## What this is for
 
-`LinearAttention` (`nnter/components/linear_attention.py:112-310`) is the
+`LinearAttention` (`nnter/components/linear_attention.py:133-331`) is the
 envoy on a hybrid's gated DeltaNet mixer (`linear_attn` on Qwen3-Next,
 Qwen3.5 and Qwen3.5-MoE text). Its values live at a kernel call inside the
 mixer's forward, and that forward has three properties the softmax
@@ -78,11 +78,13 @@ and return `(core_attn_out, last_recurrent_state)`. nnsight names them
 and the binding `use_precomputed_states_0` (a binding is an op,
 nnsight `source.py:26-31`).
 
-- `CHUNK_KERNEL` / `RECURRENT_KERNEL` (`linear_attention.py:144-146`) are
+- `CHUNK_KERNEL` / `RECURRENT_KERNEL` (`linear_attention.py:165-167`) are
   those two names.
 - `KERNEL = branched("use_precomputed_states_0", {False: CHUNK_KERNEL, True:
-  RECURRENT_KERNEL})` (`:148`) is the `op` every kernel-located value is
-  declared with (`attention_queries` … `state_output`, `:161-205`). At read
+  RECURRENT_KERNEL})` (`:169`) is the branch every kernel-located value is
+  declared on, through `kernel(attribute)` (`:123-130`), a key function
+  returning `source.<kernel>.<attribute>` (`attention_queries` …
+  `state_output`, `:182-226`). At read
   time it reads the binding's `.output` on this call and picks the name
   ([eproperty-internals.md](eproperty-internals.md), `branched`). The choice
   is cached per call by `per_call`, so the eight values read in one step ask
@@ -90,9 +92,9 @@ nnsight `source.py:26-31`).
 - `KERNEL` is a plain function stored on the class, so through an instance
   it is a bound method: `self.KERNEL(self)`, the spelling the declarations
   suggest, passes the envoy twice and raises. Every call site spells it
-  `type(self).KERNEL(self)` (`:219`, `:252`, `:264`), the function applied to
-  the envoy, which is what the `SourceEProperty` declarations do with it (they
-  receive the function itself, before it is a class attribute).
+  `type(self).KERNEL(self)` (`:127`, `:240`, `:273`, `:285`), the function
+  applied to the envoy, which is what `kernel()` does with it (it receives
+  the function itself, before it is a class attribute).
 
 Each decode step under `generate` is one forward over one token: the
 kernel's inputs then have sequence length 1, `state_input` is the cached
@@ -108,7 +110,7 @@ and afterwards `cache_params.update_recurrent_state(last_recurrent_state,
 (`transformers/cache_utils.py:1091-1093`, "Update the linear attention
 cache in-place"). A saved `state_input` that held the live tensor would read
 as this step's *output* by the time the trace ends, so the preprocess
-returns `value.clone()` (`linear_attention.py:186-195`). Assigning replaces
+returns `value.clone()` (`linear_attention.py:207-216`). Assigning replaces
 what the step starts from; the clone only affects reads.
 
 ## Optimized kernels have no source
@@ -122,14 +124,14 @@ binds the module-level name to a `wrapped` closure whose nonlocals are
 `flash-linear-attention` function when that package is installed, else
 `torch_function` again).
 
-- `needs_torch_kernels` (`linear_attention.py:79-93`) is the `unavailable`
+- `needs_torch_kernels` (`linear_attention.py:90-104`) is the `unavailable`
   predicate of every kernel-located value: it reads each bound name's
   closure with `inspect.getclosurevars(bound).nonlocals` and refuses when
   `implementation is not torch_function`. A compiled kernel has no Python
   source, so `.source` could not drill into it (nnsight `source.py:364-374`,
   `compiled` raises `SourceNotAvailable` for a callable without `__code__`).
   The status text says to uninstall the package.
-- `_delta_rule_loop` (`:23-35`) is the same inspection, here to *find* the
+- `_delta_rule_loop` (`:34-46`) is the same inspection, here to *find* the
   pure-torch token loop: the `torch_function` in the closure of the name
   `RECURRENT_KERNEL` refers to, or the name's own binding when it is already
   a plain function.
@@ -141,17 +143,17 @@ Only the recurrent kernel has a per-token state. Its loop
 token, decay at `:484` and update at `:489`; with the two bindings before
 the loop (`:474`, `:476`) the post-update binding is the **fourth**
 `last_recurrent_state` in the function, so `STATE_OP =
-"last_recurrent_state_3"` (`linear_attention.py:150`) fires once per token.
+"last_recurrent_state_3"` (`linear_attention.py:171`) fires once per token.
 The chunk kernel binds the same name four times too (`:407`, `:409`, `:425`
 inside the chunk loop, `:428`), so `last_recurrent_state_3` exists there as
 well, but it is the single final binding, not a per-token one; that is why
-`state` and `states` are guarded by `needs_recurrent_routing` (`:96-110`)
+`state` and `states` are guarded by `needs_recurrent_routing` (`:107-120`)
 rather than by the op resolving.
 
-`route_delta_rule(family, kernel)` (`:51-76`) is how a prompt runs through
+`route_delta_rule(family, kernel)` (`:62-87`) is how a prompt runs through
 the loop:
 
-- `_mixer_module(family)` (`:38-48`) finds the transformers modeling module
+- `_mixer_module(family)` (`:49-59`) finds the transformers modeling module
   from the family's `ENVOYS` entry whose envoy subclasses `LinearAttention`
   (or takes a modeling module directly).
 - The module's original bindings of both kernel names are stashed once in
@@ -181,8 +183,9 @@ say so (`:59-61`); the tests route, load, trace, and restore in a `finally`
 
 ## Occurrence arithmetic
 
-`state` is a `SourceEProperty` at `{kernel}.source.last_recurrent_state_3`
-(`:222-235`), a location with one occurrence per token, so nnsight's own
+`state` is an `EProperty` whose key function returns
+`source.{kernel}.source.last_recurrent_state_3.output` (`:243-256`), a
+location with one occurrence per token, so nnsight's own
 `tracer.iter` walks it: `for t in tracer.iter[:n]: mix.state` reads the
 state after every prompt token, `tracer.iter[4]` the one after token 4, and
 an assignment there is a write the following tokens continue from
@@ -190,14 +193,14 @@ an assignment there is a write the following tokens continue from
 `set_state_after` are the same location addressed by index, and need three
 numbers.
 
-- **Which kernel.** `_token_state_op` (`:209-220`) is `state`'s op function.
+- **Which kernel.** `_token_state_op` (`:231-241`) is `state`'s key function.
   Unpinned or pinned to 0 it calls `type(envoy).KERNEL(envoy)` like every
   other value, so a call-level read after a token loop still finds the
   branch decided (cached). Pinned to a *later* token it cannot read the
   branch variable, which fires once per call and whose occurrence 0 is
   already past, so it takes `CHUNK_KERNEL`: the prompt's kernel, the only
   one a token loop walks.
-- **Where this call starts.** `_call` (`:237-256`) computes, once per call
+- **Where this call starts.** `_call` (`:258-277`) computes, once per call
   through `per_call`, `(seq, first)`: `seq` is `attention_queries.shape[1]`,
   and `first` is `Mediator.current(location).occurrence(location)` for the
   state op's `.output` location. The trick is *when* it is read. Reading the
@@ -210,18 +213,18 @@ numbers.
   *k* − 1: the canonical pattern's `[0, 0, 1]`. The prompt's tokens are under
   the chunk kernel's op, a different location, so they do not offset a
   decode step.
-- **Reading position `t`.** `_states` (`:267-276`) loops `for t in
+- **Reading position `t`.** `_states` (`:288-297`) loops `for t in
   range(seq): for _ in at_occurrence(first + t): states.append(op.output)`
-  and stacks on axis 1; `state_after(t)` (`:292-298`) reads one; `set_state_after`
-  (`:300-310`) writes one. `at_occurrence(i)` is `Iterations()[i:i+1]`
-  (`eproperty.py:340-344`): it pins the mediator to occurrence `i` for the
+  and stacks on axis 1; `state_after(t)` (`:313-319`) reads one; `set_state_after`
+  (`:321-331`) writes one. `at_occurrence(i)` is `Iterations()[i:i+1]`
+  (`eproperty.py:353-357`): it pins the mediator to occurrence `i` for the
   body and restores the previous pin after (nnsight `iterator.py:121-144`).
   The first hit relaxes the mediator (`interleaver.py:478-483`), which is why
   `_call` must have parked at the call's start before the loop begins;
-  `_token_op` (`:261-265`) reuses `_call`'s numbers so a second per-token
+  `_token_op` (`:282-286`) reuses `_call`'s numbers so a second per-token
   read in the same call does not re-ask.
-- `states` is a `DerivedEProperty` (`:281-285`): read-only, a stack of the
-  per-occurrence reads. `_require_state` (`:287-290`) gives `state_after` and
+- `states` is a `DerivedEProperty` (`:302-306`): read-only, a stack of the
+  per-occurrence reads. `_require_state` (`:308-311`) gives `state_after` and
   `set_state_after` the same `Unavailable` a read of `state` would raise.
 
 Reads follow the forward: in one trace, positions before a write come
@@ -268,7 +271,7 @@ on `yujiepan/qwen3.5-tiny-random` with the printed `[0, 0, 1]`.
 
 ## Related
 
-- [eproperty-internals.md](eproperty-internals.md) — `branched`, `per_call`, `at_occurrence`, `_drill_relaxed`
+- [eproperty-internals.md](eproperty-internals.md) — `branched`, `per_call`, `at_occurrence`, `_drill` and the relaxed mediator
 - [gotchas.md](gotchas.md)
 - [testing.md](testing.md) — the hybrid test files
 - nnsight `docs/usage/iter-all-next.md` — `tracer.iter` semantics; `docs/developing/interleaver-internals.md` — occurrences

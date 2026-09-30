@@ -66,7 +66,7 @@ The `TransformersModel` argument mapping module types (or native paths, never al
 
 ## eproperty
 
-nnsight's descriptor for a served value: reading it parks the intervention until the model reaches its location, writing it replaces the value there, and it appears in the envoy's repr with its description. nnter's `EProperty` adds availability; `SourceEProperty`, `RelativeEProperty` and `DerivedEProperty` change where the value comes from. See [../developing/eproperty-internals.md](../developing/eproperty-internals.md) and nnsight `docs/developing/extending-envoy.md`.
+nnsight's descriptor for a served value: reading it parks the intervention until the model reaches its location, writing it replaces the value there, and it appears in the envoy's repr with its description. nnter's `EProperty` adds availability and a path for a key (`output`, `../norm.output`, `source.<op>.inputs`), so one descriptor serves a value wherever it lives; `DerivedEProperty` computes one instead. See [../developing/eproperty-internals.md](../developing/eproperty-internals.md) and nnsight `docs/developing/extending-envoy.md`.
 
 ## Family
 
@@ -106,7 +106,7 @@ nnsight's count of how many times a run has reached one location; each visit is 
 
 ## Operation, op
 
-One call or assignment inside a module's forward as nnsight's `.source` names it: `nn_functional_softmax_0`, `attn_weights_1`, `torch_chunk_gated_delta_rule_0`; `<callable>_<n>` for the n-th call, `<name>_<n>` for the n-th binding. A `SourceEProperty`'s `op` is a dotted path of these, with `.source.` between a call and an op inside it. See [../extending/finding-source-ops.md](../extending/finding-source-ops.md) and nnsight `docs/usage/source.md`.
+One call or assignment inside a module's forward as nnsight's `.source` names it: `nn_functional_softmax_0`, `attn_weights_1`, `torch_chunk_gated_delta_rule_0`; `<callable>_<n>` for the n-th call, `<name>_<n>` for the n-th binding. An `EProperty`'s key names one after a `source` segment, with another `source` between a call and an op inside it (`source.attention_interface_1.source.nn_functional_softmax_0.output`). See [../extending/finding-source-ops.md](../extending/finding-source-ops.md) and nnsight `docs/usage/source.md`.
 
 ## Parallel block
 
@@ -114,7 +114,7 @@ A block where one norm's output feeds both sublayers and `x + attn(norm(x)) + ml
 
 ## Pinned read, relaxed read
 
-Inside `for t in tracer.iter[t]:` a read is *pinned* to occurrence `t` of its location; a read outside any `tracer.iter`, or after a step body's first read, is *relaxed* and takes the occurrence in flight. `SourceEProperty` drills into a call relaxed, so the callee resolves from the live call even when the value read that follows is pinned to a token. See [../developing/eproperty-internals.md](../developing/eproperty-internals.md) and [../developing/linear-attention-internals.md](../developing/linear-attention-internals.md).
+Inside `for t in tracer.iter[t]:` a read is *pinned* to occurrence `t` of its location; a read outside any `tracer.iter`, or after a step body's first read, is *relaxed* and takes the occurrence in flight. An `EProperty` drills into a call relaxed, so the callee resolves from the live call even when the value read that follows is pinned to a token. See [../developing/eproperty-internals.md](../developing/eproperty-internals.md) and [../developing/linear-attention-internals.md](../developing/linear-attention-internals.md).
 
 ## Recurrent state
 
@@ -146,7 +146,7 @@ Gemma-2's `final_logit_softcapping`: `cap * tanh(logits / cap)` applied after `l
 
 ## Source-located value
 
-A `SourceEProperty`: a standard value read at an operation inside a forward through nnsight `.source`, drilled into before every read or write because an operation inside a called function exists only once someone has drilled into that call in the current run. `attention_probabilities` and the whole attention interior are ones. See [../extending/finding-source-ops.md](../extending/finding-source-ops.md) and nnsight `docs/usage/source.md`.
+A value whose `EProperty` path has a `source` segment (`inside_forward()`): a standard value read at an operation inside a forward through nnsight `.source`, drilled into before every read or write because an operation inside a called function exists only once someone has drilled into that call in the current run. `attention_probabilities` and the whole attention interior are ones. See [../extending/finding-source-ops.md](../extending/finding-source-ops.md) and nnsight `docs/usage/source.md`.
 
 ## Standard name
 

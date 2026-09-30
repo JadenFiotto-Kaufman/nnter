@@ -16,11 +16,12 @@ with model.trace("The Eiffel Tower is in"):
 
 The same block runs unchanged on `meta-llama/Llama-3.1-8B`,
 `EleutherAI/pythia-70m-deduped`, and every other registered family: GPT-2,
-Llama, GPT-NeoX, Mistral, Mixtral, Qwen2, Qwen2-MoE, Qwen3, Qwen3-MoE, Gemma,
-Gemma-2, Gemma-3 (text), GPT-OSS, DeepSeek-V2, DeepSeek-V3, DBRX, Phi, Phi-3,
-OLMo, OLMo-2, OLMo-3, SmolLM3, StableLM, Cohere (Command-R), Cohere-2, Granite, GPT-J, BLOOM, MPT, Falcon (7B and 40B
-layouts), OPT, and the gated DeltaNet hybrids Qwen3-Next, Qwen3.5 and
-Qwen3.5-MoE (text), on transformers 5.17. The vocabulary is Llama's block names, with the containers
+Llama, Llama 4 (text), GPT-NeoX, Mistral, Mixtral, MiniMax-M2, Qwen2, Qwen2-MoE, Qwen3, Qwen3-MoE, Gemma,
+Gemma-2, Gemma-3 (text), GPT-OSS, DeepSeek-V2, DeepSeek-V3, DeepSeek-V3.2, GLM-4.5/4.6,
+GLM-4.7-Flash, GLM-5, DBRX, Phi, Phi-3,
+OLMo, OLMo-2, OLMo-3, OLMoE, EXAONE 4.0, SmolLM3, StableLM, Cohere (Command-R), Cohere-2, Granite, GPT-J, BLOOM, MPT, Falcon (7B and 40B
+layouts), OPT, and the gated DeltaNet hybrids Qwen3-Next, Qwen3.5,
+Qwen3.5-MoE (text) and OLMo-Hybrid, on transformers 5.17. The vocabulary is Llama's block names, with the containers
 lifted out of the inner `.model`:
 
 | standard name                              | GPT-2                     | Llama                   | GPT-NeoX                          |
@@ -136,25 +137,29 @@ through nnsight's `.source`, so it needs the eager attention path: load with
 `attn_implementation="eager"`, or the value is unavailable (`status()` says so,
 and a read raises `Unavailable` naming the implementation the model runs).
 
-It is a `nnter.components.SourceEProperty`, an `eproperty` subclass for values that
-live inside a forward. An operation inside a called function only exists once
-someone has drilled into that call in the *current* run (the interleaver
-resolves the callee from the live value and clears what it built at the start
-of every trace), so the descriptor walks `.source` before every read or write,
-then serves the location as an ordinary eproperty.
+Its key is a path into the forward,
+`"source.attention_interface_1.source.nn_functional_dropout_0.output"`. An
+operation inside a called function only exists once someone has drilled into
+that call in the *current* run (the interleaver resolves the callee from the
+live value and clears what it built at the start of every trace), so the
+descriptor walks the path before every read or write, then serves the
+location as an ordinary eproperty.
 
-`nnter.components` holds `Layer`, `Attention`, `Mlp` and two descriptors:
-`SourceEProperty` for a value at an operation inside the forward, and
-`RelativeEProperty` for a value produced by another module named relative to
-this one (a sandwich block's post-sublayer norm, the root's embedding). Each family subclasses the three envoys,
+`nnter.components` holds `Layer`, `Attention`, `Mlp` and one descriptor,
+`EProperty`, whose key is a path from the host envoy: `"output"` for the
+host's own output, `"../post_attention_layernorm.output"` or
+`"embed_tokens.output"` for a value produced by another module named relative
+to this one (a sandwich block's post-sublayer norm, the root's embedding), and
+`"source.<op>.output"` for an operation inside the forward. Each family subclasses the three envoys,
 overriding only what its forward spells differently, and keys them on its own
 transformers module types in its `ENVOYS` (`envoys=` matches by type or native
 path, never by alias). Three shapes of override exist today:
 
 - **sandwich norms** (Gemma-2/3, OLMo-2): the contributions are the
-  post-attention and post-feedforward norms' outputs, via `RelativeEProperty`;
+  post-attention and post-feedforward norms' outputs, via a `../` path to the
+  sibling norm;
 - **residual added inside the module** (BLOOM both sublayers, MPT's MLP): the
-  contribution is the operation before the add, via `SourceEProperty`, reading
+  contribution is the operation before the add, via a `source.` path, reading
   `dropout_add`'s first argument or the dropout's output;
 - **own attention arithmetic** (GPT-J, BLOOM, MPT, Falcon): the pattern and the
   interior values are that family's own operations rather than the shared
@@ -392,7 +397,7 @@ the reverse order segfaults at import; a plain `import transformers` first is fi
 HF_HUB_OFFLINE=1 pytest
 ```
 
-One file per family under `tests/families/` (34 families, 35 checkpoints), each subclassing `FamilySuite`
+One file per family under `tests/families/` (43 families, 44 checkpoints), each subclassing `FamilySuite`
 (`tests/families/suite.py`) with its pinned tiny checkpoint, native paths and
 quirks, plus the tests that are specific to it. The suite is every end-to-end
 statement a family must satisfy: aliases reach the native modules; every

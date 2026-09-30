@@ -61,6 +61,7 @@ family; the block keys only where a block spells a sublayer otherwise:
 | family | containers | block-level aliases |
 | --- | --- | --- |
 | Llama, Mistral, Qwen2/3, Gemma-1/2/3, Phi-3, OLMo, DeepSeek, GPT-OSS, hybrids | `model.{embed_tokens, layers, norm}` | none needed |
+| Llama 4 (text) | `model.{embed_tokens, layers, norm}`; `language_model.model.{embed_tokens, layers, norm}` and `language_model.lm_head` on a `Llama4ForConditionalGeneration` module | `feed_forward` -> `mlp` |
 | GPT-2 | `transformer.{wte, h, ln_f}` | `attn` -> `self_attn`, `ln_1` -> `input_layernorm`, `ln_2` -> `post_attention_layernorm` |
 | GPT-J | `transformer.{wte, h, ln_f}` | `attn` -> `self_attn`, `ln_1` -> `input_layernorm` |
 | GPT-NeoX | `gpt_neox.{embed_in, layers, final_layer_norm}` | `attention` -> `self_attn`; `embed_out` -> `lm_head` |
@@ -115,7 +116,7 @@ with model.trace(prompt):
 
 ## Blocks without one of the modules
 
-A hybrid (Qwen3-Next, Qwen3.5, Qwen3.5-MoE text) has `linear_attn` on three blocks in
+A hybrid (Qwen3-Next, Qwen3.5, Qwen3.5-MoE text, OLMo-Hybrid) has `linear_attn` on three blocks in
 four and `self_attn` on the fourth, never both. Decide which blocks have which outside the
 trace:
 

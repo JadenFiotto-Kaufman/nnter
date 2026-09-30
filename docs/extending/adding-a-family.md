@@ -235,8 +235,9 @@ unused by the model (an all-MoE family's experts).
 `project_on_vocab` is `finish_logits(lm_head(norm(hidden)))`, and the root's
 `finish_logits(raw)` applies the text config's `final_logit_softcapping` when it is set.
 A family whose model does something else to the head's output defines
-`def finish_logits(model, raw)` in its module, which wins the same way a size does, so the
-logit lens on the last block still equals `logits`:
+`def finish_logits(model, raw)` in its module, which is bound in the root's place the way a
+size function is (`finish_logits` is a `StandardizedCapability`, `StandardizedProperty` for a
+method), so the logit lens on the last block still equals `logits`:
 
 ```python
 # nnter/families/cohere.py
@@ -371,7 +372,7 @@ is the block's tensor; the contribution identity `input + attention_output + mlp
 == layer_output` holds on every block; `self_attn.input` and `mlp.input` equal the
 family's own norms' outputs; the standardized model equals a raw `TransformersModel`;
 boundary writes move the logits; the pattern has the right shape, dtype, row sums and
-causal mask; a written pattern moves the logits; every `SourceEProperty` resolves on every
+causal mask; a written pattern moves the logits; every value inside a forward resolves on every
 attention block; the interior's shapes, causal writes and in-place edits; `skip_layers`,
 `steer`, `project_on_vocab`; every value's tensor matches its layout annotation (the
 name the base carries, imported from `..components`: `Residual`, `Pattern`, ...); the
@@ -424,6 +425,6 @@ into the package and the `register()` line removed.
 
 - [overriding-values.md](overriding-values.md): what to write in the subclasses when the base does not hold.
 - [custom-values.md](custom-values.md): adding a value the base classes do not have.
-- [finding-source-ops.md](finding-source-ops.md): discovering the operation names a `SourceEProperty` needs.
+- [finding-source-ops.md](finding-source-ops.md): discovering the operation names a `source.` path needs.
 - [registering.md](registering.md): a family outside the package, or overriding a shipped one.
 - nnsight docs/usage/rename-modules.md: the alias rules `RENAME` relies on.
