@@ -50,6 +50,9 @@ everywhere. Everything nnsight does (`trace`, `generate`, `.save()`, `tracer.ite
 - [docs/usage/delta-net.md](docs/usage/delta-net.md) — `linear_attn` values; `route_kernels(model.family, "torch")` for the per-token `state`/`states`
 - [docs/patterns/delta-net-state.md](docs/patterns/delta-net-state.md) — patch and track the state
 
+### "Mamba / Falcon-Mamba / Jamba: the selective scan, the state-space state"
+- [docs/usage/selective-scan.md](docs/usage/selective-scan.md) — `linear_attn` on a Mamba-1 mixer (`SelectiveScan`): `C`/`B`/`x` as queries/keys/values, `betas` = `dt`, `decays` = `dt * A`; `route_kernels(model.family, "torch")` before the first trace
+
 ### "Mamba-2 / Nemotron-H / Bamba / Falcon-H1: the state-space mixer"
 - [docs/usage/state-space.md](docs/usage/state-space.md) — `linear_attn` is a `StateSpace`: `C`/`B`/`x` as queries/keys/values, `dt` as `betas`; `route_kernels(model.family, "torch")` when `mamba_ssm` is installed; `nnter.chunk_per_token(model)` for the state after every token (`states`, `state_after`); `betas`/`decays` assignable
 
@@ -109,6 +112,7 @@ everywhere. Everything nnsight does (`trace`, `generate`, `.save()`, `tracer.ite
 - **An out-of-order read of a source-located value does not raise**: the block is cut short with a `UserWarning` and later names are unbound. If a saved name is missing, look for that warning.
 - **GPT-2 and MPT queries/keys/values are split views**: assign, do not edit in place. Falcon's `mlp_output` is a copy carried back by a transform; both in-place and assignment reach the model.
 - **DeltaNet per-token state needs `nnter.route_kernels(model.family, "torch")` (or `route_delta_rule(model.family, "recurrent")`) before the first trace of a linear block**; write the state by assignment from a tensor you already hold (a token's `state` is served once, so reading it and then assigning it in the same `tracer.iter` step cuts the block), never in place.
+- **Mamba-1 families (Mamba, Falcon-Mamba, Jamba) need `nnter.route_kernels(model.family, "torch")` before the first trace** when `mamba_ssm` is installed: its CUDA kernels have no source and do not run on CPU. In a decode step the state (`state_output`) comes before `attention_head_outputs`; in the prompt's scan, after.
 - **`envoys=` keys match by module type or native path, never by alias**; to displace a family's envoy, key yours on the type.
 - **Import nnter (or nnsight) before any `transformers.models...` module**; the reverse order segfaults on this stack.
 - **Every snippet in `docs/` ran against the tiny checkpoints in `tests/families/`**; when a page and the code disagree, the suite is the arbiter: `HF_HUB_OFFLINE=1 pytest tests/families/test_<family>.py`.

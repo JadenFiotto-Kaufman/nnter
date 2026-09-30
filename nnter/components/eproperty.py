@@ -70,7 +70,8 @@ class EProperty(eproperty):
             with the first element selected. A function of the host returning
             one of those (or ``None``, the whole value) selects per access, for
             a value whose position differs between the calls a forward branches
-            to (`StateSpace`'s two kernels).
+            to (`SelectiveScan`'s prompt and decode kernels, `StateSpace`'s
+            two kernels).
 
     The location is served by nnsight the way any eproperty's is, whatever the
     path: a module's output, a sibling norm's, or an operation's arguments,
@@ -352,18 +353,45 @@ def per_call(envoy: Envoy, key: str, compute: Callable[[], Any]) -> Any:
     For a served value several reads in one call depend on, when the model
     serves it once: the branch a forward takes, the sequence length of a call.
     A call is told apart by the worker's mediator and its step (see
-    `branched`): a pinned step different from the cached one is a new call, a
-    relaxed one the same call, another mediator another run.
+    `branched`): a pinned step different from the cached one is a new call,
+    another mediator another run. A relaxed read counts as the step of the
+    envoy's last pinned one, so a value first computed after the step's
+    first read (a DeltaNet's per-token offset, read after ``state_input``)
+    is not the previous step's.
+
+    A step whose first read is not a value of this envoy (the module's own
+    ``.input``) relaxes the pin before any value here is read, so the record
+    also carries how many of the module's calls had returned when it was
+    made, and a relaxed read that finds more is a new call. A read pinned to
+    a later step can run before the previous call has returned; its count is
+    taken once ``compute()`` has parked into the call, or, when it did not,
+    from the call's next relaxed read.
     """
     from nnsight.intervention.interleaver import Mediator
 
     mediator = Mediator.current(key)
-    step = mediator.iteration
+    pinned = step = mediator.iteration
+    calls = f"{envoy.path}.output"  # passed once per call, after every value read inside it
     cache = envoy.__dict__.setdefault("_per_call", {})
+    if step is not None:
+        cache[None] = (mediator, step)
+    elif cache.get(None, (None,))[0] is mediator:
+        step = cache[None][1]
     cached = cache.get(key)
-    if cached is None or cached[0] is not mediator or (step is not None and step != cached[1]):
-        cache[key] = cached = (mediator, step, compute())
-    return cached[2]
+    new = cached is None or cached[0] is not mediator or (step is not None and step != cached[1])
+    if not new and pinned is None:
+        returned = mediator.occurrence(calls)
+        if cached[2] is None:
+            cached[2] = returned
+        elif cached[2] != returned:
+            new = True
+    if new:
+        before = mediator.occurrence(calls)
+        value = compute()
+        returned = mediator.occurrence(calls)
+        known = not pinned or returned != before  # unpinned, or compute() parked into the call
+        cache[key] = cached = [mediator, step, returned if known else None, value]
+    return cached[3]
 
 
 class DerivedEProperty(EProperty):

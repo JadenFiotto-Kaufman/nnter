@@ -13,7 +13,9 @@ from nnsight import TransformersModel  # nnsight before any transformers submodu
 from nnsight.intervention.envoy import Envoy
 
 from nnter import StandardizedTransformer, Unavailable
-from nnter.components import Attention, EProperty, Layer, LinearAttention, Mlp, RecurrentMixer, Standard, StateSpace
+from nnter.components import (
+    Attention, EProperty, Layer, LinearAttention, Mlp, RecurrentMixer, SelectiveScan, Standard, StateSpace,
+)
 
 PROMPT = "Hello world there"
 
@@ -41,7 +43,7 @@ def contributions(layer):
 
 
 def recurrent_mixer(family):
-    """The family's recurrent mixer envoy class (`LinearAttention` or `StateSpace`), or None."""
+    """The family's recurrent mixer envoy class (`LinearAttention`, `SelectiveScan` or `StateSpace`), or None."""
     return next((envoy for envoy in family.ENVOYS.values() if issubclass(envoy, RecurrentMixer)), None)
 
 
@@ -171,7 +173,7 @@ class FamilySuite:
         for layer in model.layers:
             if getattr(layer, "linear_attn", None) is not None:
                 assert type(layer.linear_attn) is recurrent
-                assert issubclass(recurrent, (LinearAttention, StateSpace))
+                assert issubclass(recurrent, (LinearAttention, SelectiveScan, StateSpace))
 
     def test_trace_through_standard_names(self, model):
         with model.trace(PROMPT):
@@ -484,12 +486,15 @@ class FamilySuite:
     def axis_sizes(self, model, host):
         """What each axis name in a value's annotation must be on this model."""
         seq = len(model.tokenizer(PROMPT).input_ids)
-        sizes = {"batch": 1, "seq": seq, "query": seq, "key": seq, "hidden": model.hidden_size, "vocab": model.vocab_size,
-                 "heads": model.num_heads, "kv_heads": model.num_heads if self.KV_HEADS_EXPANDED else model.num_kv_heads,
-                 "head_dim": model.head_dim, "qk_head_dim": model.qk_head_dim}
+        sizes = {"batch": 1, "seq": seq, "query": seq, "key": seq, "hidden": model.hidden_size, "vocab": model.vocab_size}
+        if self.attn_blocks(model):  # a state-space model has no heads to size
+            sizes.update(heads=model.num_heads, kv_heads=model.num_heads if self.KV_HEADS_EXPANDED else model.num_kv_heads,
+                         head_dim=model.head_dim, qk_head_dim=model.qk_head_dim)
         module = getattr(host, "_module", None)
         if isinstance(host, LinearAttention):
             sizes.update(heads=module.num_v_heads, key_dim=module.head_k_dim, value_dim=module.head_v_dim)
+        if isinstance(host, SelectiveScan):
+            sizes.update(groups=1, channels=module.intermediate_size, state_dim=module.ssm_state_size)
         if isinstance(host, StateSpace):
             sizes.update(heads=module.num_heads, groups=module.n_groups, state_dim=module.ssm_state_size,
                          head_dim=module.head_dim, key_dim=module.ssm_state_size, value_dim=module.head_dim)
@@ -599,29 +604,38 @@ class FamilySuite:
 
     def test_sizes_match_the_model(self, model):
         assert model.num_layers == len(model.layers) == model.config.num_hidden_layers
-        block = self.attn_block(model)
-        attn = block.self_attn._module
-        with model.trace(PROMPT):
-            probs = block.self_attn.attention_probabilities.save()
-            resid = block.layer_output.save()
-        assert probs.shape[1] == model.num_heads and resid.shape[-1] == model.hidden_size
-        assert 1 <= model.num_kv_heads <= model.num_heads
-        if getattr(attn, "q_proj", None) is not None:  # latent attention carries a q_proj set to None
-            assert model.num_heads * model.qk_head_dim * (2 if self.QUERY_GATED else 1) == attn.q_proj.out_features
-        if getattr(attn, "o_proj", None) is not None:
-            assert model.num_heads * model.head_dim == attn.o_proj.in_features
+        blocks = self.attn_blocks(model)
+        block = blocks[0] if blocks else model.layers[0]
+        if blocks:
+            attn = block.self_attn._module
+            with model.trace(PROMPT):
+                probs = block.self_attn.attention_probabilities.save()
+                resid = block.layer_output.save()
+            assert probs.shape[1] == model.num_heads
+            assert 1 <= model.num_kv_heads <= model.num_heads
+            if getattr(attn, "q_proj", None) is not None:  # latent attention carries a q_proj set to None
+                assert model.num_heads * model.qk_head_dim * (2 if self.QUERY_GATED else 1) == attn.q_proj.out_features
+            if getattr(attn, "o_proj", None) is not None:
+                assert model.num_heads * model.head_dim == attn.o_proj.in_features
+        else:
+            with model.trace(PROMPT):
+                resid = block.layer_output.save()
+        assert resid.shape[-1] == model.hidden_size
         # The MLP's hidden width appears in some projection's shape, wherever the
-        # family keeps it (OPT: on the block; fused experts: a 3-d parameter; Nemotron-H: its own block).
-        block = next((layer for layer in model.layers if getattr(layer, "mlp", None) is not None), self.attn_block(model))._module
+        # family keeps it (OPT: on the block; fused experts: a 3-d parameter;
+        # Nemotron-H: its own block; Mamba: the mixer's inner width, its block's only one).
+        block = next((layer for layer in model.layers if getattr(layer, "mlp", None) is not None), block)._module
         dims = {d for p in block.parameters() for d in p.shape}
         assert isinstance(model.intermediate_size, int)  # resolves on every family, whatever the config calls it
         width = getattr(model.config, self.MLP_WIDTH_KEY) if self.MLP_WIDTH_KEY else model.intermediate_size
         assert width in dims, (self.MLP_WIDTH_KEY or "intermediate_size", width, dims)
 
     def test_repr_lists_the_values(self, model):
-        block = self.attn_block(model)
+        blocks = self.attn_blocks(model)
+        block = blocks[0] if blocks else model.layers[0]
         text = repr(block)
-        for name in ("layer_output", "attention_output", "attention_probabilities", "attention_queries", "attention_head_outputs"):
+        own = ("attention_probabilities",) if blocks else ("betas", "decays", "state_output")
+        for name in ("layer_output", "attention_output", "attention_queries", "attention_head_outputs") + own:
             assert f"({name}):" in text, name
         if getattr(block, "mlp", None) is not None:
             assert "(mlp_output):" in text

@@ -81,6 +81,10 @@ def gpt2_paths():
         def scores(self, value) -> Pattern:
             return value
 
+        @EProperty("source.attention_interface_1.inputs", select=lambda self: 1, description="A selector function: the queries")
+        def queries(self, value):
+            return value
+
     model = StandardizedTransformer("hf-internal-testing/tiny-random-gpt2", dispatch=True, attn_implementation="eager", envoys={GPT2Attention: Paths})
     return model, Paths
 
@@ -108,6 +112,22 @@ def test_eproperty_paths_resolve_and_write(gpt2_paths):
         pattern = attn.softmax.save()
     causal = torch.ones_like(pattern).tril()                 # with no scaling every score is 0: uniform over the causal keys
     assert torch.allclose(pattern, causal / causal.sum(-1, keepdim=True))
+
+
+def test_select_can_be_a_function_of_the_host(gpt2_paths):
+    """``select`` given as a function picks the element at read time, for a read and for a write."""
+    model, _ = gpt2_paths
+    attn = model.layers[0].self_attn
+    with model.trace("Hello world"):
+        queries = attn.queries.save()
+        clean = model.logits.save()
+    with model.trace("Hello world"):
+        standard = attn.attention_queries.save()
+    assert torch.equal(queries, standard)
+    with model.trace("Hello world"):
+        attn.queries = attn.queries * 0
+        edited = model.logits.save()
+    assert not torch.equal(clean, edited)
 
 
 def test_select_function_picks_the_element_per_access(gpt2_paths):
@@ -199,5 +219,54 @@ def test_route_kernels_round_trips_the_bindings():
         assert {name: getattr(module, name) for name in before} == before
         with pytest.raises(ValueError, match="'torch' or 'default'"):
             route_kernels(qwen3_5_text, "recurrent")
+    finally:
+        route_kernels(qwen3_5_text, "default")
+
+
+def test_route_kernels_binds_a_single_step_decode_kernel_to_its_own():
+    """On Mamba-1 (``STEP_STATE_OP`` set) the scan is the token loop: each name is bound to its own pure-torch function."""
+    import sys
+
+    from nnter import SelectiveScan, route_kernels
+    from nnter.families import mamba
+
+    module = sys.modules[mamba.MambaMixer.__module__]
+    names = [op.rsplit("_", 1)[0] for op in (SelectiveScan.CHUNK_KERNEL, SelectiveScan.RECURRENT_KERNEL)]
+    before = {name: getattr(module, name) for name in names}
+    try:
+        route_kernels(mamba, "torch")
+        assert all(getattr(module, name) is before[name].__wrapped__ for name in names)
+        assert SelectiveScan._loop_kernel() == SelectiveScan.CHUNK_KERNEL
+        assert SelectiveScan._state_op(SelectiveScan.RECURRENT_KERNEL) == SelectiveScan.STEP_STATE_OP
+        route_kernels(mamba, "default")
+        assert {name: getattr(module, name) for name in names} == before
+    finally:
+        route_kernels(mamba, "default")
+
+
+def test_decode_step_whose_first_read_is_relaxed_takes_its_own_branch():
+    """A decode step that first reads ``input`` (a relaxed read) and then a kernel value binds on that
+    step's own kernel: `per_call` counts the relaxed read as the step of the last pinned one."""
+    import warnings
+
+    from nnter import route_kernels
+    from nnter.families import qwen3_5_text
+
+    route_kernels(qwen3_5_text, "torch")
+    try:
+        model = StandardizedTransformer("yujiepan/qwen3.5-tiny-random", dispatch=True)
+        mix = model.layers[0].linear_attn
+        inputs, keys = [], []  # made outside the block: names bound inside do not survive it
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with model.generate("Hello world", max_new_tokens=3, do_sample=False) as tracer:
+                for step in tracer.iter[:3]:
+                    inputs.append(mix.input.save())
+                    keys.append(mix.attention_keys.save())
+        assert not [str(w.message) for w in caught if "cut short" in str(w.message).lower()]
+        assert len(inputs) == 3 and len(keys) == 3
+        assert all(value is not None for value in inputs + keys)
+        assert keys[0].shape[1] == len(model.tokenizer("Hello world").input_ids)
+        assert keys[1].shape[1] == 1 and keys[2].shape[1] == 1
     finally:
         route_kernels(qwen3_5_text, "default")

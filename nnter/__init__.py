@@ -22,14 +22,15 @@ Each family under `nnter.families` says how its own names map onto those, and
 """
 
 from .components import (
-    Attention, DerivedEProperty, EProperty, Layer, LinearAttention, Mlp, RecurrentMixer, Standard, StateSpace,
-    Unavailable, branched, chunk_per_token, route_delta_rule, route_kernels, unavailable,
+    Attention, DerivedEProperty, EProperty, Layer, LinearAttention, Mlp, RecurrentMixer, SelectiveScan, Standard,
+    StateSpace, Unavailable, branched, chunk_per_token, route_delta_rule, route_kernels, unavailable,
 )
 from .families import UnsupportedFamily
 from .standardized import StandardizedTransformer
 
 __all__ = [
-    "Attention", "DerivedEProperty", "EProperty", "Layer", "LinearAttention", "Mlp", "RecurrentMixer", "Standard",
-    "StandardizedTransformer", "StateSpace", "Unavailable", "UnsupportedFamily", "branched", "chunk_per_token", "route_delta_rule", "route_kernels",
+    "Attention", "DerivedEProperty", "EProperty", "Layer", "LinearAttention", "Mlp", "RecurrentMixer", "SelectiveScan",
+    "Standard", "StandardizedTransformer", "StateSpace", "Unavailable", "UnsupportedFamily", "branched", "chunk_per_token",
+    "route_delta_rule", "route_kernels",
     "unavailable",
 ]
