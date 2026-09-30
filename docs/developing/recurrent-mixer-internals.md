@@ -1,9 +1,9 @@
 ---
 title: Recurrent Mixer Internals
-one_liner: How RecurrentMixer reaches a recurrent mixer's values — the branch-chosen kernel op, the pure-torch kernels .source needs, process-wide kernel routing, and per-token state through occurrence arithmetic — and how LinearAttention (gated DeltaNet) and SelectiveScan (Mamba-1) sit on it.
-tags: [developing, internals, hybrids, deltanet, linear-attention, mamba, selective-scan, recurrent, occurrences]
-related: [docs/developing/eproperty-internals.md, docs/developing/architecture.md, docs/developing/gotchas.md, docs/usage/delta-net.md, docs/usage/selective-scan.md]
-sources: [nnter/components/recurrent.py, nnter/components/linear_attention.py, nnter/components/selective_scan.py, nnter/families/mamba.py, tests/families/scan_suite.py, nnter/components/eproperty.py, nnter/families/qwen3_5_text.py, tests/families/test_qwen3_5_text.py, tests/test_base.py, nnsight src/nnsight/intervention/interleaver.py, nnsight src/nnsight/intervention/iterator.py]
+one_liner: How RecurrentMixer reaches a recurrent mixer's values — the branch-chosen kernel op, the pure-torch kernels .source needs, process-wide kernel routing, and per-token state through occurrence arithmetic — and how LinearAttention (gated DeltaNet), SelectiveScan (Mamba-1) and StateSpace (Mamba-2) sit on it.
+tags: [developing, internals, hybrids, deltanet, linear-attention, mamba, selective-scan, state-space, recurrent, occurrences]
+related: [docs/developing/eproperty-internals.md, docs/developing/architecture.md, docs/developing/gotchas.md, docs/usage/delta-net.md, docs/usage/selective-scan.md, docs/usage/state-space.md]
+sources: [nnter/components/recurrent.py, nnter/components/linear_attention.py, nnter/components/selective_scan.py, nnter/components/state_space.py, nnter/components/layer.py, nnter/families/mamba.py, nnter/families/nemotron_h.py, tests/families/scan_suite.py, tests/families/ssd.py, nnter/components/eproperty.py, nnter/families/qwen3_5_text.py, tests/families/test_qwen3_5_text.py, tests/test_base.py, nnsight src/nnsight/intervention/interleaver.py, nnsight src/nnsight/intervention/iterator.py]
 ---
 
 # Recurrent Mixer Internals
@@ -354,16 +354,140 @@ step after the updated one.
 `per_call` resolves a relaxed read to the envoy's last pinned step, so a
 step body that reads `state_input` first (pinned: it computes the branch)
 and `states` second (relaxed) computes this step's `(seq, first)` under
-`"call"` rather than reusing step 0's, on either mixer.
+`"call"` rather than reusing step 0's, on either mixer. A step whose first
+read is not a value of the mixer (`linear_attn.input`, a plain nnsight read)
+relaxes the pin before `per_call` sees it; the record also carries how many
+of the module's calls had returned (`Mediator.occurrence("<mixer>.output")`,
+which moves only when a call returns), and a relaxed read that finds more
+makes it again. A record made by a read pinned to a later step, before the
+previous call has returned, takes its count once `compute()` has parked
+into the call, or else at the call's next relaxed read
+(`tests/test_base.py::test_decode_step_whose_first_read_is_relaxed_takes_its_own_branch`).
+
+## The state-space mixer: `StateSpace`
+
+`StateSpace` (`nnter/components/state_space.py`) is the Mamba-2 (SSD)
+mixer on `mamba2`, `nemotron_h`, `bamba` and `falcon_h1`. Every one of these
+modeling files carries the same copy of transformers' Mamba-2 code, so one
+class serves them. Its forward differs from the DeltaNet's in five ways, and
+each is handled in the subclass, not the base:
+
+- **The branch is compound.** The forward decodes through
+  `mamba2_selective_state_update` when `use_precomputed_states and seq_len ==
+  1` and runs `mamba2_chunk_scan` otherwise, so a cached call over several
+  tokens takes the chunk scan. `StateSpace` sets `KERNEL` itself
+  (`_kernel`): the binding `use_precomputed_states_0` and, over a cached
+  state, the call's length off `SEQ_OP` (`apply_mask_to_padding_states_0`,
+  the first op after the binding on both paths), read once per call. The
+  length is read inside the forward, not off the mixer's `.input`, so a user's
+  read of `linear_attn.input` earlier in the step is not passed. The decision
+  is one record per call (`_this_call`) that later reads add to (the call's
+  arguments). The record is `per_call`'s, and it also stores how many of the
+  mixer's calls had returned once the binding is read
+  (`Mediator.occurrence("<mixer>.output")`, which moves only when a call
+  returns); it is made again when that count differs, so a step whose first
+  read is `linear_attn.input` decides its own kernel
+  (`tests/families/ssd.py::test_mixer_input_before_the_kernel_values`).
+- **The kernels take their arguments in different places.** The scan is
+  `(hidden_states, dt, A, B, C, chunk_size=, D=, dt_bias=, initial_states=)`,
+  the update `(state, hidden_states, dt, A, B, C, D, dt_bias=)`.
+  `CHUNK_ARGUMENTS` / `RECURRENT_ARGUMENTS` map each name to its position or
+  keyword at the call site, and each value is declared with
+  `select=argument(name)`: `EProperty.select` may be a function of the host,
+  resolved at each access before the served read (so it may itself read an
+  earlier value of the call, as the chunk scan's output select reads
+  `return_final_states`).
+- **The update has no sequence axis.** Its tensors are `[batch, heads,
+  head_dim]` and `[batch, groups, state_dim]`, and `dt`, `A`, `D`, `dt_bias`
+  are expanded over `head_dim` (and `state_dim` for `A`). The preprocess of
+  each value adds a sequence axis of 1 on a decode step and the postprocess
+  removes it. `betas` and `decays` are `EProperty` values on the kernel's
+  `dt` argument (`select=argument("dt")`): the preprocess is the kernel's
+  own arithmetic (`_gate`: plus `dt_bias`, softplus, the clamp to
+  `dt_limit` on a prompt; times `A` for `decays`), taking element `[..., 0]`
+  of the expanded `dt`, `dt_bias` and `A` on a decode step. The postprocess
+  is the inverse (`_dt_for`): `log(expm1(b)) - dt_bias`, computed as `b +
+  log(-expm1(-b))` so it does not overflow, without the clamp, expanded back
+  over `head_dim` on a decode step; `decays` divides by `A` first.
+- **The update returns only `y`.** It writes the new state into the cache's
+  buffer (`state.copy_(ssm_states)`), so a decode step's `state_output` is
+  read inside the kernel at `UPDATED_STATE = "ssm_states_0"`, the binding
+  both the copy and the output read: a write there reaches the cache and
+  `y`. On a prompt the scan returns `(y, final_state)` when the call has a
+  cache and `y` alone without one, so `attention_head_outputs` selects `0`
+  or the whole return and `state_output` raises `Unavailable` at the read
+  without a cache.
+- **Several values share one location, and some need another argument.**
+  Seven values select from the kernel's `inputs`, and `betas`, `decays` and
+  a prompt's `state_output` need arguments beyond their own (`dt_bias`, `A`,
+  `return_final_states`), possibly after the model has moved into the
+  kernel. `EProperty` asks the host for a served value when the host defines
+  `_serve(location)` / `_swap(location, value)`; `StateSpace`'s keep what
+  each location inside its own forward served in the call's record
+  (`_this_call`'s `"served"`, and `"at"`, the location the worker is parked
+  at). A read at the current location, or `_arguments` at any point of the
+  call, uses the record; a read of a location the call has moved past goes to
+  the model, which reports it out of order as it would without the record; a
+  write updates the record, so a value read after it sees what the kernel
+  runs with. Locations outside the mixer's forward (its `.output`, a
+  Falcon-H1 block op) are served directly.
+
+The state is `[batch, heads, head_dim, state_dim]` in the kernels; both
+state values are served transposed, `[batch, heads, state_dim, head_dim]`,
+so the shared `State` layout (key side first) holds, and transposed back on
+assignment. `STATE_OP` is `None`: no kernel binds the state once per token,
+and `route_kernels(family, "torch")` binds each kernel name to its own
+`torch_function` (the dispatcher's closure is the one the DeltaNet kernels
+use, `use_kernel_func_from_hub_with_fallback` over `mamba_ssm`; the routing
+needed no change).
+
+The per-token state comes from the chunk scan instead. Its inter-chunk
+recurrence binds `new_states` (`CHUNK_STATES = "new_states_0"`), `[batch,
+chunks + 1, heads, head_dim, state_dim]`: the state before each chunk and
+after the last, computed in one cumulative step (a decay matrix over the
+chunk boundaries times every chunk's contribution). `chunk_size` is the
+mixer instance's attribute, read on every call, so `chunk_per_token(model)`
+sets it to 1 on each `StateSpace` module of one model (recording the built
+value in the module's `_nnter_chunk_size` for `enabled=False`), and every
+token is a boundary. `states` overrides the base's: a `DerivedEProperty`
+that reads `CHUNK_STATES` through a module-level `EProperty`
+(`_chunk_states`, keyed `source.<CHUNK_KERNEL>.source.new_states_0.output`,
+so the read drills and orders like any value), after `_arguments` so the
+record holds the arguments for later values; it serves `[:, 1:]`, transposed
+and cloned. On a decode step it is `state_output` unsqueezed. Its predicate
+is `needs_per_token_chunks` (the kernel reason, then the chunk size).
+`state_after(t)` is `states[:, t]`. `state` and `set_state_after` are
+`unavailable(...)` values (`NO_STATE_OCCURRENCES`, `NO_STATE_WRITES`), so
+both are listed by `status()`: there is no per-token occurrence to walk, and
+a boundary state written at token `t` would not flow into later boundaries,
+which the same cumulative step computes from the chunk contributions and the
+initial state, not from each other.
+
+The tests are `tests/families/ssd.py`, mixed into each family's suite: the
+shapes, the writes (`betas` and `decays` included, read back and checked
+against the recurrence), the hand-off under `generate` with SSD's recurrence
+checked on every decode step, the per-token `states` under `chunk_per_token`
+checked against the recurrence token by token, values read together in one
+trace, the `status()` reasons and the optimized-kernel reason.
+
+Nemotron-H needs a block-level name choice, since each block holds one
+`mixer` of four classes. Its `RENAME` keys the standard name on the mixer's
+class (`{NemotronHMamba2Mixer: "linear_attn", NemotronHAttention:
+"self_attn", NemotronHMoE: "mlp", NemotronHMLP: "mlp"}`): nnsight binds a
+class key on every envoy that has exactly one direct child of that class, so
+each block gets the name for what it holds and `status()`'s `_standard_children`
+reads it like any alias.
 
 ## Adding a recurrent mixer
 
 A new mixer subclasses `RecurrentMixer`, sets `CHUNK_KERNEL` and
 `RECURRENT_KERNEL` (and `BRANCH`, or `KERNEL` itself, when its forward
-branches on something else), sets `STATE_OP` only when a kernel updates the
+branches on something else, as `StateSpace` does), sets `STATE_OP` only when a kernel updates the
 state once per token in a binding, and declares its values at
 `kernel("inputs")` / `kernel("output")` with
-`unavailable=needs_torch_kernels`. `route_kernels`, the predicates,
+`unavailable=needs_torch_kernels`; when the two kernels take an argument in
+different places, `select` is a function of the host (`StateSpace`'s
+`argument(name)`). `route_kernels`, the predicates,
 `attention_output` and the per-token state come from the base; a kernel
 whose tensors are not `[batch, seq, ...]` overrides `_seq`.
 

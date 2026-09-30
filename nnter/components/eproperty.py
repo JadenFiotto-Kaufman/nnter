@@ -68,9 +68,10 @@ class EProperty(eproperty):
             current value, so assigning one argument of a call replaces just
             that argument. ``input`` is the call's first argument, ``inputs``
             with the first element selected. A function of the host returning
-            one of these (or ``None``, the whole value) for a key that branches
-            onto calls whose arguments sit at different positions (Mamba's
-            prompt and decode kernels); it runs at read time, after the key.
+            one of those (or ``None``, the whole value) selects per access, for
+            a value whose position differs between the calls a forward branches
+            to (`SelectiveScan`'s prompt and decode kernels, `StateSpace`'s
+            two kernels).
 
     The location is served by nnsight the way any eproperty's is, whatever the
     path: a module's output, a sibling norm's, or an operation's arguments,
@@ -82,6 +83,11 @@ class EProperty(eproperty):
     operation that is not there raises `SourceNotAvailable` naming what is,
     rather than the `AttributeError` a descriptor would otherwise swallow into
     "no attribute".
+
+    A host that defines ``_serve(location)`` and ``_swap(location, value)``
+    answers reads and writes itself: `StateSpace` keeps what its call was
+    served, so several values at one location, and the arguments its other
+    values depend on, are read from the model once per call.
     """
 
     def __init__(
@@ -203,8 +209,8 @@ class EProperty(eproperty):
 
     # -- select -----------------------------------------------------------------
 
-    def _selector(self, obj: Envoy) -> int | str | None:
-        """The element this access selects: `select`, or what it returns for ``obj``."""
+    def _selection(self, obj: Envoy) -> int | str | None:
+        """The element this access selects: `select` itself, or what it returns for ``obj``."""
         return self.select(obj) if callable(self.select) else self.select
 
     def _pick(self, attribute: str, value: Any, select: int | str | None) -> Any:
@@ -244,8 +250,9 @@ class EProperty(eproperty):
         self._check(obj)
         key = self.path(obj)
         location = self._resolve(obj, key)
-        raw = Mediator.value(location)
-        value = self._pick(key.rsplit(".", 1)[-1], raw, self._selector(obj))
+        select = self._selection(obj)  # before the read: a select function may read an earlier value of the call
+        raw = _serve(obj, location)
+        value = self._pick(key.rsplit(".", 1)[-1], raw, select)
         if self._preprocess is not None:
             value = self._preprocess(obj, value)
         if self._transform is not None:
@@ -263,9 +270,24 @@ class EProperty(eproperty):
         key = self.path(obj)
         location = self._resolve(obj, key)
         attribute = key.rsplit(".", 1)[-1]
-        select = self._selector(obj)
+        select = self._selection(obj)
         if select is not None or attribute == "input":
-            value = self._put(attribute, Mediator.value(location), value, select)
+            value = self._put(attribute, _serve(obj, location), value, select)
+        _swap(obj, location, value)
+
+
+def _serve(obj: Envoy, location: str) -> Any:
+    """The value at ``location``: the host's ``_serve`` when it has one (a record of what its call was served), else the model's."""
+    serve = getattr(type(obj), "_serve", None)
+    return serve(obj, location) if serve is not None else Mediator.value(location)
+
+
+def _swap(obj: Envoy, location: str, value: Any) -> None:
+    """Replace the value at ``location``, through the host's ``_swap`` when it has one, so its record sees the write."""
+    swap = getattr(type(obj), "_swap", None)
+    if swap is not None:
+        swap(obj, location, value)
+    else:
         Mediator.swap(location, value)
 
 
@@ -336,20 +358,40 @@ def per_call(envoy: Envoy, key: str, compute: Callable[[], Any]) -> Any:
     envoy's last pinned one, so a value first computed after the step's
     first read (a DeltaNet's per-token offset, read after ``state_input``)
     is not the previous step's.
+
+    A step whose first read is not a value of this envoy (the module's own
+    ``.input``) relaxes the pin before any value here is read, so the record
+    also carries how many of the module's calls had returned when it was
+    made, and a relaxed read that finds more is a new call. A read pinned to
+    a later step can run before the previous call has returned; its count is
+    taken once ``compute()`` has parked into the call, or, when it did not,
+    from the call's next relaxed read.
     """
     from nnsight.intervention.interleaver import Mediator
 
     mediator = Mediator.current(key)
-    step = mediator.iteration
+    pinned = step = mediator.iteration
+    calls = f"{envoy.path}.output"  # passed once per call, after every value read inside it
     cache = envoy.__dict__.setdefault("_per_call", {})
     if step is not None:
         cache[None] = (mediator, step)
     elif cache.get(None, (None,))[0] is mediator:
         step = cache[None][1]
     cached = cache.get(key)
-    if cached is None or cached[0] is not mediator or (step is not None and step != cached[1]):
-        cache[key] = cached = (mediator, step, compute())
-    return cached[2]
+    new = cached is None or cached[0] is not mediator or (step is not None and step != cached[1])
+    if not new and pinned is None:
+        returned = mediator.occurrence(calls)
+        if cached[2] is None:
+            cached[2] = returned
+        elif cached[2] != returned:
+            new = True
+    if new:
+        before = mediator.occurrence(calls)
+        value = compute()
+        returned = mediator.occurrence(calls)
+        known = not pinned or returned != before  # unpinned, or compute() parked into the call
+        cache[key] = cached = [mediator, step, returned if known else None, value]
+    return cached[3]
 
 
 class DerivedEProperty(EProperty):

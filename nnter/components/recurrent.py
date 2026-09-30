@@ -9,8 +9,8 @@ share is how the call is found, which kernel names must be transformers'
 pure-torch ones for there to be a call to read inside, how the family's
 kernels are rebound (`route_kernels`), and, when the token-by-token kernel
 materializes it, the state after every token. That shared part is
-`RecurrentMixer`; a subclass (`LinearAttention`, `SelectiveScan`) names its
-kernels in class constants and declares its values.
+`RecurrentMixer`; a subclass (`LinearAttention`, `SelectiveScan`, `StateSpace`)
+names its kernels in class constants and declares its values.
 """
 
 from __future__ import annotations
@@ -232,7 +232,9 @@ class RecurrentMixer(Standard):
     prompts through the token-by-token kernel, and then `state`, `states`,
     `state_after` and `set_state_after` read and write the state at any
     position; without it, or on a mixer with no `STATE_OP`, reading one
-    raises `Unavailable` with the reason and `status` reports it.
+    raises `Unavailable` with the reason and `status` reports it. A subclass
+    whose kernels keep the state another way overrides them (`StateSpace`
+    reads `states` off the chunk scan's boundaries).
     """
 
     #: The binding the forward makes before it branches: ``False`` on a prompt, ``True`` on a decode step.

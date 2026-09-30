@@ -73,6 +73,10 @@ def gpt2_paths():
         def scaling(self, value) -> float:
             return value
 
+        @EProperty(lambda self: "source.attention_interface_1.inputs", select=lambda self: "scaling", description="A select function")
+        def scaling_selected(self, value) -> float:
+            return value
+
         @EProperty("source.attention_interface_1.source.nn_functional_softmax_0.input", description="A call's first argument")
         def scores(self, value) -> Pattern:
             return value
@@ -124,6 +128,39 @@ def test_select_can_be_a_function_of_the_host(gpt2_paths):
         attn.queries = attn.queries * 0
         edited = model.logits.save()
     assert not torch.equal(clean, edited)
+
+
+def test_select_function_picks_the_element_per_access(gpt2_paths):
+    """A `select` that is a function of the host picks the element at each read and write (`StateSpace`'s two kernels)."""
+    model, Paths = gpt2_paths
+    attn = model.layers[0].self_attn
+    with model.trace("Hello world"):
+        by_function = attn.scaling_selected.save()
+    assert by_function == attn._module.head_dim ** -0.5
+    with model.trace("Hello world"):
+        attn.scaling_selected = 0.0
+        pattern = attn.softmax.save()
+    causal = torch.ones_like(pattern).tril()
+    assert torch.allclose(pattern, causal / causal.sum(-1, keepdim=True))
+
+
+def test_route_kernels_binds_each_state_space_kernel_to_its_own_torch_function():
+    """A mixer with no per-token state (`StateSpace`) keeps its prompt kernel: each name gets its own pure-torch function."""
+    import sys
+
+    from nnter import StateSpace, route_kernels
+    from nnter.families import mamba2
+
+    module = sys.modules[mamba2.Mamba2Mixer.__module__]
+    names = [StateSpace.CHUNK_KERNEL.rsplit("_", 1)[0], StateSpace.RECURRENT_KERNEL.rsplit("_", 1)[0]]
+    before = {name: getattr(module, name) for name in names}
+    try:
+        route_kernels(mamba2, "torch")
+        assert all(getattr(module, name) is before[name].__wrapped__ for name in names)
+        route_kernels(mamba2, "default")
+        assert {name: getattr(module, name) for name in names} == before
+    finally:
+        route_kernels(mamba2, "default")
 
 
 def test_recurrent_mixer_without_a_state_op_reports_the_state_unavailable():
@@ -205,3 +242,31 @@ def test_route_kernels_binds_a_single_step_decode_kernel_to_its_own():
         assert {name: getattr(module, name) for name in names} == before
     finally:
         route_kernels(mamba, "default")
+
+
+def test_decode_step_whose_first_read_is_relaxed_takes_its_own_branch():
+    """A decode step that first reads ``input`` (a relaxed read) and then a kernel value binds on that
+    step's own kernel: `per_call` counts the relaxed read as the step of the last pinned one."""
+    import warnings
+
+    from nnter import route_kernels
+    from nnter.families import qwen3_5_text
+
+    route_kernels(qwen3_5_text, "torch")
+    try:
+        model = StandardizedTransformer("yujiepan/qwen3.5-tiny-random", dispatch=True)
+        mix = model.layers[0].linear_attn
+        inputs, keys = [], []  # made outside the block: names bound inside do not survive it
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with model.generate("Hello world", max_new_tokens=3, do_sample=False) as tracer:
+                for step in tracer.iter[:3]:
+                    inputs.append(mix.input.save())
+                    keys.append(mix.attention_keys.save())
+        assert not [str(w.message) for w in caught if "cut short" in str(w.message).lower()]
+        assert len(inputs) == 3 and len(keys) == 3
+        assert all(value is not None for value in inputs + keys)
+        assert keys[0].shape[1] == len(model.tokenizer("Hello world").input_ids)
+        assert keys[1].shape[1] == 1 and keys[2].shape[1] == 1
+    finally:
+        route_kernels(qwen3_5_text, "default")

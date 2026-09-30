@@ -3,9 +3,9 @@
 A family gives its modules standard *values* by wrapping them in `Envoy`
 subclasses (nnsight's ``envoys=``): `Layer` on the decoder block, `Attention`
 on the softmax-attention module, `Mlp` on the feed-forward, and
-`LinearAttention` on a hybrid's gated DeltaNet mixer and `SelectiveScan` on a
-Mamba-1 mixer, both `RecurrentMixer`s (the mechanism every recurrent mixer
-shares). The families under
+`LinearAttention` on a hybrid's gated DeltaNet mixer, `SelectiveScan` on a
+Mamba-1 mixer and `StateSpace` on a Mamba-2 (SSD) mixer, all `RecurrentMixer`s
+(the mechanism every recurrent mixer shares). The families under
 `nnter.families` subclass these, so a family whose forward is spelled
 differently overrides only what differs, and key them on its own module types
 in its ``ENVOYS``.
@@ -64,13 +64,16 @@ from .selective_scan import (
     needs_token_loop,
 )
 from .standard import Standard, first_tensor, rewrap
+from .state_space import (
+    SSDHeadOutputs, SSDKeys, SSDQueries, SSDValues, StateSpace, chunk_per_token, needs_per_token_chunks,
+)
 
 __all__ = [
     "Attention", "DerivedEProperty", "EProperty", "Gates", "HeadOutputs", "INTERFACE", "Keys", "Layer", "LinearAttention",
     "LinearQK", "LinearV", "Mlp", "Pattern", "Queries", "RecurrentMixer", "Residual", "ScanDecays", "ScanQK", "ScanState",
     "ScanStates", "ScanSteps", "ScanValues", "SelectiveScan", "State", "States", "Values",
-    "NOT_ON_INTERFACE", "Standard", "Unavailable", "at_occurrence",
-    "branched", "first_tensor", "interface_reason", "needs_eager", "needs_kernel_source",
-    "needs_recurrent_routing", "needs_token_loop", "needs_torch_kernels", "per_call", "rewrap", "route_delta_rule",
-    "route_kernels", "seq_first", "unavailable",
+    "NOT_ON_INTERFACE", "SSDHeadOutputs", "SSDKeys", "SSDQueries", "SSDValues", "Standard", "StateSpace", "Unavailable",
+    "at_occurrence", "branched", "chunk_per_token", "first_tensor", "interface_reason", "needs_eager",
+    "needs_kernel_source", "needs_per_token_chunks", "needs_recurrent_routing", "needs_token_loop", "needs_torch_kernels",
+    "per_call", "rewrap", "route_delta_rule", "route_kernels", "seq_first", "unavailable",
 ]
