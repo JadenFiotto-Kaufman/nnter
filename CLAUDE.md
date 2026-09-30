@@ -27,7 +27,7 @@ everywhere. Everything nnsight does (`trace`, `generate`, `.save()`, `tracer.ite
 ### "Load a model and use the standard names"
 - [docs/usage/loading.md](docs/usage/loading.md) — `StandardizedTransformer(repo_id, ...)`; pass `attn_implementation="eager"` for anything inside attention
 - [docs/usage/vocabulary.md](docs/usage/vocabulary.md) — `embed_tokens`, `layers[i].self_attn`, `layers[i].mlp`, `norm`, `lm_head`; native names keep working
-- [docs/reference/families.md](docs/reference/families.md) — the 91 families, their native names and quirks
+- [docs/reference/families.md](docs/reference/families.md) — the 92 families, their native names and quirks
 
 ### "Read or edit the residual stream / a sublayer's contribution"
 - [docs/usage/residual-stream.md](docs/usage/residual-stream.md) — `layer_output`, `attention_output`, `mlp_output`; `input + attention_output + mlp_output == layer_output`
@@ -57,7 +57,7 @@ everywhere. Everything nnsight does (`trace`, `generate`, `.save()`, `tracer.ite
 - [docs/usage/state-space.md](docs/usage/state-space.md) — `linear_attn` is a `StateSpace`: `C`/`B`/`x` as queries/keys/values, `dt` as `betas`; `route_kernels(model.family, "torch")` when `mamba_ssm` is installed; `nnter.chunk_per_token(model)` for the state after every token (`states`, `state_after`); `betas`/`decays` assignable
 
 ### "What shape is this value?"
-- [docs/usage/layouts.md](docs/usage/layouts.md) — one layout per value on every family, named (`Residual`, `Pattern`, `Keys`, ... in `nnter.components`); `value.dims`, `value.layout is Pattern`
+- [docs/usage/layouts.md](docs/usage/layouts.md) — one layout per value on every family, named (`Residual`, `Pattern`, `Keys`, ... in `nnter.components`), except `layer_output` on DeepSeek-V4 (`Streams`); `value.dims`, `value.layout is Pattern`
 
 ### "Generation, many prompts, activations datasets"
 - [docs/usage/generation.md](docs/usage/generation.md) — the values under `model.generate`, `tracer.iter` picks the step
@@ -106,6 +106,7 @@ everywhere. Everything nnsight does (`trace`, `generate`, `.save()`, `tracer.ite
 - **Check `model.status()` outside the trace, not `hasattr` inside it.** `hasattr(envoy, "attention_probabilities")` never answers `False`: it raises `nnter.Unavailable` when the value is unavailable, and outside a trace raises nnsight's "Cannot access ... outside of interleaving" for an available one.
 - **`layer_output`, `attention_output`, `mlp_output` are tensors on every family**; never index `[0]`. The native `.output` may be a tuple (GPT-J, GPT-Neo, BLOOM, MPT, Falcon).
 - **`attention_output` is what the block adds to the stream**, not necessarily the module's return: on Gemma-2/3/4, OLMo-2/3 and OLMo-Hybrid's attention blocks it is the post-norm's output, on BLOOM/MPT/DBRX the pre-residual value. The identity `layers[i].input + attention_output + mlp_output == layer_output` is what you can rely on, except on Gemma-4: `(input + attention_output + mlp_output [+ layers[i].per_layer_output]) * layer_scalar == layer_output`, with `layer_scalar` far from one on real weights; and on Doge and ZAYA, whose blocks rescale the stream itself with learned per-channel parameters (docs/usage/residual-stream.md). On Granite, GraniteMoE(-Shared/-Hybrid/-SWA) and HyperCLOVA X the contributions are the scaled terms the block adds (`* residual_multiplier`), computed copies whose writes are carried back.
+- **`layer_output` is rank 4 on DeepSeek-V4**: `[batch, seq, streams, hidden]`, the model's parallel residual streams (`Streams`), and `layers[i].input` too; the contributions stay `[batch, seq, hidden]` and the identity is the block's stream formula (docs/reference/families.md, "Hyper-connection residual"). Cross-family code that assumes rank 3 (`resid[:, -1] @ W`, `lm_head(norm(resid))`) runs without an error and silently answers per stream; `model.project_on_vocab` collapses the streams the way the model does.
 - **`model.logits` is the model's output logits (softcap applied); `lm_head.output` is the raw projection.** `next_token_probs`, `input_size` and `states` are read-only.
 - **Decide which blocks have `self_attn` vs `linear_attn` outside the trace** on a hybrid; `getattr(envoy, name, None)` inside a trace can trip served values, and `if envoy:` falls through to the module's `__len__`.
 - **Read order traps**: on Falcon without alibi read `attention_values` before `attention_queries`/`attention_keys` (with alibi: queries, then keys, then values); on DeltaNet read `states` before any state write; `skip_layers` consumes `layers[start].input`, so read it first; a block's interior values come before its `attention_output`.

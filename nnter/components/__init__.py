@@ -51,7 +51,7 @@ from .attention import (
 from .eproperty import (
     DerivedEProperty, EProperty, Unavailable, unavailable,
 )
-from .layer import Layer, Residual
+from .layer import Layer, Residual, StreamMixing, Streams, StreamWeights
 from .linear_attention import Gates, LinearAttention, LinearQK, LinearV
 from .mlp import Mlp
 from .recurrent import (
@@ -70,7 +70,8 @@ from .state_space import (
 __all__ = [
     "Attention", "DerivedEProperty", "EProperty", "Gates", "HeadOutputs", "INTERFACE", "Keys", "Layer", "LinearAttention",
     "LinearQK", "LinearV", "Mlp", "Pattern", "Queries", "RecurrentMixer", "Residual", "ScanDecays", "ScanQK", "ScanState",
-    "ScanStates", "ScanSteps", "ScanValues", "SelectiveScan", "State", "States", "Values",
+    "ScanStates", "ScanSteps", "ScanValues", "SelectiveScan", "State", "States", "StreamMixing", "StreamWeights", "Streams",
+    "Values",
     "NOT_ON_INTERFACE", "SSDHeadOutputs", "SSDKeys", "SSDQueries", "SSDValues", "Standard", "StateSpace", "Unavailable",
     "chunk_per_token", "first_tensor", "interface_reason", "needs_eager",
     "needs_kernel_source", "needs_per_token_chunks", "needs_recurrent_routing", "needs_token_loop", "needs_torch_kernels",

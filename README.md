@@ -170,7 +170,10 @@ path, never by alias). Three shapes of override exist today:
   `unavailable(NOT_ON_INTERFACE)`.
 
 Falcon's block adds the attention into the MLP's output tensor in place, so its
-`mlp_output` reads a copy; assign to edit it. OPT has no MLP module, and
+`mlp_output` reads a copy; assign to edit it. DeepSeek-V4 carries several parallel
+residual streams: `layer_output` is the block's own `[batch, seq, streams, hidden]`,
+the contributions are the sublayers' own outputs, and the block's stream weights are
+four values on its `Layer` (docs/reference/families.md, "Hyper-connection residual"). OPT has no MLP module, and
 `status()` lists no `mlp` value for it.
 
 Pass `envoys=` to `StandardizedTransformer` to add your own; yours replace the
@@ -275,11 +278,15 @@ every value's axes against the model's sizes on every family. A family that
 redefines a value annotates it with the same name, so it cannot drift from
 the base; a value of your own does the same (`from nnter.components import
 Residual`; the root's `Logits`, `NextTokenProbs` and `Tokens` come from
-`nnter.standardized`). Layouts differ between values, not between families:
+`nnter.standardized`). Layouts differ between values, not between families,
+with one exception: `layer_output` is `Streams` on DeepSeek-V4, whose residual is
+several parallel streams:
 
 | layout | axes | values |
 | --- | --- | --- |
 | `Residual` | `batch seq hidden` | `layer_output`, `attention_output`, `mlp_output`, `token_embeddings`, `self_attn.input`, `mlp.input` |
+| `Streams` | `batch seq streams hidden` | `layer_output` and `layers[i].input` on DeepSeek-V4 |
+| `StreamWeights` / `StreamMixing` | `batch seq streams` / `batch seq streams streams` | DeepSeek-V4's `attention_post`, `mlp_post` / `attention_comb`, `mlp_comb` |
 | `Logits` / `NextTokenProbs` | `batch seq vocab` / `batch vocab` | `logits` / `next_token_probs` |
 | `Tokens` | `batch seq` (`Int`) | `input_ids`, `attention_mask` |
 | `Queries` | `batch heads seq qk_head_dim` | `attention_queries` |
@@ -400,7 +407,7 @@ the reverse order segfaults at import; a plain `import transformers` first is fi
 HF_HUB_OFFLINE=1 pytest
 ```
 
-One file per family under `tests/families/` (91 families, 95 checkpoints), each subclassing `FamilySuite`
+One file per family under `tests/families/` (92 families, 96 checkpoints), each subclassing `FamilySuite`
 (`tests/families/suite.py`) with its pinned tiny checkpoint, native paths and
 quirks, plus the tests that are specific to it. The suite is every end-to-end
 statement a family must satisfy: aliases reach the native modules; every

@@ -3,7 +3,7 @@ title: Logit Lens
 one_liner: "`model.project_on_vocab(layer.layer_output)` reads each block's residual stream through the final norm, `lm_head` and any softcap, so one loop over `model.layers` is the lens on every family."
 tags: [patterns, logit-lens, residual-stream, decoding]
 related: [docs/usage/root-values.md, docs/usage/residual-stream.md, docs/patterns/contribution-decomposition.md, docs/patterns/activation-patching.md, docs/patterns/probing.md]
-sources: [nnter/standardized.py, nnter/components/layer.py]
+sources: [nnter/standardized.py, nnter/components/layer.py, nnter/families/deepseek_v4.py]
 ---
 
 # Logit Lens
@@ -77,6 +77,25 @@ sets the key to `None`, Gemma-4 to `30.0`, and a multimodal wrapper (`gemma3`, `
 keeps it in `text_config`, which is where `project_on_vocab` reads it. Gemma-4's
 `layer_scalar` shrinks the stream between blocks; the final RMS norm divides the scale
 back out, so the lens on an intermediate block reads it on the same footing as the last.
+
+## Parallel streams (DeepSeek-V4)
+
+DeepSeek-V4's `layer_output` is `[batch, seq, streams, hidden]`, several parallel copies
+of the stream, and the model reads them out through `hc_head`, a learned weighting of the
+streams, before `norm` and `lm_head`. The family's `project_on_vocab` does the same, so the
+canonical pattern above runs unchanged there, its lens has the stream axis collapsed
+(`[batch, seq, vocab]`), and the wiring check passes exactly. A lens on one stream is a
+different readout, which the model never makes:
+
+```python
+model = StandardizedTransformer("deepseek-ai/DeepSeek-V4-Flash", dispatch=True)
+
+with model.trace(prompt):
+    resid = model.layers[3].layer_output.save()                   # [batch, seq, streams, hidden]
+
+default = model.project_on_vocab(resid)                            # through hc_head: [batch, seq, vocab]
+stream_0 = model.lm_head(model.norm(resid[:, :, 0]))                # stream 0 alone: [batch, seq, vocab]
+```
 
 ## Variations
 
