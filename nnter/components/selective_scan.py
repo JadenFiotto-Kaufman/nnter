@@ -180,7 +180,7 @@ class SelectiveScan(RecurrentMixer):
 
     # -- the kernel's arguments ------------------------------------------------------
 
-    @EProperty(kernel("inputs"), select=_argument("C"), description="C, the vector each token reads the state with, [batch, seq, 1, state_dim]", unavailable=needs_torch_kernels)
+    @EProperty(kernel("inputs"), select=_argument("C"), description="C, the vector each token reads the state with", unavailable=needs_torch_kernels)
     def attention_queries(self, value: torch.Tensor) -> ScanQK:
         """``C``, ``[batch, seq, 1, state_dim]``: the vector each token reads the state with, shared by every channel."""
         return self._tokens_first(value).unsqueeze(2)
@@ -189,7 +189,7 @@ class SelectiveScan(RecurrentMixer):
     def attention_queries(self, value: torch.Tensor) -> torch.Tensor:
         return self._channels_first(value[:, :, 0])
 
-    @EProperty(kernel("inputs"), select=_argument("B"), description="B, the vector each token writes into the state with, [batch, seq, 1, state_dim]", unavailable=needs_torch_kernels)
+    @EProperty(kernel("inputs"), select=_argument("B"), description="B, the vector each token writes into the state with", unavailable=needs_torch_kernels)
     def attention_keys(self, value: torch.Tensor) -> ScanQK:
         """``B``, ``[batch, seq, 1, state_dim]``: the vector each token's input is written into the state along, shared by every channel."""
         return self._tokens_first(value).unsqueeze(2)
@@ -198,7 +198,7 @@ class SelectiveScan(RecurrentMixer):
     def attention_keys(self, value: torch.Tensor) -> torch.Tensor:
         return self._channels_first(value[:, :, 0])
 
-    @EProperty(kernel("inputs"), select=_argument("x"), description="x, the input the scan writes into the state, [batch, seq, channels]", unavailable=needs_torch_kernels)
+    @EProperty(kernel("inputs"), select=_argument("x"), description="x, the input the scan writes into the state", unavailable=needs_torch_kernels)
     def attention_values(self, value: torch.Tensor) -> ScanValues:
         """``x``, ``[batch, seq, channels]``: the input each channel writes into its state, after the conv and the activation."""
         return self._tokens_first(value)
@@ -217,7 +217,7 @@ class SelectiveScan(RecurrentMixer):
     #: The step size: how strongly each token writes into each channel's state, and how far the state decays.
     betas = DerivedEProperty(
         _betas,
-        description="The step size dt = softplus(dt + dt_bias), per token and channel, [batch, seq, channels]; derived, read-only",
+        description="The step size dt = softplus(dt + dt_bias), per token and channel; derived, read-only",
         unavailable=needs_torch_kernels,
     )
 
@@ -228,11 +228,11 @@ class SelectiveScan(RecurrentMixer):
     #: The log decay ``dt * A``: ``exp`` of it is the factor each token keeps of the state, per channel and state dimension.
     decays = DerivedEProperty(
         _decays,
-        description="The per-token log decay dt * A of the state, [batch, seq, channels, state_dim]; derived, read-only",
+        description="The per-token log decay dt * A of the state; derived, read-only",
         unavailable=needs_torch_kernels,
     )
 
-    @EProperty(kernel("inputs"), select=lambda envoy: 0 if _decoding(envoy) else None, description="The state entering the layer, [batch, channels, state_dim] on a decode step (a copy of the cache's buffer), None on a prompt", unavailable=needs_torch_kernels)
+    @EProperty(kernel("inputs"), select=lambda envoy: 0 if _decoding(envoy) else None, description="The state entering the layer on a decode step (a copy of the cache's buffer), None on a prompt", unavailable=needs_torch_kernels)
     def state_input(self, value: Any) -> ScanState | None:
         """The state this call starts from: the cached state on a decode step, ``None`` on a prompt.
 
@@ -251,7 +251,7 @@ class SelectiveScan(RecurrentMixer):
 
     # -- inside the kernels --------------------------------------------------------------
 
-    @EProperty(_inside("READ_OPS"), description="y = C.h + D.x, the scan's read of the state before the gate and out_proj, [batch, seq, channels]", unavailable=needs_kernel_source)
+    @EProperty(_inside("READ_OPS"), description="y = C.h + D.x, the scan's read of the state before the gate and out_proj", unavailable=needs_kernel_source)
     def attention_head_outputs(self, value: torch.Tensor) -> ScanValues:
         """``y = C . h + D * x``, ``[batch, seq, channels]``: the scan's read before ``silu(z)`` and ``out_proj``."""
         return self._tokens_first(value)
@@ -260,7 +260,7 @@ class SelectiveScan(RecurrentMixer):
     def attention_head_outputs(self, value: torch.Tensor) -> torch.Tensor:
         return self._channels_first(value)
 
-    @EProperty(_state_output_key, select=lambda envoy: None if _decoding(envoy) else 1, description="The state leaving the layer, [batch, channels, state_dim]", unavailable=needs_kernel_source)
+    @EProperty(_state_output_key, select=lambda envoy: None if _decoding(envoy) else 1, description="The state leaving the layer", unavailable=needs_kernel_source)
     def state_output(self, value: torch.Tensor) -> ScanState:
         """The state after this call's last token, ``[batch, channels, state_dim]``: what the next decode step starts from.
 
@@ -284,6 +284,6 @@ class SelectiveScan(RecurrentMixer):
     #: The state after each token, stacked on a sequence axis (see `RecurrentMixer.states`).
     states = DerivedEProperty(
         _scan_states,
-        description="The state after every token of this call, [batch, seq, channels, state_dim]; needs route_kernels(family, 'torch')",
+        description="The state after every token of this call; needs route_kernels(family, 'torch')",
         unavailable=needs_token_loop,
     )

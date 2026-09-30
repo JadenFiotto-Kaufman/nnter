@@ -171,7 +171,7 @@ different first tokens. `nnter.prompt_utils.get_first_tokens` uses it.
 ## What the repr shows
 
 Standard names print beside the native name as `alias/native`, and every standard value
-prints with its description, so `print(model.layers[i])` is the reference for what a block
+prints with its layout (the alias name and its axes, when the value has one) and its description, so `print(model.layers[i])` is the reference for what a block
 of this family has:
 
 ```
@@ -182,13 +182,13 @@ GPT2Block(
     (c_proj): Conv1D()
     (attn_dropout): Dropout(p=0.1, inplace=False)
     (resid_dropout): Dropout(p=0.1, inplace=False)
-    (attention_queries): The queries entering attention, [batch, heads, seq, head_dim]
-    (attention_keys): The keys entering attention, [batch, kv_heads, seq, head_dim]
-    (attention_values): The values entering attention, [batch, kv_heads, seq, head_dim]
-    (attention_scores): The attention scores entering the softmax, masked, [batch, heads, query, key]
-    (attention_output): What the attention adds to the residual stream
-    (attention_probabilities): The attention pattern the values are mixed with, [batch, heads, query, key]
-    (attention_head_outputs): The per-head outputs before the output projection, [batch, seq, heads, head_dim]
+    (attention_queries) -> Queries [batch heads seq qk_head_dim]: The queries entering attention
+    (attention_keys) -> Keys [batch kv_heads seq qk_head_dim]: The keys entering attention
+    (attention_values) -> Values [batch kv_heads seq head_dim]: The values entering attention
+    (attention_scores) -> Pattern [batch heads query key]: The attention scores entering the softmax, masked
+    (attention_output) -> Residual [batch seq hidden]: What the attention adds to the residual stream
+    (attention_probabilities) -> Pattern [batch heads query key]: The attention pattern the values are mixed with
+    (attention_head_outputs) -> HeadOutputs [batch seq heads head_dim]: The per-head outputs before the output projection
   )
   (post_attention_layernorm/ln_2): LayerNorm((768,), eps=1e-05, elementwise_affine=True, bias=True)
   (mlp): GPT2MLP(
@@ -196,9 +196,9 @@ GPT2Block(
     (c_proj): Conv1D()
     (act): NewGELUActivation()
     (dropout): Dropout(p=0.1, inplace=False)
-    (mlp_output): What the MLP adds to the residual stream
+    (mlp_output) -> Residual [batch seq hidden]: What the MLP adds to the residual stream
   )
-  (layer_output): The residual stream leaving the block, a tensor even when the block returns a tuple
+  (layer_output) -> Residual [batch seq hidden]: The residual stream leaving the block, a tensor even when the block returns a tuple
 )
 ```
 

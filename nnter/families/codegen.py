@@ -64,7 +64,7 @@ class Attention(Attention):
 
     @EProperty(
         "source.self__attn_0.source.call_0.input",
-        description="The attention scores entering the softmax, masked then scaled, in fp32, [batch, heads, query, key]",
+        description="The attention scores entering the softmax, masked then scaled, in fp32",
     )
     def attention_scores(self, value) -> Pattern:
         return value
@@ -79,7 +79,7 @@ class Attention(Attention):
 
     @EProperty(
         "source.self__attn_0.source.self_attn_dropout_0.output",
-        description="The attention pattern the values are mixed with, [batch, heads, query, key]",
+        description="The attention pattern the values are mixed with",
     )
     def attention_probabilities(self, value) -> Pattern:
         return value

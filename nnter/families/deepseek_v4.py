@@ -83,7 +83,7 @@ class Layer(Layer):
     (``ffn_hc``), float32 whatever the model's dtype.
     """
 
-    @EProperty(key="output", description="The residual streams leaving the block, [batch, seq, streams, hidden]")
+    @EProperty(key="output", description="The residual streams leaving the block")
     def layer_output(self, value) -> Streams:
         return first_tensor(value)
 
@@ -91,19 +91,19 @@ class Layer(Layer):
     def layer_output(self, value):
         return rewrap(self, value)
 
-    @EProperty("attn_hc.output", select=0, description="How much of the attention's output each stream receives, [batch, seq, streams]")
+    @EProperty("attn_hc.output", select=0, description="How much of the attention's output each stream receives")
     def attention_post(self, value) -> StreamWeights:
         return value
 
-    @EProperty("attn_hc.output", select=1, description="The matrix mixing the streams around the attention, [batch, seq, streams, streams], applied transposed")
+    @EProperty("attn_hc.output", select=1, description="The matrix mixing the streams around the attention, applied transposed")
     def attention_comb(self, value) -> StreamMixing:
         return value
 
-    @EProperty("ffn_hc.output", select=0, description="How much of the MLP's output each stream receives, [batch, seq, streams]")
+    @EProperty("ffn_hc.output", select=0, description="How much of the MLP's output each stream receives")
     def mlp_post(self, value) -> StreamWeights:
         return value
 
-    @EProperty("ffn_hc.output", select=1, description="The matrix mixing the streams around the MLP, [batch, seq, streams, streams], applied transposed")
+    @EProperty("ffn_hc.output", select=1, description="The matrix mixing the streams around the MLP, applied transposed")
     def mlp_comb(self, value) -> StreamMixing:
         return value
 

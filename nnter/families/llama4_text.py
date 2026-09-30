@@ -105,7 +105,7 @@ class Mlp(Mlp):
 
     @EProperty(
         f"../source.{FEED_FORWARD_VIEW}.output",
-        description="What the MLP adds to the residual stream: its output viewed in the residual's shape, [batch, seq, hidden]",
+        description="What the MLP adds to the residual stream: its output viewed in the residual's shape",
         unavailable=_not_a_block_feed_forward,
     )
     def mlp_output(self, value) -> Residual:

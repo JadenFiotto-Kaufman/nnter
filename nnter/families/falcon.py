@@ -117,7 +117,7 @@ class Attention(Attention):
 
     @EProperty(
         by_alibi("F_softmax_0", "self_attention_dropout_0"),
-        description="The attention pattern the values are mixed with, [batch, heads, query, key]",
+        description="The attention pattern the values are mixed with",
         unavailable=needs_eager,
     )
     def attention_probabilities(self, value) -> Pattern:

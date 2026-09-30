@@ -69,7 +69,7 @@ class Attention(Attention):
 
     @EProperty(
         "source.self__attn_0.source.nn_functional_softmax_0.input",
-        description="The attention scores entering the softmax, masked and unscaled, in fp32, [batch, heads, query, key]",
+        description="The attention scores entering the softmax, masked and unscaled, in fp32",
         unavailable=needs_eager,
     )
     def attention_scores(self, value) -> Pattern:
@@ -85,7 +85,7 @@ class Attention(Attention):
 
     @EProperty(
         "source.self__attn_0.source.self_attn_dropout_0.output",
-        description="The attention pattern the values are mixed with, [batch, heads, query, key]",
+        description="The attention pattern the values are mixed with",
         unavailable=needs_eager,
     )
     def attention_probabilities(self, value) -> Pattern:

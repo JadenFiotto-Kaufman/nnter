@@ -351,3 +351,17 @@ def test_status_with_a_module_another_block_owns():
     status = model.status(layer=1)
     assert status["mlp.mlp_output"] is None and status["layer_output"] is None
     assert model.status()["mlp.mlp_output"] is None
+
+
+def test_value_repr_line_names_the_layout():
+    """A value's repr line is ``(name) -> Layout [axes]: description``; a value without a layout keeps nnsight's line."""
+    from nnter.components import Attention, Layer
+    from nnter.components.linear_attention import LinearAttention
+    from nnter.standardized import StandardizedTransformer as Root
+
+    assert str(Layer.layer_output) == (
+        "(layer_output) -> Residual [batch seq hidden]: The residual stream leaving the block, a tensor even when the block returns a tuple"
+    )
+    assert str(Attention.attention_probabilities).startswith("(attention_probabilities) -> Pattern [batch heads query key]: ")
+    assert str(LinearAttention.state_input).startswith("(state_input) -> State | None [batch heads key_dim value_dim]: ")
+    assert str(Root.input_size) == "(input_size): [batch, seq] of the current call; read-only"

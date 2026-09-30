@@ -167,7 +167,7 @@ class StandardizedTransformer(TransformersModel):
 
     # -- whole-model values (inside a trace) ---------------------------------
 
-    @EProperty(key="output", description="The model's final logits, [batch, seq, vocab], softcapping applied")
+    @EProperty(key="output", description="The model's final logits, softcapping applied")
     def logits(self, value: Any) -> Logits:
         """The logits the model returns, ``[batch, seq, vocab]``.
 
@@ -183,7 +183,7 @@ class StandardizedTransformer(TransformersModel):
         output.logits = value
         return output
 
-    @EProperty("embed_tokens.output", description="The token embeddings entering the first block, [batch, seq, hidden]")
+    @EProperty("embed_tokens.output", description="The token embeddings entering the first block")
     def token_embeddings(self, value: torch.Tensor) -> Residual:
         """The embedding module's output, ``[batch, seq, hidden]``.
 
@@ -193,7 +193,7 @@ class StandardizedTransformer(TransformersModel):
         """
         return value
 
-    @EProperty(key="output", description="The next-token distribution at the last position, [batch, vocab]; derived, read-only")
+    @EProperty(key="output", description="The next-token distribution at the last position; derived, read-only")
     def next_token_probs(self, value: Any) -> NextTokenProbs:
         """The next-token distribution at the last position, ``[batch, vocab]``.
 
@@ -349,7 +349,7 @@ class StandardizedTransformer(TransformersModel):
 
     # -- the input (inside a trace) ----------------------------------------------
 
-    @EProperty(key="inputs", description="The token ids the model was called with, [batch, seq]")
+    @EProperty(key="inputs", description="The token ids the model was called with")
     def input_ids(self, value: Any) -> Tokens:
         """The token ids the model was called with, ``[batch, seq]``. Assign to run the model on other ids."""
         return value[1]["input_ids"]
@@ -359,7 +359,7 @@ class StandardizedTransformer(TransformersModel):
         args, kwargs = self.inputs
         return args, {**kwargs, "input_ids": value}
 
-    @EProperty(key="inputs", description="The attention mask the model was called with, [batch, seq]; zeros are padding")
+    @EProperty(key="inputs", description="The attention mask the model was called with; zeros are padding")
     def attention_mask(self, value: Any) -> Tokens:
         """The attention mask the model was called with, ``[batch, seq]``; zeros are padding. Assignable."""
         return value[1]["attention_mask"]

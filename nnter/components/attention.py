@@ -137,7 +137,7 @@ class Attention(Standard):
         width = getattr(getattr(module, "k_proj", None), "out_features", None)
         return width // self.qk_head_dim if width else self.num_heads
 
-    @EProperty(f"source.{INTERFACE}.inputs", select=1, description="The queries entering attention, [batch, heads, seq, head_dim]", unavailable=interface_reason)
+    @EProperty(f"source.{INTERFACE}.inputs", select=1, description="The queries entering attention", unavailable=interface_reason)
     def attention_queries(self, value: torch.Tensor) -> Queries:
         """The queries the attention interface receives, ``[batch, heads, seq, head_dim]``.
 
@@ -149,7 +149,7 @@ class Attention(Standard):
         """
         return value
 
-    @EProperty(f"source.{INTERFACE}.inputs", select=2, description="The keys entering attention, [batch, kv_heads, seq, qk_head_dim]", unavailable=interface_reason)
+    @EProperty(f"source.{INTERFACE}.inputs", select=2, description="The keys entering attention", unavailable=interface_reason)
     def attention_keys(self, value: torch.Tensor) -> Keys:
         """The keys the attention interface receives, ``[batch, kv_heads, seq, qk_head_dim]``.
 
@@ -159,7 +159,7 @@ class Attention(Standard):
         """
         return value
 
-    @EProperty(f"source.{INTERFACE}.inputs", select=3, description="The values entering attention, [batch, kv_heads, seq, head_dim]", unavailable=interface_reason)
+    @EProperty(f"source.{INTERFACE}.inputs", select=3, description="The values entering attention", unavailable=interface_reason)
     def attention_values(self, value: torch.Tensor) -> Values:
         """The values the attention interface receives, ``[batch, kv_heads, seq, head_dim]``.
 
@@ -168,7 +168,7 @@ class Attention(Standard):
         """
         return value
 
-    @EProperty(f"source.{INTERFACE}.source.nn_functional_softmax_0.input", description="The attention scores entering the softmax, masked, [batch, heads, query, key]", unavailable=interface_reason)
+    @EProperty(f"source.{INTERFACE}.source.nn_functional_softmax_0.input", description="The attention scores entering the softmax, masked", unavailable=interface_reason)
     def attention_scores(self, value: torch.Tensor) -> Pattern:
         """The scaled, masked scores entering the softmax, ``[batch, heads, query, key]``.
 
@@ -195,7 +195,7 @@ class Attention(Standard):
 
     @EProperty(
         f"source.{INTERFACE}.source.nn_functional_dropout_0.output",
-        description="The attention pattern the values are mixed with, [batch, heads, query, key]",
+        description="The attention pattern the values are mixed with",
         unavailable=interface_reason,
     )
     def attention_probabilities(self, value: torch.Tensor) -> Pattern:
@@ -212,7 +212,7 @@ class Attention(Standard):
         """
         return value
 
-    @EProperty(f"source.{INTERFACE}.output", select=0, description="The per-head outputs before the output projection, [batch, seq, heads, head_dim]", unavailable=interface_reason)
+    @EProperty(f"source.{INTERFACE}.output", select=0, description="The per-head outputs before the output projection", unavailable=interface_reason)
     def attention_head_outputs(self, value: torch.Tensor) -> HeadOutputs:
         """Each head's output before they are concatenated and projected, ``[batch, seq, heads, head_dim]``.
 

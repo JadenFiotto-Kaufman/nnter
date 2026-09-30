@@ -74,7 +74,7 @@ class Attention(Attention):
 
     @EProperty(
         "source.query_states_reshape_0.output",
-        description="The queries entering attention, already scaled by 1/sqrt(head_dim), [batch, heads, seq, head_dim]",
+        description="The queries entering attention, already scaled by 1/sqrt(head_dim)",
     )
     def attention_queries(self, value) -> Queries:
         return _heads_first(self, value)
@@ -109,7 +109,7 @@ class Attention(Attention):
 
     @EProperty(
         "source.nn_functional_dropout_0.output",
-        description="The attention pattern the values are mixed with, [batch, heads, query, key]",
+        description="The attention pattern the values are mixed with",
     )
     def attention_probabilities(self, value) -> Pattern:
         return _heads_first(self, value)
