@@ -9,6 +9,7 @@ import pytest
 import torch
 from suite import FamilySuite, LLAMA_ROWS, PROMPT, contributions, rows
 
+from nnter import StandardizedTransformer
 from nnter.families import gemma4_text
 
 
@@ -122,19 +123,22 @@ class Gemma4Suite(FamilySuite):
         torch.testing.assert_close(model.project_on_vocab(resid), logits)
 
     def test_sizes_are_the_top_level_ones(self, model):
-        """``head_dim`` / ``num_kv_heads`` are the config's top-level values; a full block's tensors say its own."""
+        """The root's ``head_dim`` / ``num_kv_heads`` are the config's top-level values; each block's own are on its attention."""
         text = model.config.get_text_config()
         assert model.head_dim == text._getattr_without_heterogeneous_validation("head_dim")
         assert model.num_kv_heads == text._getattr_without_heterogeneous_validation("num_key_value_heads")
         assert model.hidden_size == text.hidden_size and model.vocab_size == text.vocab_size
+        for i, layer in enumerate(model.layers):
+            attn = layer.self_attn
+            assert (attn.head_dim, attn.num_kv_heads) == (text.per_layer_config[i].head_dim, text.per_layer_config[i].num_key_value_heads)
         full = next(i for i, kind in enumerate(text.layer_types) if kind == "full_attention")
-        layer_config = text.per_layer_config[full]
+        attn = model.layers[full].self_attn
         with model.trace(PROMPT):
-            keys = model.layers[full].self_attn.attention_keys.save()
+            keys = attn.attention_keys.save()
         with model.trace(PROMPT):
-            queries = model.layers[full].self_attn.attention_queries.save()
-        assert queries.shape[1] == model.num_heads and queries.shape[-1] == layer_config.head_dim
-        assert keys.shape[1] == layer_config.num_key_value_heads and keys.shape[-1] == layer_config.head_dim
+            queries = attn.attention_queries.save()
+        assert queries.shape[1] == attn.num_heads == model.num_heads and queries.shape[-1] == attn.head_dim
+        assert keys.shape[1] == attn.num_kv_heads and keys.shape[-1] == attn.head_dim != model.head_dim
 
 
 class TestGemma4Text(Gemma4Suite):
@@ -150,6 +154,17 @@ class TestGemma4Text(Gemma4Suite):
         assert [text.per_layer_config[i].head_dim for i in range(4)] == [16, 32, 16, 32]
         assert [layer.self_attn._module.is_kv_shared_layer for layer in model.layers] == [False, False, True, True]
         assert all(not hasattr(layer.self_attn._module, "k_proj") for layer in model.layers[2:])
+
+    def test_double_wide_mlp_is_on_the_sharing_blocks(self):
+        """Under ``use_double_wide_mlp`` (E2B) the KV-sharing blocks' MLP is twice ``intermediate_size`` wide; the root keeps the config's."""
+        from transformers import AutoConfig, AutoModelForCausalLM
+
+        config = AutoConfig.from_pretrained(self.REPO)
+        config.use_double_wide_mlp = True
+        model = StandardizedTransformer(AutoModelForCausalLM.from_config(config))
+        widths = [layer.mlp.intermediate_size for layer in model.layers]
+        assert widths == [layer.mlp._module.down_proj.in_features for layer in model.layers]
+        assert widths == [model.intermediate_size] * 2 + [2 * model.intermediate_size] * 2
 
     def test_mlp_output_is_the_mlp_and_the_experts(self, model):
         """On a mixture block the post-feedforward norm norms the dense MLP's and the experts' normed sum."""

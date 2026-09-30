@@ -56,9 +56,11 @@ sum to one and are lower-triangular.
 | `attention_probabilities` | the pattern the values are mixed with: the dropout's output after the softmax, in the model dtype, an attention sink's column already dropped | `Pattern`: `batch heads query key` |
 | `attention_head_outputs` | what the interface returns, each head's mix of the values, before the reshape to `[batch, seq, hidden]` and the output projection | `HeadOutputs`: `batch seq heads head_dim` |
 
-Sizes come off the root: `model.num_heads`, `model.num_kv_heads`,
-`model.head_dim` and `model.qk_head_dim` (`head_dim` except under latent
-attention). Every value's layout is on the descriptor, one of the named
+Each block's sizes are on its attention, read off the module: `attn.num_heads`,
+`attn.num_kv_heads`, `attn.head_dim` and `attn.qk_head_dim` (`head_dim` except
+under latent attention and on MiMo-V2-Flash). The root's `model.num_heads`, ...
+are the config's and equal every block's except on Gemma-4 and MiMo-V2-Flash,
+whose blocks differ. Every value's layout is on the descriptor, one of the named
 aliases in `nnter.components`: `Attention.attention_keys.layout is Keys`, and
 `Attention.attention_keys.dims` is `("batch", "kv_heads", "seq", "qk_head_dim")`.
 The sequence axis is 2 on the queries, keys and values, the layout transformers

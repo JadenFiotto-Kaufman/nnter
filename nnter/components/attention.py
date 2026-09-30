@@ -12,7 +12,7 @@ from torch import Tensor
 
 from .eproperty import EProperty
 from .layer import Residual
-from .standard import Standard, first_tensor, rewrap
+from .standard import Standard, first_tensor, in_width, module_int, rewrap, unsized
 
 
 def needs_eager(envoy: Envoy) -> str | None:
@@ -74,6 +74,10 @@ class Attention(Standard):
     attention does its own arithmetic redefines the pattern on its own op and
     marks the rest ``unavailable(NOT_ON_INTERFACE)``.
 
+    Its sizes (`num_heads`, `num_kv_heads`, `head_dim`, `qk_head_dim`) are
+    this block's, read off the module, so they hold on a model whose blocks
+    differ (Gemma-4, MiMo-V2-Flash) and outside a trace.
+
     The pattern is the dropout *after* the softmax, not the softmax itself:
     that is the tensor the values are mixed with on every family, after the
     cast back to the model dtype and, on a model with an attention sink
@@ -87,6 +91,51 @@ class Attention(Standard):
     def off_interface(self) -> str | None:
         """Why the shared attention interface does not run on this module, or ``None``."""
         return needs_eager(self)
+
+    # -- sizes (off the module) ---------------------------------------------------
+    # What this block runs with, read off the module's own attributes and, where
+    # it keeps none, its projections' shapes. A family whose module spells a size
+    # its own way overrides the property on its subclass.
+
+    @property
+    def head_dim(self) -> int:
+        """Width of one head's values and outputs: the module's ``v_head_dim`` (latent attention, MiMo-V2-Flash), else its ``head_dim`` / ``head_size``."""
+        size = module_int(self._module, "v_head_dim", "head_dim", "head_size")
+        if size is None:
+            raise unsized(self, "head_dim")
+        return size
+
+    @property
+    def qk_head_dim(self) -> int:
+        """Width of one head's queries and keys: the module's ``qk_head_dim`` (latent attention), else its ``head_dim`` / ``head_size``."""
+        size = module_int(self._module, "qk_head_dim", "head_dim", "head_size")
+        if size is None:
+            raise unsized(self, "qk_head_dim")
+        return size
+
+    @property
+    def num_heads(self) -> int:
+        """Query heads: the module's ``num_heads`` / ``num_attention_heads`` / ``n_heads`` / ``n_head``, else the output projection's input width over `head_dim`."""
+        size = module_int(self._module, "num_heads", "num_attention_heads", "n_heads", "n_head")
+        if size is None:
+            width = in_width(self._module, "o_proj", "out_proj", "dense", "c_proj", "wo")
+            if width is None:
+                raise unsized(self, "num_heads")
+            size = width // self.head_dim
+        return size
+
+    @property
+    def num_kv_heads(self) -> int:
+        """Key/value heads as projected: the module's ``num_key_value_heads`` / ``num_kv_heads`` / ``kv_heads``, else `num_heads` over its ``num_key_value_groups``, else the key projection's width over `qk_head_dim`, else `num_heads`."""
+        module = self._module
+        size = module_int(module, "num_key_value_heads", "num_kv_heads", "kv_heads", "n_kv_heads")
+        if size is not None:
+            return size
+        groups = module_int(module, "num_key_value_groups")
+        if groups:
+            return self.num_heads // groups
+        width = getattr(getattr(module, "k_proj", None), "out_features", None)
+        return width // self.qk_head_dim if width else self.num_heads
 
     @EProperty(f"source.{INTERFACE}.inputs", select=1, description="The queries entering attention, [batch, heads, seq, head_dim]", unavailable=interface_reason)
     def attention_queries(self, value: torch.Tensor) -> Queries:

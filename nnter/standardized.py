@@ -396,7 +396,10 @@ class StandardizedTransformer(TransformersModel):
     # Each is the plain case, read off the text config (a multimodal
     # checkpoint's ``text_config``, else the config itself); a family whose
     # config says it otherwise defines a function of the same name (see
-    # `StandardizedProperty`).
+    # `StandardizedProperty`). Each is the model-wide value, equal to every
+    # block's where the blocks agree; where they differ (Gemma-4, MiMo-V2-Flash)
+    # it is the config's top-level value, and the block's own is on its
+    # `Attention` / `Mlp`, read off the module.
 
     @StandardizedProperty
     def num_layers(self) -> int:

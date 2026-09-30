@@ -39,7 +39,7 @@ with model.trace("Hello world there"):
 **Block-local names do not survive a trace.** `marker = 42` inside `with
 model.trace(...)` is gone after the block; only `.save()`d values are pushed
 back, and a plain list or dict built inside needs `.save()` too. The suite
-pre-binds its containers (`tests/families/suite.py:197`, `:225`, `:472`).
+pre-binds its containers (`tests/families/suite.py:198`, `:225`, `:472`).
 
 **Reads follow the forward within one invoke.** Reading block 3 then block
 1 raises `OutOfOrderError` ('model.transformer.h.1.output.i0' was requested
@@ -121,7 +121,7 @@ through an instance passes the envoy twice and raises.
 
 **An `EProperty` is not cloudpicklable by value.** `pickle.dumps(nnter.Layer.layer_output)`
 is `TypeError: cannot pickle 'EProperty' object`. A family that travels to
-NDIF travels by reference (`standardized.py:437-446`); do not
+NDIF travels by reference (`standardized.py:440-451`); do not
 `nnsight.register(nnter)` by value.
 
 **`envoys=` matches type before path, never alias.** `_resolve_envoy_class`
@@ -142,7 +142,7 @@ that.
 **GPT-2 (and MPT) queries, keys and values are split views.** torch
 refuses `attention_queries[:, 0] = 0` ("Output 0 of Select is a view and is
 being modified inplace"); assign a new tensor instead
-(`components/attention.py:80-83`; `suite.py:388-392` with
+(`components/attention.py:84-87`; `suite.py:389-393` with
 `REFUSES_IN_PLACE_QKV`).
 
 **Falcon adds the attention into the MLP's output tensor in place.** A live

@@ -40,10 +40,12 @@ The block, in order::
   embedding. ``attention_keys`` and ``attention_values`` are what the attention
   receives on every block, borrowed or not.
 * **Per-layer sizes.** Sliding and full blocks differ in ``head_dim`` (and on
-  26B-A4B/31B in ``num_key_value_heads``); the config marks those per-layer and
-  refuses a plain ``config.head_dim``. The root's ``head_dim`` and
-  ``num_kv_heads`` report the config's top-level values (the sliding blocks');
-  read a full block's shapes off its tensors.
+  26B-A4B/31B in ``num_key_value_heads``), and on E2B (``use_double_wide_mlp``)
+  the KV-sharing blocks' MLP is twice ``intermediate_size`` wide; the config
+  marks the attention sizes per-layer and refuses a plain ``config.head_dim``.
+  The root's ``head_dim`` and ``num_kv_heads`` report the config's top-level
+  values (the sliding blocks'); each block's own are on ``layers[i].self_attn``
+  and ``layers[i].mlp``, read off the module.
 
 ``final_logit_softcapping`` is in the text config; the root's ``project_on_vocab``
 reads it there.
@@ -126,12 +128,13 @@ ENVOYS = {Gemma4TextDecoderLayer: Layer, Gemma4TextAttention: Attention, Gemma4T
 
 
 # -- sizes: per-layer on this config ---------------------------------------------
+# A plain ``config.head_dim`` raises (a per-layer attribute); the stored top-level value does not.
 
 def head_dim(model: "StandardizedTransformer") -> int:
-    """The config's top-level ``head_dim`` (the sliding blocks'); full blocks have their own, on their tensors."""
-    return model.config.get_text_config()._getattr_without_heterogeneous_validation("head_dim")
+    """The config's top-level ``head_dim`` (the sliding blocks'), as stored; full blocks' are on ``layers[i].self_attn``."""
+    return vars(model.config.get_text_config())["head_dim"]
 
 
 def num_kv_heads(model: "StandardizedTransformer") -> int:
-    """The config's top-level ``num_key_value_heads`` (the sliding blocks'); full blocks may have their own."""
-    return model.config.get_text_config()._getattr_without_heterogeneous_validation("num_key_value_heads")
+    """The config's top-level ``num_key_value_heads`` (the sliding blocks'), as stored; full blocks' are on ``layers[i].self_attn``."""
+    return vars(model.config.get_text_config())["num_key_value_heads"]
