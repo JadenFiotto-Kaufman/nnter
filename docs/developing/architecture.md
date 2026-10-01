@@ -103,7 +103,8 @@ over nnsight's `VLLM`; each leaf resolves its family, merges `rename=` /
 `envoys=`, and defines the root values where its engine keeps them.
 vLLM's families are `nnter/families/vllm/<model_type>.py`
 (`lookup(model_type, engine="vllm")`), built from the bases in
-`nnter/components/vllm.py`: `Flat`, an `EProperty` over a `[tokens, ...]`
+`nnter/components/vllm/` (`flat.py`, `layer.py`, `attention.py`, `mlp.py`,
+mirroring `nnter/components/`): `Flat`, an `EProperty` over a `[tokens, ...]`
 tensor served as a private `[1, tokens, ...]` copy and handed back by a
 transform, and `FusedLayer`, whose stream is the sum of the
 `(hidden_states, residual)` pair a fused block takes and returns. The block
