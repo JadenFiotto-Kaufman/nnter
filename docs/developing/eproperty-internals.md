@@ -70,11 +70,18 @@ with model.trace("Hello world there"):
    which reports `'X' object (nor its module) has attribute 'name'`; the real
    error is lost (`eproperty.py:68-72`).
 3. **`transform` is the write-back of a reshaping preprocess.** `__get__`
-   binds `partial(transform, obj, view, raw)` onto the current mediator
-   (`eproperty.py:178-184`); `Mediator.handle` fires it once, after the
-   worker's read on that location, and splices the result in like a swap
-   (`interleaver.py:487-497`). Its signature is `(self, view, raw)`: the
-   edited view and the value as served (`eproperty.py:158-166`).
+   binds a `WriteBack` (nnsight `eproperty.py`: the mapping
+   `partial(transform, obj, view, raw)`, the view, and the eproperty,
+   location and occurrence it was read at) as `mediator.transform`. It is a
+   swap the worker has not issued yet: `Mediator.flush` issues it when the
+   worker next moves on, on its next request or at the end of its block,
+   tagged with the occurrence the view was read at. Its signature is
+   `(self, view, raw)`: the edited view and the value as served. While it
+   waits, a repeated read is answered with the view it holds, so
+   `x.value[...] += f(x.value)`, which reads twice, edits the tensor that
+   goes back. It fires whether or not the view was edited, so a transform
+   must be an identity on an unedited view. nnter's `EProperty.__get__`
+   binds and checks the `WriteBack` the way nnsight's does.
 4. **A location can be visited many times in one run**, and a worker asks
    for one *occurrence* of it (`Pending.iteration`, `interleaver.py:73-96`).
    `Mediator.iteration` is the occurrence the worker wants: `0` with no

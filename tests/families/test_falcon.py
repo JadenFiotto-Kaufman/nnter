@@ -5,6 +5,7 @@ import json
 import os
 import tempfile
 
+import nnsight
 import torch
 from suite import FamilySuite, rows, PROMPT
 
@@ -34,6 +35,29 @@ class TestFalcon(FamilySuite):
             edited = model.logits.save()
         assert not torch.equal(clean, edited)
         assert torch.equal(kept, torch.zeros_like(kept))  # the user's copy stays what they made it
+
+    def test_a_statement_that_reads_the_copy_twice_edits_one_tensor(self, model):
+        """``x.value[...] += f(x.value)`` reads twice; both reads are the copy the write-back carries."""
+        mlp = model.layers[0].mlp
+        with model.trace(PROMPT):
+            first = mlp.mlp_output
+            same = nnsight.save(mlp.mlp_output is first)
+            first[:] += 1
+            once = model.logits.save()
+        with model.trace(PROMPT):
+            mlp.mlp_output[:] += torch.ones_like(mlp.mlp_output)
+            twice = model.logits.save()
+        assert same and torch.equal(once, twice)
+
+    def test_the_copy_is_read_anew_on_every_generation_step(self, model):
+        """One copied value a step and nothing between: each step's is the model's next call, not the last copy."""
+        mlp = model.layers[0].mlp
+        with model.generate(PROMPT, max_new_tokens=3, min_new_tokens=3, do_sample=False) as tracer:
+            copies = nnsight.save([])
+            for step in tracer.iter[:3]:
+                copies.append(mlp.mlp_output)
+        assert [c.shape[1] for c in copies[1:]] == [1, 1] and copies[0].shape[1] > 1
+        assert not torch.equal(copies[1], copies[2])
 
     def test_values_bind_before_the_rotary(self, model):
         """In one trace the values must be read before the queries or keys."""
