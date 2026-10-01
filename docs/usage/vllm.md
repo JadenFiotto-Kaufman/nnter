@@ -3,7 +3,7 @@ title: The vLLM engine
 one_liner: "`StandardizedVLLM` is nnsight's `VLLM` with nnter's names and values: the same layouts as `StandardizedTransformer` (batch axis 1), private copies, vLLM's own defaults, and a family per vLLM implementation under `nnter/families/vllm/`."
 tags: [usage, vllm, engine, StandardizedVLLM, layer_input, families]
 related: [docs/usage/loading.md, docs/usage/residual-stream.md, docs/usage/root-values.md, docs/usage/availability.md, docs/usage/generation.md, docs/extending/adding-a-family.md]
-sources: [nnter/standardized_vllm.py, nnter/components/vllm.py, nnter/families/vllm/__init__.py, nnter/families/vllm/llama.py, nnter/families/vllm/gemma2.py, nnter/families/vllm/gpt2.py, tests/vllm_families/vllm_suite.py]
+sources: [nnter/standardized_vllm.py, nnter/components/vllm/__init__.py, nnter/components/vllm/flat.py, nnter/components/vllm/layer.py, nnter/components/vllm/attention.py, nnter/families/vllm/__init__.py, nnter/families/vllm/llama.py, nnter/families/vllm/gemma2.py, nnter/families/vllm/gpt2.py, tests/vllm_families/vllm_suite.py]
 ---
 
 # The vLLM engine
