@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from types import ModuleType
 import functools
 from typing import Any, Callable, Sequence
@@ -269,9 +270,26 @@ class StandardizedTransformer(TransformersModel):
         return cap * torch.tanh(logits / cap) if cap else logits
 
     def probs_to_dict(self, probs: torch.Tensor, k: int = 5) -> dict[str, float]:
-        """The ``k`` most likely tokens of one ``[vocab]`` distribution, as ``{token: probability}``."""
+        """The ``k`` most likely tokens of one ``[vocab]`` distribution, as ``{token: probability}``, most likely first.
+
+        Keyed by the decoded text. Where two or more of the ``k`` decode to
+        the same text (partial UTF-8 byte tokens all decode to ``'\ufffd'``),
+        those entries are keyed by the tokenizer's raw vocabulary token
+        instead (``convert_ids_to_tokens``, unique per id), with the id
+        appended should even that repeat, so the dict always holds ``k``
+        entries, each with its own probability.
+        """
         values, indices = probs.topk(k)
-        return {self.tokenizer.decode(index): value.item() for value, index in zip(values, indices)}
+        ids = indices.tolist()
+        keys = [self.tokenizer.decode(index) for index in ids]
+        counts = Counter(keys)
+        keys = [
+            str(self.tokenizer.convert_ids_to_tokens(index)) if counts[key] > 1 else key
+            for key, index in zip(keys, ids)
+        ]
+        counts = Counter(keys)
+        keys = [f"{key}#{index}" if counts[key] > 1 else key for key, index in zip(keys, ids)]
+        return {key: value.item() for key, value in zip(keys, values)}
 
     def get_topk_closest_tokens(self, hidden: torch.Tensor, k: int = 5) -> list[dict[str, float]]:
         """The ``k`` most likely next tokens for each position of ``hidden``, ``[..., hidden]``.

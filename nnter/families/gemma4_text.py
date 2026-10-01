@@ -47,7 +47,10 @@ The block, in order::
   (26B-A4B, 31B) the full-attention blocks have no ``v_proj``: their values are
   ``v_norm(k_proj(x))``, the keys' projection before ``k_norm`` and the rotary
   embedding. ``attention_keys`` and ``attention_values`` are what the attention
-  receives on every block, borrowed or not.
+  receives on every block, borrowed or not, served as copies private to the
+  block: an edit, in place or by assignment, changes what that block attends
+  with and nothing else, and the blocks that borrow a source block's tensors
+  keep the originals.
 * **Per-layer sizes.** Sliding and full blocks differ in ``head_dim`` (and on
   26B-A4B/31B in ``num_key_value_heads``), and on E2B (``use_double_wide_mlp``)
   the KV-sharing blocks' MLP is twice ``intermediate_size`` wide; the config
@@ -66,7 +69,8 @@ from nnsight.intervention.envoy import Envoy
 from transformers.models.gemma4.modeling_gemma4 import Gemma4TextAttention, Gemma4TextDecoderLayer, Gemma4TextMLP
 
 from ..components import (
-    Attention, EProperty, Layer, Moe, Residual, RouterLogits, TokenEProperty, Unavailable, mixture_reason,
+    INTERFACE, Attention, EProperty, Keys, Layer, Moe, Residual, RouterLogits, TokenEProperty, Unavailable, Values,
+    interface_reason, mixture_reason,
 )
 
 if TYPE_CHECKING:
@@ -117,13 +121,47 @@ class Layer(Layer):
         return value
 
 
+def _hand_back(index: int):
+    """A transform that puts an edited copy of one argument of this block's attention call in that call's place."""
+
+    def transform(self, value, raw):
+        # Only this call's argument tuple is rebuilt: the tensor a source block
+        # stored in ``shared_kv_states`` (the same object it passes here) stays
+        # in the dict untouched, so the blocks that borrow it see the original.
+        args, kwargs = raw
+        args = list(args)
+        args[index] = value
+        return tuple(args), kwargs
+
+    return transform
+
+
 class Attention(Attention):
     """Gemma-4's attention: the shared eager forward, but what reaches the residual stream is the post-attention norm's output.
 
     The keys and values served are what the interface receives: on a
     KV-sharing block, the tensors an earlier block computed; on an
-    ``attention_k_eq_v`` full block, values from ``k_proj``.
+    ``attention_k_eq_v`` full block, values from ``k_proj``. Both are served
+    as copies: a source block passes the attention call the very tensors it
+    stores for its borrowers, so an in-place edit of the live tensor would
+    reach every later block that borrows it. A transform hands the edited
+    copy back as this call's argument alone, so an edit, in place or by
+    assignment, changes what this block attends with and nothing else.
     """
+
+    @EProperty(f"source.{INTERFACE}.inputs", select=2, description=Attention.attention_keys.description, unavailable=interface_reason)
+    def attention_keys(self, value) -> Keys:
+        """The keys this block's attention receives, as a copy private to it (see the class)."""
+        return value.clone()
+
+    attention_keys.transform(_hand_back(2))
+
+    @EProperty(f"source.{INTERFACE}.inputs", select=3, description=Attention.attention_values.description, unavailable=interface_reason)
+    def attention_values(self, value) -> Values:
+        """The values this block's attention receives, as a copy private to it (see the class)."""
+        return value.clone()
+
+    attention_values.transform(_hand_back(3))
 
     @EProperty(
         "../post_attention_layernorm.output",
