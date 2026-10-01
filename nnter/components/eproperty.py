@@ -12,7 +12,7 @@ from functools import partial
 from typing import Any, Callable
 
 from nnsight.intervention.envoy import Envoy
-from nnsight.intervention.eproperty import eproperty
+from nnsight.intervention.eproperty import WriteBack, eproperty
 from nnsight.intervention.interleaver import Mediator
 from nnsight.intervention.source import SourceNotAvailable
 from nnsight.intervention.util import first_input, replace_first_input
@@ -251,17 +251,26 @@ class EProperty(eproperty):
         self._check(obj)
         key = self.path(obj)
         location = self._resolve(obj, key)
+        if self._transform is not None:
+            # A write-back bound by an earlier read of this value is still
+            # waiting: the view it holds is this read's value too, so an edit to
+            # either is the edit that goes back (nnsight's eproperty does the same).
+            mediator = Mediator.current(location)
+            occurrence = mediator.wanted(location)
+            waiting = mediator.transform
+            if waiting is not None and waiting.key == (self, location, occurrence):
+                return waiting.view
         select = self._selection(obj)  # before the read: a select function may read an earlier value of the call
         raw = Mediator.value(location)
         value = self._pick(key.rsplit(".", 1)[-1], raw, select)
         if self._preprocess is not None:
             value = self._preprocess(obj, value)
         if self._transform is not None:
-            # Bound now so the user's in-place edits on the returned view are
-            # visible when the mediator fires it after this read (nnsight's
+            # Bound now so the user's in-place edits on the returned view are in
+            # it when the worker next moves on and flushes it (nnsight's
             # eproperty does the same); the raw served value rides along for a
             # write-back that has to rebuild a container around the view.
-            Mediator.current(location).transform = partial(self._transform, obj, value, raw)
+            mediator.transform = WriteBack(partial(self._transform, obj, value, raw), value, self, location, occurrence)
         return value
 
     def __set__(self, obj: Envoy, value: Any) -> None:
