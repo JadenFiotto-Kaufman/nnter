@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 from transformers.models.deepseek_v2.modeling_deepseek_v2 import DeepseekV2Attention, DeepseekV2DecoderLayer, DeepseekV2MLP, DeepseekV2Moe
 
-from ..components import Attention, Layer, Mlp
+from ..components import Attention, Layer, Mlp, Moe
 
 if TYPE_CHECKING:
     from ..standardized import StandardizedTransformer
@@ -20,6 +20,7 @@ RENAME = {
     "model.embed_tokens": "embed_tokens",
     "model.layers": "layers",
     "model.norm": "norm",
+    "gate": "router",
 }
 
 
@@ -35,8 +36,12 @@ class Mlp(Mlp):
     """DeepSeek's dense MLP or mixture of experts; both return the hidden states, and the residual is added in the block."""
 
 
+class Moe(Moe, Mlp):
+    """DeepSeek-V2's mixture of experts: a softmax router (greedy or group-limited), routed experts and shared experts."""
+
+
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.
-ENVOYS = {DeepseekV2DecoderLayer: Layer, DeepseekV2Attention: Attention, DeepseekV2MLP: Mlp, DeepseekV2Moe: Mlp}
+ENVOYS = {DeepseekV2DecoderLayer: Layer, DeepseekV2Attention: Attention, DeepseekV2MLP: Mlp, DeepseekV2Moe: Moe}
 
 
 # -- sizes: multi-head latent attention gives queries and keys their own width ------

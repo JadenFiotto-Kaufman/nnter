@@ -16,7 +16,7 @@ from transformers.models.ernie4_5_moe.modeling_ernie4_5_moe import (
     Ernie4_5_MoeSparseMoeBlock,
 )
 
-from ..components import Attention, Layer, Mlp
+from ..components import Attention, Layer, Mlp, Moe
 
 MODEL_TYPES = ("ernie4_5_moe",)
 
@@ -24,6 +24,7 @@ RENAME = {
     "model.embed_tokens": "embed_tokens",
     "model.layers": "layers",
     "model.norm": "norm",
+    "gate": "router",
 }
 
 
@@ -39,5 +40,9 @@ class Mlp(Mlp):
     """ERNIE 4.5's dense MLP or mixture of experts; both return the hidden states (the mixture with its shared experts added), and the residual is added in the block."""
 
 
+class Moe(Moe, Mlp):
+    """ERNIE 4.5's mixture of experts: a softmax router (a selection bias, ``moe_statics``), routed experts and optional shared experts, run first."""
+
+
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.
-ENVOYS = {Ernie4_5_MoeDecoderLayer: Layer, Ernie4_5_MoeAttention: Attention, Ernie4_5_MoeMLP: Mlp, Ernie4_5_MoeSparseMoeBlock: Mlp}
+ENVOYS = {Ernie4_5_MoeDecoderLayer: Layer, Ernie4_5_MoeAttention: Attention, Ernie4_5_MoeMLP: Mlp, Ernie4_5_MoeSparseMoeBlock: Moe}

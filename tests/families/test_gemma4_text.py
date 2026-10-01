@@ -7,7 +7,7 @@ import tempfile
 
 import pytest
 import torch
-from suite import FamilySuite, LLAMA_ROWS, PROMPT, contributions, rows
+from suite import FamilySuite, LLAMA_ROWS, PROMPT, contributions, near, rows
 
 from nnter import StandardizedTransformer
 from nnter.families import gemma4_text
@@ -57,6 +57,14 @@ class Gemma4Suite(FamilySuite):
 
     def has_ple(self, model):
         return model.status().get("per_layer_output", "absent") is None
+
+    def test_routed_plus_shared_is_the_mixture(self, model):
+        """``mlp_output == post_feedforward_layernorm(post_feedforward_layernorm_1(shared) + post_feedforward_layernorm_2(routed))``."""
+        host = self.moe(model)
+        got = self.moe_read(model, host, "shared_expert_output", "routed_output", "mlp_output")
+        block = model.layers[int(host.path.rsplit(".", 2)[-2])]._module
+        mixed = block.post_feedforward_layernorm_1(got["shared_expert_output"]) + block.post_feedforward_layernorm_2(got["routed_output"])
+        near(block.post_feedforward_layernorm(mixed), got["mlp_output"], got["mlp_output"])
 
     def test_contribution_identity(self, model):
         """``(input + attention_output + mlp_output [+ per_layer_output]) * layer_scalar == layer_output``."""

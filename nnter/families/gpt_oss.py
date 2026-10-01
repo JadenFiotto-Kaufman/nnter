@@ -12,7 +12,7 @@ when an attention mask is passed, as it is on every prompt).
 
 from transformers.models.gpt_oss.modeling_gpt_oss import GptOssAttention, GptOssDecoderLayer, GptOssMLP
 
-from ..components import Attention, EProperty, INTERFACE, Layer, Mlp, Pattern, interface_reason
+from ..components import Attention, EProperty, INTERFACE, Layer, Moe, Pattern, interface_reason
 
 MODEL_TYPES = ("gpt_oss",)
 
@@ -42,8 +42,10 @@ class Attention(Attention):
         return value
 
 
-class Mlp(Mlp):
+class Mlp(Moe):
     """GPT-OSS's mixture of experts returns ``(hidden_states, router_scores)``; the base takes the first."""
+
+    SCORING = "topk_softmax"
 
 
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.

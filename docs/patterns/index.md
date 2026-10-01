@@ -32,6 +32,7 @@ model = StandardizedTransformer("openai-community/gpt2", dispatch=True, attn_imp
 ## Modify activations
 
 - [ablation](ablation.md) — zero or mean ablate a contribution, a head, a DeltaNet mixer, or whole blocks with `skip_layers`.
+- [expert-ablation](expert-ablation.md) — every routed expert's effect on a target token, by zeroing `expert_weights` where `expert_indices == e`, on every MoE family.
 - [activation-patching](activation-patching.md) — patch `layer_output` or a contribution from a clean run into a corrupt one; sweep layers and positions.
 - [steering](steering.md) — a direction from contrasting prompts, added with `model.steer` in a trace or at every step of a generate.
 

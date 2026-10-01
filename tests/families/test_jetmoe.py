@@ -10,6 +10,7 @@ class TestJetMoe(FamilySuite):
     REPO = "hf-tiny-v2/tiny-random-JetMoeForCausalLM"
     FAMILY = jetmoe
     NATIVE = rows("model", "layers", "embed_tokens", "norm", attn="self_attention")
+    MOE_UNAVAILABLE = {"expert_outputs": "sorted by expert"}
     KV_HEADS_EXPANDED = True  # keys and values are tiled to every routing slot before the interface
 
     def test_attention_returns_router_logits_third(self, model):

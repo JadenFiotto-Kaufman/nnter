@@ -16,7 +16,7 @@ from transformers.models.solar_open.modeling_solar_open import (
     SolarOpenMoE,
 )
 
-from ..components import Attention, Layer, Mlp
+from ..components import Attention, Layer, Mlp, Moe
 
 MODEL_TYPES = ("solar_open",)
 
@@ -24,6 +24,7 @@ RENAME = {
     "model.embed_tokens": "embed_tokens",
     "model.layers": "layers",
     "model.norm": "norm",
+    "gate": "router",
 }
 
 
@@ -39,5 +40,11 @@ class Mlp(Mlp):
     """Solar Open's dense MLP or mixture of experts; both return the hidden states (the mixture with its shared expert added), and the residual is added in the block."""
 
 
+class Moe(Moe, Mlp):
+    """Solar Open's mixture of experts: DeepSeek-V3's sigmoid router, routed experts and a shared expert."""
+
+    SCORING = "sigmoid"
+
+
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.
-ENVOYS = {SolarOpenDecoderLayer: Layer, SolarOpenAttention: Attention, SolarOpenMLP: Mlp, SolarOpenMoE: Mlp}
+ENVOYS = {SolarOpenDecoderLayer: Layer, SolarOpenAttention: Attention, SolarOpenMLP: Mlp, SolarOpenMoE: Moe}

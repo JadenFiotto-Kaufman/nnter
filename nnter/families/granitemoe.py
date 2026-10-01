@@ -10,14 +10,17 @@ block hands it the multiplier: the family's `Layer` sets ``residual_multiplier``
 on its `Mlp` child when it is built (`hand_residual_multiplier`). ``embedding_multiplier`` scales the
 embedding module's output before the first block and ``logits_scaling`` divides
 the head's output (the family's ``project_on_vocab``, Granite's). Every block has
-the mixture, so the config's ``intermediate_size`` is the experts' width.
+the mixture, so the config's ``intermediate_size`` is the experts' width. The
+mixture is a `Moe`: its router returns ``(indices, weights, logits)``, and
+``router_logits`` is read where the router computes them. ``routed_output`` is the
+module's output, unscaled: ``mlp_output == routed_output * residual_multiplier``.
 """
 
 import torch
 from nnsight.intervention.envoy import Envoy
 from transformers.models.granitemoe.modeling_granitemoe import GraniteMoeAttention, GraniteMoeDecoderLayer, GraniteMoeMoE
 
-from ..components import EProperty, Layer, Mlp, RecurrentMixer, Residual, first_tensor, rewrap
+from ..components import EProperty, Layer, Moe, RecurrentMixer, Residual, first_tensor, rewrap
 from ..components import Mlp as BaseMlp
 from .granite import Attention as GraniteAttention
 from .granite import project_on_vocab  # noqa: F401  the logit lens divides by logits_scaling, as Granite's
@@ -64,8 +67,10 @@ class Attention(GraniteAttention):
     """GraniteMoE's attention: Granite's, the block adds its output times ``residual_multiplier``."""
 
 
-class Mlp(Mlp):
+class Mlp(Moe):
     """GraniteMoE's mixture of experts; the block adds its output times ``residual_multiplier``, which the block hands it."""
+
+    SCORING = "topk_softmax"
 
     #: Set by the block (`hand_residual_multiplier`): the mixture's module keeps no config.
     residual_multiplier: float

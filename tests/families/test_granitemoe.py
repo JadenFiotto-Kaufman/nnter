@@ -21,3 +21,19 @@ class TestGraniteMoeScaled(test_granite.TestGraniteScaled):
     REPO = test_granite._scaled_checkpoint(REPO)
     FAMILY = granitemoe
     NATIVE = NATIVE
+
+
+def test_router_logits_write_by_hand():
+    """GraniteMoE: top-k of the written logits, then a softmax over those; the routed sum from the experts' weights."""
+    from test_mixtral import routing_from_written_logits
+
+    from nnter import StandardizedTransformer
+
+    model = StandardizedTransformer(REPO, dispatch=True)
+    moe = model.layers[0].mlp
+
+    def scoring(logits):
+        top, idx = logits.topk(moe.top_k, dim=-1)
+        return idx, top.softmax(-1)
+
+    routing_from_written_logits(model, moe, scoring)

@@ -68,6 +68,7 @@ class TestZaya(FamilySuite):
     FAMILY = zaya
     NATIVE = LLAMA_ROWS
     MLP_WIDTH_KEY = "moe_intermediate_size"   # every block is a mixture
+    ROUTER_EXTRA_CLASSES = 1  # router_logits' last column is the skip class
 
     def test_merged_identity(self, model):
         merged_identity(model)
@@ -80,6 +81,7 @@ class TestZayaMerged(FamilySuite):
     FAMILY = zaya
     NATIVE = LLAMA_ROWS
     MLP_WIDTH_KEY = "moe_intermediate_size"
+    ROUTER_EXTRA_CLASSES = 1  # router_logits' last column is the skip class
 
     def test_contribution_identity(self, model):
         """The suite's identity through each merge's residual scale and bias."""

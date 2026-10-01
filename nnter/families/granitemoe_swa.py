@@ -38,7 +38,7 @@ class Attention(GraniteSWAAttention):
 
 
 class Mlp(GraniteMoeMlp):
-    """GraniteMoE SWA's mixture of experts: GraniteMoE's, the block adds its output times ``residual_multiplier``."""
+    """GraniteMoE SWA's mixture of experts: GraniteMoE's (a `Moe`), the block adds its output times ``residual_multiplier``."""
 
 
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.

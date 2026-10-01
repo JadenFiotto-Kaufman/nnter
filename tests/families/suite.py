@@ -7,6 +7,8 @@ native modules, the standard values read and write and mean what they say,
 availability is honest, sizes match the tensors.
 """
 
+import re
+
 import pytest
 import torch
 from nnsight import TransformersModel  # nnsight before any transformers submodule
@@ -14,11 +16,14 @@ from nnsight.intervention.envoy import Envoy
 
 from nnter import StandardizedTransformer, Unavailable
 from nnter.components import (
-    Attention, EProperty, Layer, LinearAttention, Mlp, RecurrentMixer, SelectiveScan, Standard, StateSpace,
+    Attention, EProperty, Layer, LinearAttention, Mlp, Moe, RecurrentMixer, SelectiveScan, Standard, StateSpace,
+    first_tensor,
 )
 from nnter.components.standard import in_width
 
 PROMPT = "Hello world there"
+#: Two prompts for the batching checks: two invokes, or one invoke of both.
+PROMPTS = ["The Eiffel Tower is in the city of", "Paris is the capital and largest city of"]
 
 VALUES = {
     "logits", "token_embeddings", "next_token_probs", "input_ids", "attention_mask", "input_size", "layer_output",
@@ -26,6 +31,8 @@ VALUES = {
     "self_attn.attention_queries", "self_attn.attention_keys", "self_attn.attention_values",
     "self_attn.attention_scores", "self_attn.attention_head_outputs",
 }
+#: A mixture of experts' values, on `Moe` (`nnter.components.moe`).
+MOE = ("router_logits", "expert_weights", "expert_indices", "expert_outputs", "routed_output", "shared_expert_output")
 INTERIOR = ("attention_queries", "attention_keys", "attention_values", "attention_scores", "attention_head_outputs")
 LINEAR = ("attention_output", "attention_queries", "attention_keys", "attention_values", "decays", "betas", "state_input", "attention_head_outputs", "state_output", "state", "states")
 
@@ -69,6 +76,64 @@ def rows(container, layers, embed, norm, attn="self_attn", mlp="mlp", ln1="input
 LLAMA_ROWS = rows("model", "layers", "embed_tokens", "norm")
 
 
+def listed(name: str, text: str) -> bool:
+    """Whether an envoy repr lists value ``name``: ``(name) -> Layout [axes]: ...``, or ``(name): ...`` for a value without a layout (and on an nnsight that prints the description alone)."""
+    return f"({name}):" in text or f"({name}) -> " in text
+
+
+def moe_host(model):
+    """The first block's `Moe` that runs a mixture (its ``mlp``, or the block's hosting one), or None on a dense model."""
+    for layer in model.layers:
+        mlp = getattr(layer, "mlp", None)
+        if isinstance(mlp, Moe) and mlp.no_mixture() is None:
+            return mlp
+    return None
+
+
+def nnsight_keeps_unbatched_edits() -> bool:
+    """Whether an assignment to a tensor whose leading dim is not the batch lands under two or more invokes.
+
+    nnsight's ``Batcher._widen_tensor`` drops such an edit on releases before
+    the fix (it hands the original back); the check runs the method itself on
+    a tensor two rows long in a batch of three.
+    """
+    from nnsight.intervention.batching import Batcher
+
+    batcher = Batcher.__new__(Batcher)
+    batcher.total = 3
+    edited = torch.ones(2)
+    return batcher._widen_tensor(torch.zeros(2), [1, 1], edited) is edited
+
+
+def near(actual, expected, like, ulps: int = 16):
+    """``actual == expected`` to ``ulps`` units of ``like``'s dtype at ``like``'s scale: a bf16 checkpoint routes in bf16."""
+    eps = torch.finfo(like.dtype).eps if like.dtype.is_floating_point else torch.finfo(torch.float32).eps
+    scale = max(1.0, float(like.detach().abs().max())) if like.numel() else 1.0
+    expected = expected if isinstance(expected, torch.Tensor) else torch.as_tensor(expected)
+    torch.testing.assert_close(actual.double(), expected.double().to(actual.device).expand_as(actual), rtol=0, atol=ulps * eps * scale)
+
+
+def expert_by_hand(host, x: torch.Tensor, expert: int, weight: torch.Tensor) -> torch.Tensor:
+    """``weight * expert(x)`` for one token ``x`` ``[hidden]``, computed outside the model.
+
+    From the experts' stacked weights where they are the plain gated layout
+    (``gate_up_proj`` / ``down_proj``, ``_apply_gate``, no bias, not
+    transposed); else by calling the experts module on this one token with
+    that one slot (GPT-OSS, Nemotron-H, DeepSeek-V4, DBRX).
+    """
+    experts = host.experts._module
+    plain = (
+        hasattr(experts, "gate_up_proj") and hasattr(experts, "_apply_gate")
+        and not getattr(experts, "is_transposed", False) and not getattr(experts, "has_bias", False)
+    )
+    if plain:
+        hidden = experts._apply_gate(torch.nn.functional.linear(x, experts.gate_up_proj[expert])[None])[0]
+        return torch.nn.functional.linear(hidden, experts.down_proj[expert]) * weight
+    index = torch.tensor([[expert]], device=x.device)
+    out = experts(x[None], index, weight.reshape(1, 1).to(x.dtype))
+    return out.reshape(-1, x.shape[-1])[0]
+
+
 class FamilySuite:
     """Subclass per family: set the class attributes, add the family's own tests."""
 
@@ -98,6 +163,11 @@ class FamilySuite:
     MLP_NORM = "post_attention_layernorm"
     #: The MLP's norm runs before the attention does (Falcon's 40B layout norms both inputs up front).
     MLP_NORM_BEFORE_ATTENTION = False
+    #: Mixture values this checkpoint lacks on its mixture: value -> a substring of the reason (a mixture without
+    #: a shared expert needs no entry for ``shared_expert_output``).
+    MOE_UNAVAILABLE: dict = {}
+    #: Router classes beyond the experts: ZAYA's skip class is one more column of ``router_logits``.
+    ROUTER_EXTRA_CLASSES = 0
 
     @pytest.fixture(scope="class")
     def model(self, request):
@@ -138,6 +208,8 @@ class FamilySuite:
             values |= {f"linear_attn.{name}" for name in LINEAR}
         if not self.any_mlp(model):  # a module no block has is not listed (OPT, Mamba-2)
             values.discard("mlp.mlp_output")
+        if any(isinstance(getattr(layer, "mlp", None), Moe) for layer in model.layers):
+            values |= {f"mlp.{name}" for name in MOE}
         return values
 
     # -- names ------------------------------------------------------------------
@@ -169,7 +241,10 @@ class FamilySuite:
             assert issubclass(self.FAMILY.Attention, Attention)
         if self.any_mlp(model):
             assert issubclass(self.FAMILY.Mlp, Mlp)
-            assert all(type(layer.mlp) is self.FAMILY.Mlp for layer in model.layers if getattr(layer, "mlp", None) is not None)
+            classes = (self.FAMILY.Mlp, getattr(self.FAMILY, "Moe", None))  # a family with dense and mixture blocks keys both
+            assert all(type(layer.mlp) in classes for layer in model.layers if getattr(layer, "mlp", None) is not None)
+            if getattr(self.FAMILY, "Moe", None) is not None:
+                assert issubclass(self.FAMILY.Moe, Moe)
         recurrent = recurrent_mixer(self.FAMILY)
         for layer in model.layers:
             if getattr(layer, "linear_attn", None) is not None:
@@ -197,6 +272,8 @@ class FamilySuite:
 
     def test_status_is_what_this_family_expects(self, model):
         for name, reason in model.status().items():
+            if name.removeprefix("mlp.") in MOE:
+                continue  # test_moe_status_is_what_this_family_expects
             if name in self.EXPECTED_UNAVAILABLE:
                 assert isinstance(reason, dict) and reason, name
                 assert all(self.EXPECTED_UNAVAILABLE[name] in r for r in reason.values()), name
@@ -213,8 +290,10 @@ class FamilySuite:
                 assert isinstance(getattr(type(host), value), EProperty)
             elif host is None:
                 assert "no" in reason and "module" in reason
+            elif not hasattr(type(host), value):  # a dense block's MLP beside another block's mixture
+                assert reason == f"no {value} value on this block's {module}", (name, reason)
             else:
-                with pytest.raises(Unavailable, match=reason.split(";")[0][:40]):
+                with pytest.raises(Unavailable, match=re.escape(reason.split(";")[0][:40])):
                     getattr(host, value)
 
     # -- boundary values --------------------------------------------------------
@@ -502,6 +581,8 @@ class FamilySuite:
         if isinstance(host, StateSpace):
             sizes.update(heads=module.num_heads, groups=module.n_groups, state_dim=module.ssm_state_size,
                          head_dim=module.head_dim, key_dim=module.ssm_state_size, value_dim=module.head_dim)
+        if isinstance(host, Moe) and host.no_mixture() is None:
+            sizes.update(experts=host.num_experts + self.ROUTER_EXTRA_CLASSES, top_k=host.top_k)
         return sizes
 
     def test_values_match_their_annotations(self, model):
@@ -514,6 +595,9 @@ class FamilySuite:
         mlp = next((layer.mlp for layer in model.layers if getattr(layer, "mlp", None) is not None), None)
         if mlp is not None:
             hosts.append(mlp)
+        moe = moe_host(model)
+        if moe is not None and moe is not mlp:
+            hosts.append(moe)
         linear = next((layer.linear_attn for layer in model.layers if getattr(layer, "linear_attn", None) is not None), None)
         if linear is not None:
             hosts.append(linear)
@@ -552,7 +636,7 @@ class FamilySuite:
         assert mask.bool().all() and first.shape[1] == n
         assert ids[0].tolist() == model.tokenizer(PROMPT).input_ids
         text = repr(model)
-        assert all(f"({name}):" in text for name in ("input_ids", "attention_mask", "input_size"))
+        assert all(listed(name, text) for name in ("input_ids", "attention_mask", "input_size"))
 
     def test_assigning_input_ids_runs_other_ids(self, model):
         other = "A completely different prompt here"
@@ -601,7 +685,7 @@ class FamilySuite:
             logits = model.logits.save()
         assert probs.shape == (1, model.vocab_size)
         torch.testing.assert_close(probs, logits[:, -1].softmax(-1))
-        assert "(next_token_probs):" in repr(model)
+        assert listed("next_token_probs", repr(model))
         with pytest.raises(AttributeError, match="assign model.logits"):
             with model.trace(PROMPT):
                 model.next_token_probs = torch.zeros(1, model.vocab_size)
@@ -694,6 +778,269 @@ class FamilySuite:
         text = repr(block)
         own = ("attention_probabilities",) if blocks else ("betas", "decays", "state_output")
         for name in ("layer_output", "attention_output", "attention_queries", "attention_head_outputs") + own:
-            assert f"({name}):" in text, name
+            assert listed(name, text), name
         if getattr(block, "mlp", None) is not None:
-            assert "(mlp_output):" in text
+            assert listed("mlp_output", text)
+
+    # -- a mixture of experts ------------------------------------------------------
+    # On the first block whose MLP is a `Moe` running a mixture; skipped on a dense
+    # model. One value per trace unless the forward order is the test's point: the
+    # shared expert runs before the router on some families and after it on others.
+
+    def moe(self, model):
+        host = moe_host(model)
+        if host is None:
+            pytest.skip("no mixture of experts on any block")
+        return host
+
+    def moe_read(self, model, host, *names, prompt=PROMPT):
+        """Each named value of ``host``, one trace each."""
+        got = {}
+        for name in names:
+            with model.trace(prompt):
+                got[name] = getattr(host, name).save()
+        return got
+
+    def available(self, host, name):
+        return host.status()[name] is None
+
+    def routed_scale(self, host) -> float:
+        """What ``routed_output`` is times the experts' sum (Laguna scales it in the mixture)."""
+        return 1.0
+
+    def mixture_output(self, model, host):
+        """What ``routed_output + shared_expert_output`` equals: the mixture's own output, ``[batch, seq, hidden]``."""
+        with model.trace(PROMPT):
+            out = host.output.save()
+        out = first_tensor(out)
+        return out.reshape(1, -1, out.shape[-1])
+
+    def test_moe_status_is_what_this_family_expects(self, model):
+        """On the mixture every value is available but those the family lists; a dense block's `Moe` says why it has none."""
+        host = self.moe(model)
+        status = host.status()
+        for name in MOE:
+            reason = status[name]
+            if name in self.MOE_UNAVAILABLE:
+                assert reason and self.MOE_UNAVAILABLE[name] in reason, (name, reason)
+            elif name == "shared_expert_output" and reason == "this mixture has no shared expert":
+                assert not any(host._module._modules.get(n) is not None for n in ("shared_experts", "shared_expert", "shared_mlp"))
+            else:
+                assert reason is None, (name, reason)
+        for layer in model.layers:
+            mlp = getattr(layer, "mlp", None)
+            if isinstance(mlp, Moe) and mlp.no_mixture():
+                assert all(mlp.status()[name] == mlp.no_mixture() for name in MOE if name not in self.MOE_UNAVAILABLE), layer.path
+
+    def test_moe_sizes_are_the_modules(self, model):
+        host = self.moe(model)
+        assert 1 <= host.top_k <= host.num_experts
+        if self.available(host, "expert_indices"):
+            idx = self.moe_read(model, host, "expert_indices")["expert_indices"]
+            assert idx.shape[-1] == host.top_k and 0 <= int(idx.min()) and int(idx.max()) < host.num_experts
+            assert idx.dtype == torch.int64
+        assert isinstance(host.SCORING, str) and host.SCORING
+
+    def test_expert_outputs_sum_to_the_routed_output(self, model):
+        host = self.moe(model)
+        if not self.available(host, "expert_outputs"):
+            pytest.skip(host.status()["expert_outputs"])
+        got = self.moe_read(model, host, "expert_outputs", "routed_output")
+        slots, routed = got["expert_outputs"], got["routed_output"]
+        assert slots.shape[:3] == (*routed.shape[:2], host.top_k) and slots.shape[3] == routed.shape[2]
+        near(slots.sum(2) * self.routed_scale(host), routed, routed)
+
+    def test_routed_plus_shared_is_the_mixture(self, model):
+        host = self.moe(model)
+        if not self.available(host, "routed_output"):
+            pytest.skip(host.status()["routed_output"])
+        routed = self.moe_read(model, host, "routed_output")["routed_output"]
+        shared = self.moe_read(model, host, "shared_expert_output")["shared_expert_output"] if self.available(host, "shared_expert_output") else 0
+        near(routed + shared, self.mixture_output(model, host), routed)
+
+    def test_writes_to_the_shared_expert_output_land(self, model):
+        host = self.moe(model)
+        if not self.available(host, "shared_expert_output"):
+            pytest.skip(host.status()["shared_expert_output"])
+        with model.trace(PROMPT):
+            clean = host.mlp_output.save()
+        with model.trace(PROMPT):
+            host.shared_expert_output[:] = 0
+            inplace = host.mlp_output.save()
+        with model.trace(PROMPT):
+            host.shared_expert_output = torch.zeros_like(host.shared_expert_output)
+            assigned = host.mlp_output.save()
+        assert not torch.equal(clean, inplace)
+        near(inplace, assigned, clean)
+
+    def _ablatable_slot(self, host, w):
+        """The last token's first slot with a nonzero weight (ZAYA's skipped slots carry weight 0)."""
+        for t in range(w.shape[1] - 1, -1, -1):
+            for j in range(w.shape[2]):
+                if w[0, t, j] != 0:
+                    return t, j
+        pytest.skip("every slot's weight is zero")
+
+    def test_zeroing_one_slot_removes_that_expert_output(self, model):
+        """``expert_weights[0, t, j] = 0`` moves ``routed_output`` at token ``t`` only, by that slot's weighted output."""
+        host = self.moe(model)
+        if not self.available(host, "expert_weights"):
+            pytest.skip(host.status()["expert_weights"])
+        got = self.moe_read(model, host, "expert_weights", "routed_output")
+        w, routed = got["expert_weights"], got["routed_output"]
+        t, j = self._ablatable_slot(host, w)
+        with model.trace(PROMPT):
+            host.expert_weights[0, t, j] = 0
+            ablated = host.routed_output.save()
+        change = (routed - ablated)[0]
+        others = torch.cat([change[:t], change[t + 1:]])
+        near(others, 0.0, routed)
+        assert change[t].abs().max() > 0
+        if self.available(host, "expert_outputs"):
+            slots = self.moe_read(model, host, "expert_outputs")["expert_outputs"]
+            near(change[t], slots[0, t, j] * self.routed_scale(host), routed)
+
+    def test_ablating_one_expert_everywhere(self, model):
+        """``expert_weights = w.masked_fill(expert_indices == e, 0)`` removes exactly expert ``e``'s slots."""
+        host = self.moe(model)
+        if not self.available(host, "expert_weights"):
+            pytest.skip(host.status()["expert_weights"])
+        got = self.moe_read(model, host, "expert_weights", "expert_indices", "routed_output")
+        w, idx, routed = got["expert_weights"], got["expert_indices"], got["routed_output"]
+        chosen = idx[w != 0]
+        e = int(chosen.mode().values) if chosen.numel() else 0
+        with model.trace(PROMPT):
+            host.expert_weights = host.expert_weights.masked_fill(idx == e, 0)
+            ablated = host.routed_output.save()
+        touched = ((idx == e) & (w != 0)).any(-1)[0]
+        assert touched.any()
+        change = (routed - ablated)[0].abs().amax(-1)
+        assert (change[touched] > 0).all()
+        near(change[~touched], 0.0, routed)
+        if self.available(host, "expert_outputs"):
+            slots = self.moe_read(model, host, "expert_outputs")["expert_outputs"]
+            expected = routed - (slots * (idx == e)[..., None]).sum(2) * self.routed_scale(host)
+            near(ablated, expected, routed)
+
+    def test_rerouting_one_token_matches_a_hand_computation(self, model):
+        """Writing ``expert_indices[0, t, j] = e2`` swaps that slot's expert: ``w[t, j] * expert_e2(x_t)`` in place of ``w[t, j] * expert_e(x_t)``."""
+        host = self.moe(model)
+        if not (self.available(host, "expert_indices") and self.available(host, "expert_weights")):
+            pytest.skip("the routing is not the per-slot pair on this family")
+        if host.top_k >= host.num_experts:
+            pytest.skip("every token already runs every expert")
+        got = self.moe_read(model, host, "expert_weights", "expert_indices", "routed_output")
+        w, idx, routed = got["expert_weights"], got["expert_indices"], got["routed_output"]
+        t, j = self._ablatable_slot(host, w)
+        e = int(idx[0, t, j])
+        e2 = next(k for k in range(host.num_experts) if k not in idx[0, t].tolist())
+        x = None  # bound outside: a name bound inside the block does not survive it
+        if "experts" in host._module._modules or "experts" in host.__dict__:
+            with model.trace(PROMPT):
+                x = host.experts.inputs[0][0].save()
+        with model.trace(PROMPT):
+            rerouted_idx = host.expert_indices.clone()
+            rerouted_idx[0, t, j] = e2
+            host.expert_indices = rerouted_idx
+            rerouted = host.routed_output.save()
+        change = (rerouted - routed)[0]
+        others = torch.cat([change[:t], change[t + 1:]])
+        # other tokens' groups change size, so the grouped matmul may round them differently
+        near(others, 0.0, routed)
+        assert change[t].abs().max() > 0
+        if x is None:
+            return  # no experts module to compute an expert with (JetMoE)
+        x_t = x.reshape(-1, x.shape[-1])[t]
+        expected = (expert_by_hand(host, x_t, e2, w[0, t, j]) - expert_by_hand(host, x_t, e, w[0, t, j])) * self.routed_scale(host)
+        near(change[t], expected, routed, ulps=64)
+
+    def test_writing_router_logits_changes_the_routing(self, model):
+        """Logits written before the scoring decide the routing: token ``t``'s top expert becomes the one written highest."""
+        host = self.moe(model)
+        got = self.moe_read(model, host, "router_logits", "mlp_output")
+        logits, clean = got["router_logits"], got["mlp_output"]
+        assert logits.shape[-1] == host.num_experts + self.ROUTER_EXTRA_CLASSES
+        before = self.moe_read(model, host, "expert_indices")["expert_indices"] if self.available(host, "expert_indices") else None
+        t = logits.shape[1] - 1
+        target = next(k for k in range(host.num_experts) if before is None or k != int(before[0, t, 0]))
+        written = logits.clone()
+        written[0, t] = -10.0
+        written[0, t, target] = 10.0
+        with model.trace(PROMPT):
+            host.router_logits = written
+            idx = host.expert_indices.save() if before is not None else None
+            out = host.mlp_output.save()
+        change = (out - clean)[0].abs().amax(-1)
+        assert change[t] > 0
+        near(change[:t], 0.0, clean)
+        if idx is not None:
+            if host.SCORING == "hash":  # the token id picks the experts; the logits only weight them
+                assert torch.equal(idx, before)
+            else:
+                assert target in idx[0, t].tolist(), (target, idx[0, t])
+                assert torch.equal(idx[0, :t], before[0, :t])
+        with model.trace(PROMPT):
+            host.router_logits[0, t] = written[0, t]
+            inplace = host.mlp_output.save()
+        near(inplace, out, out)
+
+    def test_moe_values_per_invoke(self, model):
+        """Two invokes each read their own rows; an in-place write in one reaches that invoke alone."""
+        host = self.moe(model)
+        names = [name for name in ("router_logits", "expert_weights", "routed_output") if self.available(host, name)]
+        together = {}
+        for name in names:
+            with model.trace(PROMPTS):
+                together[name] = getattr(host, name).save()
+        for name in names:
+            with model.trace() as tracer:
+                with tracer.invoke(PROMPTS[0]):
+                    first = getattr(host, name).save()
+                with tracer.invoke(PROMPTS[1]):
+                    second = getattr(host, name).save()
+            assert first.shape[0] == second.shape[0] == 1, name
+            torch.testing.assert_close(first[0], together[name][0], msg=name)
+            torch.testing.assert_close(second[0], together[name][1], msg=name)
+        with model.trace(PROMPTS):
+            clean = host.mlp_output.save()
+        edit = "expert_weights" if "expert_weights" in names else "routed_output"
+        with model.trace() as tracer:
+            with tracer.invoke(PROMPTS[0]):
+                first = host.mlp_output.save()
+            with tracer.invoke(PROMPTS[1]):
+                getattr(host, edit)[:, -1] = 0
+                second = host.mlp_output.save()
+        assert torch.equal(first[0], clean[0])
+        assert not torch.equal(second[0], clean[1])
+
+    def test_moe_assignment_per_invoke(self, model):
+        """An assignment in the second of two invokes reaches that invoke alone (needs nnsight's widen of unbatched edits)."""
+        host = self.moe(model)
+        if not nnsight_keeps_unbatched_edits():
+            pytest.skip("this nnsight drops an assignment to a tensor whose leading dim is not the batch under two invokes")
+        edit = "expert_weights" if self.available(host, "expert_weights") else "routed_output"
+        with model.trace(PROMPTS):
+            clean = host.mlp_output.save()
+        with model.trace() as tracer:
+            with tracer.invoke(PROMPTS[0]):
+                first = host.mlp_output.save()
+            with tracer.invoke(PROMPTS[1]):
+                setattr(host, edit, torch.zeros_like(getattr(host, edit)))
+                second = host.mlp_output.save()
+        assert torch.equal(first[0], clean[0])
+        assert not torch.equal(second[0], clean[1])
+
+    def test_expert_outputs_need_a_grouped_experts_implementation(self, request):
+        """Under ``experts_implementation="eager"`` the per-slot outputs are unavailable, with the load kwarg in the reason; the rest still read."""
+        cls = request.cls
+        model = StandardizedTransformer(cls.REPO, dispatch=True, attn_implementation="eager", experts_implementation="eager", **cls.LOAD_KWARGS)
+        host = self.moe(model)
+        if "expert_outputs" in self.MOE_UNAVAILABLE:
+            pytest.skip(host.status()["expert_outputs"])
+        reason = host.status()["expert_outputs"]
+        assert reason and "experts_implementation=" in reason and "'eager'" in reason
+        with pytest.raises(Unavailable, match="experts_implementation="):
+            with model.trace(PROMPT):
+                host.expert_outputs.save()
+        got = self.moe_read(model, host, "expert_weights", "routed_output")
+        assert got["expert_weights"].shape[-1] == host.top_k and got["routed_output"].shape[-1] == model.hidden_size

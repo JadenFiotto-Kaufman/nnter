@@ -47,8 +47,11 @@ sequence there. The interface's output keeps a rotation on its rotary slice
 output projection, and ``attention_head_outputs`` is that de-rotated tensor, what
 the projection reads. Not latent attention: the plain root sizes hold.
 
-Every MLP is a mixture (``DeepseekV4SparseMoeBlock``); on the ``hash_moe`` blocks
-the router picks experts from the token ids, so a run needs ``input_ids``.
+Every MLP is a mixture (``DeepseekV4SparseMoeBlock``, a `Moe`; its router, ``gate``,
+is aliased ``router``); on the ``hash_moe`` blocks the router picks experts from the
+token ids (``tid2eid[input_ids]``), so a run needs ``input_ids``. There the logits only
+weight the experts the ids chose: writing ``router_logits`` changes ``expert_weights``,
+not ``expert_indices``.
 """
 
 from typing import TYPE_CHECKING
@@ -59,7 +62,7 @@ from transformers.models.deepseek_v4.modeling_deepseek_v4 import (
 )
 
 from ..components import (
-    Attention, EProperty, HeadOutputs, INTERFACE, Layer, Mlp, Pattern, StreamMixing, Streams, StreamWeights,
+    Attention, EProperty, HeadOutputs, INTERFACE, Layer, Moe, Pattern, StreamMixing, Streams, StreamWeights,
     first_tensor, interface_reason, rewrap,
 )
 
@@ -72,6 +75,7 @@ RENAME = {
     "model.embed_tokens": "embed_tokens",
     "model.layers": "layers",
     "model.norm": "norm",
+    "gate": "router",
 }
 
 
@@ -129,8 +133,14 @@ class Attention(Attention):
         return value
 
 
-class Mlp(Mlp):
+class Mlp(Moe):
     """DeepSeek-V4's mixture of experts returns routed plus shared experts as a bare tensor, so the base holds."""
+
+    @property
+    def SCORING(self) -> str:  # noqa: N802  the class attribute of every other family, per block here
+        """``"hash"`` on a ``hash_moe`` block (the token id picks the experts), else the config's ``scoring_func`` (``"sqrtsoftplus"``, per expert)."""
+        module = self._module
+        return "hash" if module.is_hash else module.experts.config.scoring_func
 
 
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.

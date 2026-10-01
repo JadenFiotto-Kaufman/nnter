@@ -184,6 +184,26 @@ class Layer(Layer):
   the first element of a tuple (GPT-OSS's `(hidden_states, router_scores)`). Redefine
   `mlp_output` when the residual is added inside (BLOOM, MPT) or when a post-norm's
   output is what reaches the stream (Gemma-2/3, OLMo-2/3).
+- **`Moe`** (a mixture of experts): key a subclass of `nnter.components.Moe` on the
+  MoE module class. Where every MLP is a mixture, that subclass is the family's `Mlp`
+  (`class Mlp(Moe)`, Mixtral); where dense blocks come first or alternate, it is a
+  `Moe` beside the `Mlp`, inheriting the family's `mlp_output` (`class Moe(Moe, Mlp)`,
+  DeepSeek-V3), and `test_envoy_classes` accepts either class on a block. Alias the
+  router `router` (`"gate": "router"` in `RENAME`) and the shared expert
+  `shared_experts` (`"shared_expert"` / `"shared_mlp"`). The base holds when the router
+  computes its logits with `F.linear` (`LOGITS`), the experts module takes
+  `(hidden, top_k_index, top_k_weights)` under transformers' `@use_experts_implementation`,
+  and the shared expert's output is what the mixture adds. Otherwise redefine the value
+  at the right place, a `TokenEProperty` with the base's layout: the router's
+  projection module (`"router.wg.output"`, Hunyuan), an op of the mixture's own forward
+  (`"source.hidden_states_2.output"`, Laguna, with `sourced = True` since the read
+  follows a child's), `unavailable(...)` where no tensor holds the value (DBRX's
+  `expert_outputs`), and set `SCORING`. A mixture with no module of its own is hosted on
+  `layers[i].mlp`: the family's `Layer.__init__` hands the block's `router` and
+  `experts` envoys down (`self.mlp.router = self.router`, Gemma-4) and the `Mlp`
+  overrides `no_mixture()` for the checkpoints without one. A family never looks its
+  parent up through the interleaver's envoys
+  ([../usage/mixture-of-experts.md](../usage/mixture-of-experts.md)).
 - **`LinearAttention`** (hybrids only): the base holds for transformers' pure-torch gated
   delta rule; Qwen3-Next, Qwen3.5 and OLMo-Hybrid subclass it with a docstring and nothing
   else. It is a `RecurrentMixer`: a mixer with other kernels (a state-space layer) is a new
@@ -197,8 +217,8 @@ class Layer(Layer):
 A dict from transformers module class to envoy class. Import the modeling module at
 the top of the family module and nowhere else in nnter: `import nnter` loads no
 transformers modeling code because families are imported on first use. Several
-module types may share one envoy class (`DeepseekV2MLP: Mlp, DeepseekV2Moe: Mlp`;
-Qwen3-Next's dense `Qwen3NextMLP` and sparse `Qwen3NextSparseMoeBlock`). `envoys=`
+module types may share one envoy class (Llama's `LlamaMLP` and a shared expert of the
+same class); a mixture is keyed to its own (`DeepseekV2MLP: Mlp, DeepseekV2Moe: Moe`). `envoys=`
 matches by type or by native path suffix, never by alias, and nnsight tries type keys
 before path keys.
 

@@ -10,7 +10,7 @@ that returns the routed hidden states as a bare tensor; the experts are
 
 from transformers.models.phimoe.modeling_phimoe import PhimoeAttention, PhimoeDecoderLayer, PhimoeSparseMoeBlock
 
-from ..components import Attention, Layer, Mlp
+from ..components import Attention, Layer, Moe, RouterLogits, TokenEProperty
 
 MODEL_TYPES = ("phimoe",)
 
@@ -29,8 +29,19 @@ class Attention(Attention):
     """Phi-3.5-MoE's attention; the shared eager forward and the residual added in the block, so the base holds."""
 
 
-class Mlp(Mlp):
-    """A mixture of experts: the module returns the routed hidden states as a bare tensor, so the base holds."""
+class Mlp(Moe):
+    """A mixture of experts: the module returns the routed hidden states as a bare tensor, so the base holds.
+
+    The router is an ``nn.Linear`` subclass whose forward calls its parent's
+    (``super().forward``), so the logits are that call's output; sparsemixer
+    turns them into the weights.
+    """
+
+    SCORING = "sparsemixer"
+
+    @TokenEProperty("router.source.forward_0.output", description=Moe.router_logits.description)
+    def router_logits(self, value) -> RouterLogits:
+        return value
 
 
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.

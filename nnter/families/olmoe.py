@@ -12,7 +12,7 @@ its experts are ``intermediate_size`` wide.
 
 from transformers.models.olmoe.modeling_olmoe import OlmoeAttention, OlmoeDecoderLayer, OlmoeSparseMoeBlock
 
-from ..components import Attention, Layer, Mlp
+from ..components import Attention, Layer, Moe
 
 MODEL_TYPES = ("olmoe",)
 
@@ -20,6 +20,7 @@ RENAME = {
     "model.embed_tokens": "embed_tokens",
     "model.layers": "layers",
     "model.norm": "norm",
+    "gate": "router",
 }
 
 
@@ -31,7 +32,7 @@ class Attention(Attention):
     """OLMoE's attention; the query and key norms run before the shared eager forward and the residual is added in the block, so the base holds."""
 
 
-class Mlp(Mlp):
+class Mlp(Moe):
     """A mixture of experts: the module returns the routed hidden states as a bare tensor, so the base holds."""
 
 

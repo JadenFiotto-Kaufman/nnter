@@ -26,7 +26,7 @@ from transformers.models.jamba.modeling_jamba import (
     JambaAttention, JambaAttentionDecoderLayer, JambaMambaDecoderLayer, JambaMambaMixer, JambaMLP, JambaSparseMoeBlock,
 )
 
-from ..components import Attention, Layer, Mlp, SelectiveScan
+from ..components import Attention, Layer, Mlp, Moe, RouterLogits, SelectiveScan, TokenEProperty
 
 MODEL_TYPES = ("jamba",)
 
@@ -56,8 +56,20 @@ class Mlp(Mlp):
     """Jamba's dense MLP or sparse mixture of experts; both return the hidden states, added in the block."""
 
 
+class Moe(Moe, Mlp):
+    """Jamba's mixture of experts: the router is a bare ``nn.Linear``, whose output is the logits.
+
+    The mixture's ``route_tokens_to_experts`` method takes a softmax top-k of
+    them, without renormalizing.
+    """
+
+    @TokenEProperty("router.output", description=Moe.router_logits.description)
+    def router_logits(self, value) -> RouterLogits:
+        return value
+
+
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.
 ENVOYS = {
     JambaAttentionDecoderLayer: Layer, JambaMambaDecoderLayer: Layer, JambaAttention: Attention,
-    JambaMambaMixer: SelectiveScan, JambaMLP: Mlp, JambaSparseMoeBlock: Mlp,
+    JambaMambaMixer: SelectiveScan, JambaMLP: Mlp, JambaSparseMoeBlock: Moe,
 }

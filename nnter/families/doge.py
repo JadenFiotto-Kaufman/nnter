@@ -23,7 +23,7 @@ mixture ``DogeCDMoE`` under ``is_moe``, which returns ``(hidden_states, router_l
 
 from transformers.models.doge.modeling_doge import DogeAttention, DogeCDMoE, DogeDecoderLayer, DogeMLP
 
-from ..components import Attention, Layer, Mlp
+from ..components import Attention, Layer, Mlp, Moe
 
 MODEL_TYPES = ("doge",)
 
@@ -46,5 +46,16 @@ class Mlp(Mlp):
     """Doge's MLP or cross-domain mixture (``(hidden_states, router_logits)``); the output is added unscaled, so the base holds."""
 
 
+#: Why none of the cross-domain mixture's values are served.
+CANNOT_RUN = "transformers 5.17 cannot run DogeCDMoE: the block drops out its tuple output"
+
+
+class Moe(Moe, Mlp):
+    """Doge's cross-domain mixture (``is_moe``): product-key routing over a dense MLP. Every mixture value is unavailable: transformers cannot run it."""
+
+    def no_mixture(self) -> str:
+        return CANNOT_RUN
+
+
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.
-ENVOYS = {DogeDecoderLayer: Layer, DogeAttention: Attention, DogeMLP: Mlp, DogeCDMoE: Mlp}
+ENVOYS = {DogeDecoderLayer: Layer, DogeAttention: Attention, DogeMLP: Mlp, DogeCDMoE: Moe}

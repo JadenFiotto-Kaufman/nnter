@@ -12,7 +12,7 @@ are ``moe_intermediate_size`` wide.
 
 from transformers.models.dots1.modeling_dots1 import Dots1Attention, Dots1DecoderLayer, Dots1MLP, Dots1MoE
 
-from ..components import Attention, Layer, Mlp
+from ..components import Attention, Layer, Mlp, Moe
 
 MODEL_TYPES = ("dots1",)
 
@@ -20,6 +20,7 @@ RENAME = {
     "model.embed_tokens": "embed_tokens",
     "model.layers": "layers",
     "model.norm": "norm",
+    "gate": "router",
 }
 
 
@@ -35,5 +36,11 @@ class Mlp(Mlp):
     """dots.llm1's dense MLP or mixture of experts; both return the hidden states (the mixture with its shared expert added), and the residual is added in the block."""
 
 
+class Moe(Moe, Mlp):
+    """dots.llm1's mixture of experts: DeepSeek-V3's sigmoid router, routed experts and a shared expert."""
+
+    SCORING = "sigmoid"
+
+
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.
-ENVOYS = {Dots1DecoderLayer: Layer, Dots1Attention: Attention, Dots1MLP: Mlp, Dots1MoE: Mlp}
+ENVOYS = {Dots1DecoderLayer: Layer, Dots1Attention: Attention, Dots1MLP: Mlp, Dots1MoE: Moe}

@@ -37,7 +37,7 @@ class TestJamba(SelectiveScanSuite, FamilySuite):
     def test_mlp_is_dense_or_a_mixture_of_experts(self, model):
         experts = [i for i, layer in enumerate(model.layers) if hasattr(layer.mlp, "experts")]
         assert tuple(experts) == MOE_BLOCKS
-        assert all(type(layer.mlp) is jamba.Mlp for layer in model.layers)
+        assert all(type(layer.mlp) is (jamba.Moe if i in MOE_BLOCKS else jamba.Mlp) for i, layer in enumerate(model.layers))
 
     def test_status_is_per_block_on_a_hybrid(self, model):
         status = model.status()

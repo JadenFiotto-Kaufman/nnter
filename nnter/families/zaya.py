@@ -32,6 +32,12 @@ which the root's ``intermediate_size`` reports (the config has no dense width).
 ``qk_norm`` L2-normalizes queries and keys and multiplies the keys by a learned
 per-head ``temp``; at its initial value of zero every key is zero and the pattern
 uniform.
+
+The mixture is a `Moe`; its router, ``gate`` (aliased ``router``), mixes the
+previous block's router state into its input and scores ``num_experts + 1``
+classes with a small MLP (``router_mlp``), whose output is ``router_logits``: the
+last column is **skip**. A slot that picks it runs no expert: its weight is 0 and
+its index **0**, an alias of expert 0, so usage counts mask ``expert_weights == 0``.
 """
 
 from typing import TYPE_CHECKING
@@ -40,7 +46,9 @@ import torch
 from nnsight.intervention.envoy import Envoy
 from transformers.models.zaya.modeling_zaya import ZayaAttention, ZayaDecoderLayer, ZayaSparseMoeBlock
 
-from ..components import Attention, EProperty, Layer, Mlp, Residual, first_tensor, rewrap
+from ..components import (
+    Attention, EProperty, Layer, Moe, Residual, RouterLogits, TokenEProperty, first_tensor, rewrap,
+)
 
 if TYPE_CHECKING:
     from ..standardized import StandardizedTransformer
@@ -51,6 +59,7 @@ RENAME = {
     "model.embed_tokens": "embed_tokens",
     "model.layers": "layers",
     "model.norm": "norm",
+    "gate": "router",
 }
 
 
@@ -107,8 +116,12 @@ class Attention(Attention):
         return _scaled_back(value, raw, self.merge._module)
 
 
-class Mlp(Mlp):
-    """ZAYA's mixture of experts (``(hidden_states, router_state)``); the block adds its output shifted and scaled by ``post_mlp_residual_scale``."""
+class Mlp(Moe):
+    """ZAYA's mixture of experts (``(hidden_states, router_state)``); the block adds its output shifted and scaled by ``post_mlp_residual_scale``.
+
+    ``router_logits`` are ``router.router_mlp``'s output, ``num_experts + 1``
+    columns (the last is skip), already ``[batch, seq, ...]``.
+    """
 
     #: Set by the block: the envoy of the merge that follows this sublayer.
     merge: Envoy
@@ -124,6 +137,10 @@ class Mlp(Mlp):
     @mlp_output.transform
     def mlp_output(self, value, raw):
         return _scaled_back(value, raw, self.merge._module)
+
+    @TokenEProperty("router.router_mlp.output", description="The router's logits, one per expert and a last one for skip, before the scoring")
+    def router_logits(self, value) -> RouterLogits:
+        return value
 
 
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.

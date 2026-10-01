@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING
 
 from transformers.models.laguna.modeling_laguna import LagunaAttention, LagunaDecoderLayer, LagunaMLP, LagunaSparseMoeBlock
 
-from ..components import Attention, EProperty, Layer, Mlp, Residual, first_tensor, rewrap
+from ..components import Attention, EProperty, Layer, Mlp, Moe, Residual, TokenEProperty, first_tensor, rewrap
 
 if TYPE_CHECKING:
     from nnsight.intervention.envoy import Envoy
@@ -38,6 +38,7 @@ RENAME = {
     "model.embed_tokens": "embed_tokens",
     "model.layers": "layers",
     "model.norm": "norm",
+    "gate": "router",
 }
 
 
@@ -67,5 +68,23 @@ class Mlp(Mlp):
         return rewrap(self, value)
 
 
+class Moe(Moe, Mlp):
+    """Laguna's mixture of experts: a sigmoid router (logits optionally tanh-softcapped) with a selection bias, routed experts and a shared expert, run first.
+
+    ``router_logits`` are the projection's, before the softcap. The mixture
+    scales the experts' sum by ``routed_scaling_factor`` before adding the
+    shared expert, so ``routed_output`` is that product, bound in this forward
+    after the experts have run: the forward is instrumented at build, and
+    ``expert_outputs.sum(2) * routed_scaling_factor == routed_output``.
+    """
+
+    SCORING = "sigmoid"
+    sourced = True
+
+    @TokenEProperty("source.hidden_states_2.output", description="The routed experts' combined output, times routed_scaling_factor")
+    def routed_output(self, value) -> Residual:
+        return value
+
+
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.
-ENVOYS = {LagunaDecoderLayer: Layer, LagunaAttention: Attention, LagunaMLP: Mlp, LagunaSparseMoeBlock: Mlp}
+ENVOYS = {LagunaDecoderLayer: Layer, LagunaAttention: Attention, LagunaMLP: Mlp, LagunaSparseMoeBlock: Moe}

@@ -25,7 +25,10 @@ without) times the multiplier, and the family's `Layer` sets ``sourced`` for
 it and hands the mixer and the shared expert, whose modules keep no config, the
 multiplier (and the `Mlp` whether routed experts run) when it is built; a write lands on the sum, replacing both experts' contribution.
 ``mlp.output`` is the shared expert's output alone and
-``layers[i].block_sparse_moe.output`` the routed experts'. ``mlp.intermediate_size``
+``layers[i].block_sparse_moe.output`` the routed experts'. The mixture's values
+live on ``mlp`` (a `Moe`), which the block hands ``block_sparse_moe``'s ``router``
+and ``experts`` envoys when it is built: ``shared_expert_output`` is ``mlp.output``
+and ``routed_output + shared_expert_output == mlp_output / residual_multiplier``. ``mlp.intermediate_size``
 and the root's ``intermediate_size`` are the shared expert's width,
 ``shared_intermediate_size``; the routed experts are ``intermediate_size`` wide.
 The attention runs the shared eager forward with ``attention_multiplier`` as its
@@ -43,7 +46,9 @@ from transformers.models.granitemoehybrid.modeling_granitemoehybrid import (
     GraniteMoeHybridMLP,
 )
 
-from ..components import EProperty, Layer, Mlp, Residual, StateSpace, first_tensor, rewrap
+from ..components import (
+    EProperty, Layer, Moe, Residual, StateSpace, TokenEProperty, first_tensor, mixture_reason, rewrap,
+)
 from .granite import Attention as GraniteAttention
 from .granite import project_on_vocab  # noqa: F401  the logit lens divides by logits_scaling, as Granite's
 from .granitemoe import hand_residual_multiplier, scaled_back
@@ -78,7 +83,8 @@ class Layer(Layer):
     started (its mixer has returned), so the forward is instrumented at build.
     The Mamba-2 mixer's and the shared expert's modules keep no config, so the
     block hands them the multiplier, and its `Mlp` whether routed experts run
-    beside the shared one.
+    beside the shared one and, when they do, the mixture's ``router`` and
+    ``experts`` envoys, whose values the `Mlp` hosts.
     """
 
     sourced = True
@@ -87,6 +93,9 @@ class Layer(Layer):
         super().__init__(*args, **kwargs)
         hand_residual_multiplier(self)
         self.mlp.has_experts = self._module.has_experts
+        if self.mlp.has_experts:
+            self.mlp.router = self.block_sparse_moe.router
+            self.mlp.experts = self.block_sparse_moe.experts
 
 
 class Attention(GraniteAttention):
@@ -112,12 +121,27 @@ class StateSpace(StateSpace):
         return scaled_back(value, raw, self.residual_multiplier)
 
 
-class Mlp(Mlp):
-    """GraniteMoE-Hybrid's shared expert, standing for the block's feed-forward: the block adds it plus the routed experts, times ``residual_multiplier``."""
+class Mlp(Moe):
+    """GraniteMoE-Hybrid's shared expert, standing for the block's feed-forward: the block adds it plus the routed experts, times ``residual_multiplier``.
+
+    It hosts the block's mixture of experts (``block_sparse_moe``, whose
+    ``router`` and ``experts`` the block hands it), and is itself the shared
+    expert.
+    """
+
+    SCORING = "topk_softmax"
 
     #: Set by the block: its multiplier, and whether routed experts run beside the shared one.
     residual_multiplier: float
     has_experts: bool
+
+    def no_mixture(self) -> str | None:
+        return None if self.has_experts else "this block runs no routed experts (num_local_experts is 0)"
+
+    @TokenEProperty("output", description="The shared expert's output, unscaled", unavailable=mixture_reason)
+    def shared_expert_output(self, value) -> Residual:
+        """This MLP's own output: the shared expert beside the routed ones, before the block's multiplier."""
+        return value
 
     @property
     def intermediate_size(self) -> int:

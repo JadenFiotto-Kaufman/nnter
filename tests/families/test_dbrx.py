@@ -10,6 +10,7 @@ class TestDbrx(FamilySuite):
     REPO = "yujiepan/dbrx-tiny256-random"
     FAMILY = dbrx
     NATIVE = rows("transformer", "blocks", "wte", "norm_f", attn="norm_attn_norm.attn", mlp="ffn", ln1="norm_attn_norm.norm_1", ln2="norm_attn_norm.norm_2")
+    MOE_UNAVAILABLE = {"expert_outputs": "loop over the experts"}
     ATTENTION_NORM = "norm_attn_norm.norm_1"
     MLP_NORM = "norm_attn_norm.norm_2"
     #: The tiny checkpoint is fp16 with weights of std 0.02: its attention scores round to a

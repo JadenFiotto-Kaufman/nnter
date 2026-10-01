@@ -179,6 +179,21 @@ The four sizes are plain read-only properties, read off the module outside or in
 
 `intermediate_size`, a plain read-only property, is this block's hidden width, one routed expert's on a mixture of experts: the module's `experts.intermediate_dim` / `expert_dim` / `intermediate_size` / `ffn_hidden_size`, else its own `intermediate_size` / `ffn_dim`, else the input width of `down_proj` / `c_proj` / `dense_4h_to_h` / `fc2` / `fc_out` / `w2`. JetMoE's `Mlp` overrides it (`hidden_size` on its module is the experts' width).
 
+## `Moe`
+
+`Moe(Mlp)` in `nnter/components/moe.py`: a mixture of experts. Each MoE family keys a subclass on its MoE module class (the family's `Mlp` where every MLP is a mixture, a `Moe` class beside its `Mlp` where dense and mixture blocks mix); Gemma-4 and GraniteMoE-Hybrid host it on `layers[i].mlp`, which the block hands the `router` and `experts` envoys. Child names: `router` (aliased from `gate`), `experts`, `shared_experts` (aliased from `shared_expert` / `shared_mlp`). [../usage/mixture-of-experts.md](../usage/mixture-of-experts.md) is the page.
+
+| Value | Layout | Base location | Assignable | Availability |
+|---|---|---|---|---|
+| `router_logits` | `RouterLogits` | `router.source.F_linear_0.output`: the router's projection, before the scoring (a family's own projection op or module where it differs) | yes, and in place: the router scores what is written | every mixture but Doge's |
+| `expert_weights` | `ExpertWeights` | `experts.inputs`, `select=2` | yes, and in place; zero ablates the slot | not on Llama 4 (dense scores) or Doge |
+| `expert_indices` | `ExpertIndices` (`Int`) | `experts.inputs`, `select=1` | yes, and in place; reroutes (the weight is not recomputed) | not on Doge |
+| `expert_outputs` | `ExpertOutputs` | `experts.source.experts_forward_1.source.weighted_out_view_0.output` | yes, and in place | `needs_grouped_experts`: only under `experts_implementation="grouped_mm"` (the default) or `"batched_mm"`; never on DBRX, JetMoE, Llama 4, Doge, or Nemotron-H with `moe_latent_size` |
+| `routed_output` | `Residual` | `experts.output` | yes, and in place | not on Doge |
+| `shared_expert_output` | `Residual` | `shared_experts.output` | yes, and in place | `no_shared_expert`: unavailable on a mixture without one |
+
+Every value is a `TokenEProperty`, served as `[batch, seq, ...]` from the model's flat `[batch * seq, ...]` tensor, one invoke's rows under several invokes. `num_experts` and `top_k` are plain read-only properties read off the router or the experts module. `SCORING` is a class attribute naming what the logits mean (`"softmax"`, `"topk_softmax"`, `"sigmoid"`, `"sparsemixer"`; per block on DeepSeek-V4: `"hash"` or the config's `scoring_func`). `no_mixture()` returns why the module runs no mixture, or `None`; every value's availability starts from it (Gemma-4 and GraniteMoE-Hybrid on a dense checkpoint, Doge).
+
 ## `RecurrentMixer`
 
 The base of a recurrent mixer's envoy (`nnter/components/recurrent.py`): how its values are reached at the kernel call its forward makes, apart from what they are. A subclass sets the constants and declares its values at `kernel("inputs")` / `kernel("output")`; the base provides `attention_output`, the per-token state, the availability predicates and `route_kernels`.
@@ -319,13 +334,14 @@ A family module declares `MODEL_TYPES: tuple[str, ...]`, `RENAME: dict[str, str]
 | Descriptor | Signature | What |
 |---|---|---|
 | `EProperty` | `EProperty(key=None, description=None, unavailable=None, select=None)` | nnsight's `eproperty` plus availability and a path for a key. `key` is a path from the host envoy, dotted segments ending in `output`, `input` or `inputs`: `"output"` is the host's own output; a leading `../` (repeatable) steps to the parent by native name; another segment is a child module (aliases included) or, after a `source` segment, an operation; `source` drills into the current module's or operation's forward, instrumenting it for this run (`"source.attention_interface_1.source.nn_functional_softmax_0.output"`, `"../post_attention_layernorm.output"`, `"embed_tokens.output"`, `"../source.hidden_states_view_0.output"`). A function of the envoy returning such a path is allowed (a `RecurrentMixer`'s `kernel("inputs")`, Falcon's `by_alibi`). `None` means the attribute name. `select` picks an element: with `inputs` an int is a positional argument and a str a keyword, with `output` an int indexes the returned tuple; `input` is the call's first argument; a function of the envoy returning one of those (or `None`, the whole value) selects per access, before the served read (`SelectiveScan`'s `_argument(name)` and `StateSpace`'s `argument(name)`, whose two kernels take an argument in different places). A write with `select` (or on `input`) repacks the element and writes the whole value back. `unavailable` is a reason string, or a function of the envoy returning one or `None`, checked on every read and write; `reason(obj)` returns it. `path(obj)` and `inside_forward()` describe the key. A path is walked before every read or write; a missing op raises nnsight's `SourceNotAvailable`. |
+| `TokenEProperty` | `TokenEProperty(key=None, description=None, unavailable=None, select=None)` | An `EProperty` (in `nnter/components/tokens.py`) for a value the model may hold flat over tokens, `[batch * seq, ...]`, one rank below its layout: `__get__` reads as `EProperty` does and serves this invoke's `[batch, seq, ...]` rows of the result, a view, so in-place edits land; `__set__` splices the assigned rows into the whole tensor the location holds, then writes as `EProperty` does. A tensor already at the layout's rank passes through both ways; preprocess, postprocess and transform see the model's own tensor. `Moe`'s routing values use it. |
 | `DerivedEProperty` | `DerivedEProperty(compute, description=None, unavailable=None)` | `compute(envoy)` runs at read time inside the trace over any served values; read-only (assignment raises `AttributeError`). Its layout is read off `compute`'s return annotation. |
 
 Every descriptor exposes `.layout` (the layout alias the defining function's return annotation names, or `None`), `.dims` (its axis names as a tuple), `.description`, `.reason(envoy)`. `str(value)` is its line in the envoy's repr, `(name) -> Layout [axes]: description` when the value has a layout (nnsight prints it from #737 on).
 
 ### Layouts
 
-The twenty `jaxtyping` types every standard value is annotated with, each defined in the file of the envoy that serves it. `nnter.components` re-exports the seventeen envoy-level names; the root's three are importable from `nnter.standardized` only. `value.layout` is the alias itself (`Attention.attention_probabilities.layout is Pattern`), `value.dims` its axes split; a redefinition in a family and a value of your own annotate with the same name (`-> Residual`). `isinstance(tensor, Pattern)` checks rank and dtype.
+The twenty-seven `jaxtyping` types every standard value is annotated with, each defined in the file of the envoy that serves it. `nnter.components` re-exports the twenty-four envoy-level names; the root's three are importable from `nnter.standardized` only. `value.layout` is the alias itself (`Attention.attention_probabilities.layout is Pattern`), `value.dims` its axes split; a redefinition in a family and a value of your own annotate with the same name (`-> Residual`). `isinstance(tensor, Pattern)` checks rank and dtype.
 
 | Name | Axes | Defined in | Carried by |
 |---|---|---|---|
@@ -351,8 +367,12 @@ The twenty `jaxtyping` types every standard value is annotated with, each define
 | `ScanDecays` | `batch seq channels state_dim` | `components/selective_scan.py` | a Mamba-1 `decays` |
 | `ScanState` | `batch channels state_dim` | `components/selective_scan.py` | a Mamba-1 `state_input`, `state_output`, `state` |
 | `ScanStates` | `batch seq channels state_dim` | `components/selective_scan.py` | a Mamba-1 `states` |
+| `RouterLogits` | `batch seq experts` | `components/moe.py` | `router_logits` |
+| `ExpertWeights` | `batch seq top_k` | `components/moe.py` | `expert_weights` |
+| `ExpertIndices` | `batch seq top_k` (`Int`) | `components/moe.py` | `expert_indices` |
+| `ExpertOutputs` | `batch seq top_k hidden` | `components/moe.py` | `expert_outputs` |
 
-The axis names are the same on every layout (`batch` axis 0 everywhere, `seq` the token axis, `heads` the query heads, `kv_heads` the key/value heads, `head_dim` the width of values and head outputs, `qk_head_dim` that of queries and keys, `query`/`key` a pattern's two token axes, `key_dim`/`value_dim` a DeltaNet state's two sides, `channels`/`state_dim` a Mamba-1 state's, `groups` the `B`/`C` groups); the comments above each alias state them, and [../usage/layouts.md](../usage/layouts.md) is the page.
+The axis names are the same on every layout (`batch` axis 0 everywhere, `seq` the token axis, `heads` the query heads, `kv_heads` the key/value heads, `head_dim` the width of values and head outputs, `qk_head_dim` that of queries and keys, `query`/`key` a pattern's two token axes, `key_dim`/`value_dim` a DeltaNet state's two sides, `channels`/`state_dim` a Mamba-1 state's, `groups` the `B`/`C` groups, `experts` a router's classes, `top_k` the routing slots); the comments above each alias state them, and [../usage/layouts.md](../usage/layouts.md) is the page.
 
 ### Availability predicates and constants
 
@@ -366,6 +386,10 @@ The axis names are the same on every layout (`batch` axis 0 everywhere, `seq` th
 | `needs_recurrent_routing` | `needs_recurrent_routing(envoy) -> str \| None` | The reason when `STATE_OP` is `None` (the kernels do not materialize the state per token), then `needs_torch_kernels`, then the reason when the prompt kernel is not the token-by-token loop (or, with `STEP_STATE_OP`, the decode kernel is still the dispatcher): call `route_kernels`. |
 | `needs_kernel_source` | `needs_kernel_source(envoy) -> str \| None` | `needs_torch_kernels`, then the reason when either kernel name is still transformers' dispatcher, whose body is not the kernel's: a `SelectiveScan` value read inside a kernel (`attention_head_outputs`, `state_output`). |
 | `needs_token_loop` | `needs_token_loop(envoy) -> str \| None` | `needs_recurrent_routing`, then the reason when a Mamba-1 checkpoint sets `use_mambapy` with `mambapy` installed (a parallel scan, no per-token binding). |
+| `needs_grouped_experts` | `needs_grouped_experts(envoy) -> str \| None` | `no_mixture()`, then the reason when the experts run neither `grouped_mm` nor `batched_mm` (it names `experts_implementation=`): the predicate of `Moe.expert_outputs`. |
+| `mixture_reason` | `mixture_reason(envoy) -> str \| None` | `envoy.no_mixture()`: the predicate of `Moe`'s other routing values. |
+| `no_shared_expert` | `no_shared_expert(envoy) -> str \| None` | `no_mixture()`, then `"this mixture has no shared expert"` when the module has no `shared_experts` / `shared_expert` / `shared_mlp` child. |
+| `LOGITS`, `DISPATCH`, `PER_SLOT` | `"F_linear_0"`, `"experts_forward_1"`, `"weighted_out_view_0"` | The router's logits op, the call inside transformers' `@use_experts_implementation` wrapper, and the per-slot view inside its `grouped_mm` / `batched_mm` forwards. |
 | `INTERFACE` | `"attention_interface_1"` | The shared attention call every interface family makes. |
 | `NOT_ON_INTERFACE` | `"The attention does its own arithmetic rather than transformers' shared attention interface; not mapped for this family yet"` | The reason for `unavailable(NOT_ON_INTERFACE)` in a family that has not mapped an interior value onto its own arithmetic. No shipped family uses it: all four own-arithmetic families map every interior value. |
 
@@ -381,6 +405,7 @@ The axis names are the same on every layout (`batch` axis 0 everywhere, `seq` th
 | `seq_first` | `seq_first(value: Tensor) -> Tensor` | `value.transpose(1, 2)`: `[batch, heads, seq, d]` to `[batch, seq, heads, d]` as a view, and its own inverse. Used by families whose arithmetic keeps heads first. |
 | `first_tensor` | `first_tensor(value) -> Tensor` | The first element of a tuple output, or the tensor itself. |
 | `rewrap` | `rewrap(envoy, value: Tensor) -> Any` | `value` back in the module's current output tuple, if any. |
+| `rows`, `splice` | `rows(value, rank) -> Any`, `splice(whole, value, rank) -> Any` | A tensor flat over tokens as this invoke's `[batch, seq, ...]` view; this invoke's rows written back into the whole flat tensor. What `TokenEProperty` reads and writes through. Defined in `nnter.components.tokens`. |
 | `module_int`, `in_width` | `module_int(module, *names) -> int \| None`, `in_width(module, *names) -> int \| None` | The first of `names` the module holds as an integer; the input width of the first of `names` it has as a projection (`nn.Linear` or `Conv1D`). What the per-module sizes read with. Defined in `nnter.components.standard`. |
 
 ## `nnter.prompt_utils`

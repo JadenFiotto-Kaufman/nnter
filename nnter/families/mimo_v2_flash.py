@@ -26,7 +26,7 @@ from transformers.models.mimo_v2_flash.modeling_mimo_v2_flash import (
     MiMoV2FlashMoE,
 )
 
-from ..components import Attention, EProperty, INTERFACE, Layer, Mlp, Pattern, interface_reason
+from ..components import Attention, EProperty, INTERFACE, Layer, Mlp, Moe, Pattern, interface_reason
 
 if TYPE_CHECKING:
     from ..standardized import StandardizedTransformer
@@ -37,6 +37,7 @@ RENAME = {
     "model.embed_tokens": "embed_tokens",
     "model.layers": "layers",
     "model.norm": "norm",
+    "gate": "router",
 }
 
 
@@ -64,8 +65,14 @@ class Mlp(Mlp):
     """MiMo-V2-Flash's dense MLP or mixture of experts; both return the hidden states, and the residual is added in the block."""
 
 
+class Moe(Moe, Mlp):
+    """MiMo-V2-Flash's mixture of experts: DeepSeek-V3's sigmoid router and routed experts, no shared expert."""
+
+    SCORING = "sigmoid"
+
+
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.
-ENVOYS = {MiMoV2FlashDecoderLayer: Layer, MiMoV2FlashAttention: Attention, MiMoV2FlashMLP: Mlp, MiMoV2FlashMoE: Mlp}
+ENVOYS = {MiMoV2FlashDecoderLayer: Layer, MiMoV2FlashAttention: Attention, MiMoV2FlashMLP: Mlp, MiMoV2FlashMoE: Moe}
 
 
 # -- sizes: queries and keys are head_dim wide, values v_head_dim ------------------

@@ -31,6 +31,14 @@ What differs from Llama, inside the attention and the feed-forward:
   reach the feed-forward's own output tensor.
   The shared expert is a ``Llama4TextMLP`` too, so it is an `Mlp`; its
   ``mlp_output`` is unavailable, since the block adds the mixture's sum.
+  The mixture is a `Moe` whose router returns dense scores ``[tokens, experts]``
+  (the sigmoid of the top-k logits, zero elsewhere): the experts run on every
+  token, each scaled on its *input* by its score, and the routed sum is added
+  into the shared expert's output tensor in place. So ``router_logits`` (the
+  router's projection) and ``expert_indices`` (its top-k) are the router's own;
+  ``routed_output`` is the mixture's sum over the experts; ``shared_expert_output``
+  is a copy taken as the shared expert returns, whose edits are carried back; and
+  ``expert_weights`` / ``expert_outputs`` are unavailable.
 * **Sizes.** ``intermediate_size`` in this config is the experts' width
   (and the shared expert's); the dense MLP's is ``intermediate_size_mlp``, which
   the root's ``intermediate_size`` reports. Scout has a mixture on every block,
@@ -44,7 +52,9 @@ from transformers.models.llama4.modeling_llama4 import (
     Llama4TextAttention, Llama4TextDecoderLayer, Llama4TextMLP, Llama4TextMoe,
 )
 
-from ..components import Attention, EProperty, Layer, Mlp, Residual
+from ..components import (
+    Attention, EProperty, ExpertIndices, Layer, Mlp, Moe, Residual, RouterLogits, TokenEProperty, unavailable,
+)
 
 if TYPE_CHECKING:
     from nnsight.intervention.envoy import Envoy
@@ -63,6 +73,7 @@ RENAME = {
     "language_model.model.norm": "norm",
     "language_model.lm_head": "lm_head",
     "feed_forward": "mlp",
+    "shared_expert": "shared_experts",
 }
 
 #: The block's ``hidden_states.view(residual.shape)``: the feed-forward's output in the residual's shape.
@@ -112,8 +123,52 @@ class Mlp(Mlp):
         return value
 
 
+#: Why a value of the per-slot routing is not served on Llama 4.
+DENSE_SCORES = "Llama 4's router scales each expert's input by a dense score over every expert; not mapped yet"
+
+
+class Moe(Moe, Mlp):
+    """Llama 4's mixture of experts: dense sigmoid scores, every expert on every token, the routed sum added into the shared expert's output.
+
+    ``routed_output`` is an operation of this forward read after the experts
+    have run, so the forward is instrumented at build.
+    """
+
+    SCORING = "sigmoid"
+    sourced = True
+
+    @TokenEProperty("router.source.forward_0.output", description=Moe.router_logits.description)
+    def router_logits(self, value) -> RouterLogits:
+        """The router's projection, ``[batch, seq, experts]`` (the router is an ``nn.Linear`` whose forward calls its parent's)."""
+        return value
+
+    @TokenEProperty("router.source.torch_topk_0.output", select=1, description=Moe.expert_indices.description)
+    def expert_indices(self, value) -> ExpertIndices:
+        """The router's top-k over the logits, ``[batch, seq, top_k]``; the scores it scatters are built from them."""
+        return value
+
+    expert_weights = unavailable(DENSE_SCORES)
+    expert_outputs = unavailable(DENSE_SCORES)
+
+    @TokenEProperty("source.sum_0.output", description=Moe.routed_output.description)
+    def routed_output(self, value) -> Residual:
+        """The experts' outputs summed over the experts, ``[batch, seq, hidden]``: what the mixture adds into the shared expert's output."""
+        return value
+
+    @TokenEProperty("shared_experts.output", description="The shared expert's output (a copy, since the mixture adds the routed sum into the live tensor in place)")
+    def shared_expert_output(self, value) -> Residual:
+        """The shared expert's output as it returns, a copy: the mixture then adds the routed sum into that tensor in place."""
+        return value.clone()
+
+    @shared_expert_output.transform
+    def shared_expert_output(self, value, raw):
+        # Fires on the model side, after the read, with the copy the read was a view of:
+        # hand back a second copy, so the mixture's in-place add leaves the user's tensor clean.
+        return value.clone()
+
+
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.
-ENVOYS = {Llama4TextDecoderLayer: Layer, Llama4TextAttention: Attention, Llama4TextMLP: Mlp, Llama4TextMoe: Mlp}
+ENVOYS = {Llama4TextDecoderLayer: Layer, Llama4TextAttention: Attention, Llama4TextMLP: Mlp, Llama4TextMoe: Moe}
 
 
 # -- sizes: what Llama 4's config calls them ------------------------------------

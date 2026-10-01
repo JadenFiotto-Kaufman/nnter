@@ -12,8 +12,16 @@ SSD_BLOCKS = (0, 2)       # ``layer_types`` = linear, full, linear, full
 ATTENTION_BLOCKS = (1, 3)
 
 
+def scaled_mixture(self, model, host):
+    """The block's sum of the mixture and the shared expert: ``mlp_output`` over the multiplier."""
+    with model.trace(PROMPT):
+        out = host.mlp_output.save()
+    return out / model.config.residual_multiplier
+
+
 class HybridSuite(StateSpaceChecks, FamilySuite):
     FAMILY = granitemoehybrid
+    mixture_output = scaled_mixture
     NATIVE = {
         **{k: v for k, v in LLAMA_ROWS.items() if k != "layers.0.self_attn"},
         "layers.0.mlp": "model.layers.0.shared_mlp",

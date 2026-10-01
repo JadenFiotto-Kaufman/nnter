@@ -14,7 +14,7 @@ from transformers.models.hunyuan_v1_moe.modeling_hunyuan_v1_moe import (
     HunYuanMoEV1Moe,
 )
 
-from ..components import Attention, Layer, Mlp
+from ..components import Attention, Layer, Moe, RouterLogits, TokenEProperty
 
 MODEL_TYPES = ("hunyuan_v1_moe",)
 
@@ -22,6 +22,8 @@ RENAME = {
     "model.embed_tokens": "embed_tokens",
     "model.layers": "layers",
     "model.norm": "norm",
+    "gate": "router",
+    "shared_mlp": "shared_experts",
 }
 
 
@@ -33,8 +35,16 @@ class Attention(Attention):
     """Hunyuan MoE V1's attention; the shared eager forward and the residual added in the block, so the base holds."""
 
 
-class Mlp(Mlp):
-    """A mixture of experts plus a shared expert, returned as one bare tensor; the residual is added in the block."""
+class Mlp(Moe):
+    """A mixture of experts plus a shared expert (``shared_mlp``, run first), returned as one bare tensor; the residual is added in the block.
+
+    The router (``gate``) projects with a child ``nn.Linear``, ``wg``, in float32:
+    its output is the logits.
+    """
+
+    @TokenEProperty("router.wg.output", description=Moe.router_logits.description)
+    def router_logits(self, value) -> RouterLogits:
+        return value
 
 
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.

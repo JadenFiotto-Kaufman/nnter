@@ -26,7 +26,7 @@ skip up to a full block or to the end. Dense and mixture-of-experts MLPs follow
 
 from transformers.models.glm_moe_dsa.modeling_glm_moe_dsa import GlmMoeDsaAttention, GlmMoeDsaDecoderLayer, GlmMoeDsaMLP, GlmMoeDsaMoE
 
-from ..components import Attention, Layer, Mlp
+from ..components import Attention, Layer, Mlp, Moe
 from .deepseek_v2 import head_dim, qk_head_dim  # noqa: F401  the same latent attention: the same sizes
 
 MODEL_TYPES = ("glm_moe_dsa",)
@@ -35,6 +35,7 @@ RENAME = {
     "model.embed_tokens": "embed_tokens",
     "model.layers": "layers",
     "model.norm": "norm",
+    "gate": "router",
 }
 
 
@@ -52,5 +53,11 @@ class Mlp(Mlp):
     """GLM-5's dense MLP or mixture of experts; both return the hidden states, and the residual is added in the block."""
 
 
+class Moe(Moe, Mlp):
+    """GLM-5's mixture of experts: DeepSeek-V3's sigmoid router, routed experts and a shared expert."""
+
+    SCORING = "sigmoid"
+
+
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.
-ENVOYS = {GlmMoeDsaDecoderLayer: Layer, GlmMoeDsaAttention: Attention, GlmMoeDsaMLP: Mlp, GlmMoeDsaMoE: Mlp}
+ENVOYS = {GlmMoeDsaDecoderLayer: Layer, GlmMoeDsaAttention: Attention, GlmMoeDsaMLP: Mlp, GlmMoeDsaMoE: Moe}
