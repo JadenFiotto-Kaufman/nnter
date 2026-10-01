@@ -1,6 +1,6 @@
 ---
 title: DeltaNet State
-one_liner: "On a Qwen3-Next / Qwen3.5 hybrid, read `state_output` and `state_input`, patch the recurrent state between prompts (`state_input` on a decode step, or `set_state_after(t, value)` inside a prompt after `route_delta_rule`), and track the state's norm token by token with `states`."
+one_liner: "On a Qwen3-Next / Qwen3.5 hybrid, read `state_output` and `state_input`, patch the recurrent state between prompts (`state_input` on a decode step, or `set_state_after(t, value)` inside a prompt after `route_kernels`), and track the state's norm token by token with `states`."
 tags: [patterns, hybrids, deltanet, state, generation]
 related: [docs/usage/availability.md, docs/usage/generation.md, docs/patterns/activation-patching.md, docs/patterns/ablation.md, docs/patterns/cross-family-sweep.md]
 sources: [nnter/components/linear_attention.py, nnter/components/eproperty.py, nnter/families/qwen3_5_text.py, tests/families/test_qwen3_5_text.py]
@@ -75,7 +75,27 @@ print(model.tokenizer.decode(ids[0]), "|", model.tokenizer.decode(ids_patched[0]
 ```
 
 Step 0 is the prompt, whose `state_input` is `None`; steps 1 and beyond are one
-token each with the cached state entering. The tokens change from step 1 on.
+token each with the cached state entering. The write lands: step 1's `state_output`
+differs and its logits move (by up to 0.43 on Qwen3.5-0.8B). But one block's memory is
+one of many linear blocks' (18 on Qwen3.5-0.8B) and every attention block still reads the whole prompt, so the
+greedy tokens need not change: on Qwen3.5-0.8B both runs continue `" Paris, France"`.
+Patching every linear block's state does change them:
+
+```python
+mixes = [model.layers[i].linear_attn for i in linear_blocks]
+donors = []
+with model.trace(other):
+    for m in mixes:
+        donors.append(m.state_output.save())
+
+with model.generate(prompt, max_new_tokens=N, do_sample=False) as tracer:
+    for step in tracer.iter[1]:
+        for m, donor in zip(mixes, donors):
+            m.state_input = donor
+    ids_all = tracer.result.save()
+
+print(model.tokenizer.decode(ids_all[0]))       # the continuation after step 1 differs
+```
 
 ## The state after every token
 
@@ -84,9 +104,9 @@ A prompt normally runs the chunked kernel, which carries the state between
 transformers' token-by-token kernel first, then every position is a value:
 
 ```python
-from nnter import route_delta_rule
+from nnter import route_kernels
 
-route_delta_rule(model.family, "recurrent")             # process-wide; before the first trace of that layer
+route_kernels(model.family, "torch")                    # process-wide; before the first trace of that layer
 model = StandardizedTransformer("Qwen/Qwen3.5-9B", dispatch=True, attn_implementation="eager")
 mix = model.layers[linear_blocks[0]].linear_attn
 
@@ -104,7 +124,7 @@ for token, norm in zip(tokens, norms):
 
 The two kernels compute the same rule; `probs` equals the chunked run's to float
 error. The cost is the slower kernel, the same trade as `attn_implementation="eager"`.
-`route_delta_rule(model.family, "chunked")` restores the default. Without the
+`route_kernels(model.family, "default")` restores the default. Without the
 routing, `states` raises `nnter.Unavailable` with that instruction and `status()`
 reports it under `linear_attn.states`.
 
@@ -137,6 +157,11 @@ with model.trace(prompt):
 assert torch.equal(before, states[:, T - 1]) and not torch.equal(after, states[:, T + 1])
 ```
 
+The write also changes token `T`'s own output (its query reads the state after `T`),
+and it is not all the block carries forward: the short convolution in front of the
+kernel (width 4) still mixes tokens `T - 2` to `T` into tokens `T + 1` to `T + 3`. So a
+state patch is a patch of the recurrent memory, not of everything the prompt left.
+
 The same write as an assignment inside `tracer.iter`, with the same result:
 
 ```python
@@ -164,7 +189,7 @@ prompt within a few tokens, and its state norm curve above stays flat.
 - Reads follow the forward. In one trace, positions before a write are read before
   it and positions after it afterwards; `states` reads every position, so it goes
   in a trace of its own or before any write.
-- `route_delta_rule` is process-wide and must run before the layer's forward is
+- `route_kernels` is process-wide and must run before the layer's forward is
   instrumented: call it before loading, or before the first trace that touches the
   layer. A forward already instrumented keeps the kernel it was compiled with.
 - `states` is read-only, a stack of copies; write one position with
@@ -191,7 +216,7 @@ prompt within a few tokens, and its state norm curve above stays flat.
 - [ablation](ablation.md): zeroing a mixer's `attention_output`.
 - [cross-family-sweep](cross-family-sweep.md): hybrids inside a multi-checkpoint
   loop.
-- [../usage/availability.md](../usage/availability.md): the `route_delta_rule` and
+- [../usage/availability.md](../usage/availability.md): the `route_kernels` and
   kernel reasons in `status()`.
 - [../usage/generation.md](../usage/generation.md): `generate`, `tracer.iter`, the
   prefill and decode steps.

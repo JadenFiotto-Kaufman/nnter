@@ -15,7 +15,10 @@ with model.trace("The Eiffel Tower is in"):
 ```
 
 The same block runs unchanged on `meta-llama/Llama-3.1-8B`,
-`EleutherAI/pythia-70m-deduped`, and every other registered family: GPT-2,
+`EleutherAI/pythia-70m-deduped`, and every other registered family whose block 5 has an
+attention module (on a hybrid such as Qwen3.5 three blocks in four have `linear_attn`
+instead, so pick the block from the ones with `self_attn`; a pure state-space model such
+as Mamba has none, and `layer_output` is what exists on every block). The families: GPT-2,
 Llama, Llama 4 (text), GPT-NeoX, Mistral, Mixtral, MiniMax-M2, Qwen2, Qwen2-MoE, Qwen3, Qwen3-MoE, Gemma,
 Gemma-2, Gemma-3 (text and multimodal checkpoints), Gemma-4 (text; E2B/E4B, 26B-A4B, 31B and the unified 12B), GPT-OSS, DeepSeek-V2, DeepSeek-V3, DeepSeek-V3.2, GLM-4.5/4.6,
 GLM-4.7-Flash, GLM-5, DBRX, Phi, Phi-3,
@@ -99,7 +102,7 @@ The root answers for the whole model too:
 | value                      | what it is                                                                  |
 | -------------------------- | --------------------------------------------------------------------------- |
 | `model.logits`             | the model's final logits, softcapping applied (Gemma-2); `lm_head.output` is the raw projection |
-| `model.token_embeddings`   | the embedding module's output, before positional embeddings or embedding norms |
+| `model.token_embeddings`   | the embedding module's output, with any scale the module applies (Gemma's); positional embeddings, embedding norms and multipliers the model applies after it (GPT-2's `wpe`, Granite's `embedding_multiplier`) are not in it, so `layers[0].input` is what enters block 0 |
 | `model.next_token_probs`   | `logits[:, -1].softmax(-1)`, derived from the output; read-only, assign `logits` instead |
 | `model.num_layers`, `num_heads`, `num_kv_heads`, `head_dim`, `qk_head_dim`, `hidden_size`, `intermediate_size`, `vocab_size` | sizes from the config: a plain rule at the root (`head_dim` is the config's where it says, as on Qwen3 and Gemma, else `hidden // heads`), and the family's own spelling where its config differs (Falcon's `num_kv_heads`, DeepSeek's `v_head_dim`, GPT-2's `n_inner`) |
 
@@ -157,7 +160,7 @@ overriding only what its forward spells differently, and keys them on its own
 transformers module types in its `ENVOYS` (`envoys=` matches by type or native
 path, never by alias). Three shapes of override exist today:
 
-- **sandwich norms** (Gemma-2/3/4, OLMo-2): the contributions are the
+- **sandwich norms** (Gemma-2/3/4, OLMo-2/3, EXAONE-4): the contributions are the
   post-attention and post-feedforward norms' outputs, via a `../` path to the
   sibling norm (Gemma-4's block then adds a third term, `layers[i].per_layer_output`,
   on checkpoints with per-layer embeddings, and multiplies the sum by `layer_scalar`);
@@ -215,26 +218,27 @@ The state *after every token* of a prompt is a further step, and like eager
 attention it is a choice made at load. The chunked kernel a prompt normally
 runs through carries the state between 64-token chunks and never materializes
 it per token; transformers' token-by-token kernel does, at a cost.
-`nnter.route_delta_rule(model.family, "recurrent")` routes the
+`nnter.route_kernels(model.family, "torch")` routes the
 family's prompts through it (process-wide, like installing a kernel; call it
-before tracing a layer; `"chunked"` restores the default), and then:
+before tracing a layer; `"default"` restores the default), and then:
 
 ```python
 model = StandardizedTransformer("Qwen/Qwen3.5-9B", attn_implementation="eager")
-route_delta_rule(model.family, "recurrent")   # before the first trace of a linear block
+route_kernels(model.family, "torch")          # before the first trace of a linear block
 mix = model.layers[0].linear_attn
 
+per_token = []
 with model.trace(prompt) as tracer:
     for t in tracer.iter[:]:                  # `state` is a per-token location: nnsight's own iteration walks it
-        s_t = mix.state.save()
+        per_token.append(mix.state.save())
 
 with model.trace(prompt) as tracer:
     for t in tracer.iter[6]:
-        s6 = mix.state                        # a token's state is served once: read one, write the next
+        s6 = mix.state.save()                 # the state after token 6
     for t in tracer.iter[7]:
         mix.state = torch.zeros_like(s6)      # a write at token 7: the tokens after it continue from zeros
-    for t in tracer.iter[9]:
-        s9 = mix.state.save()
+    for t in tracer.iter[8]:                  # positions inside the prompt: a later one is never reached
+        s8 = mix.state.save()
 
 with model.trace(prompt):
     states = mix.states.save()                # every position stacked, [batch, seq, heads, key_dim, value_dim]
@@ -268,7 +272,7 @@ position, so it goes in a trace of its own.
 ## Layouts
 
 Every value has one layout on every family, and says what it is: each is
-annotated with one of fourteen named `jaxtyping` types defined beside the
+annotated with one of thirty-one named `jaxtyping` types defined beside the
 envoy that serves it, `Residual = Float[Tensor, "batch seq hidden"]`,
 which `value.layout` returns (`Layer.layer_output.layout is Residual`) and
 `value.dims` names (`("batch", "seq", "hidden")`).
@@ -280,7 +284,8 @@ the base; a value of your own does the same (`from nnter.components import
 Residual`; the root's `Logits`, `NextTokenProbs` and `Tokens` come from
 `nnter.standardized`). Layouts differ between values, not between families,
 with one exception: `layer_output` is `Streams` on DeepSeek-V4, whose residual is
-several parallel streams:
+several parallel streams. The main ones (the Mamba and mixture-of-experts layouts are in
+`docs/usage/layouts.md`):
 
 | layout | axes | values |
 | --- | --- | --- |
@@ -304,18 +309,19 @@ layout transformers hands its attention interface.
 
 ## Doing things with the values
 
-Four methods on the model do the common things, written once against the
+Five methods on the model do the common things, written once against the
 standard names so they run on every family:
 
 ```python
 with model.trace(prompt):
     model.skip_layers(4, 7)                       # blocks 4..7 do not run; the stream passes straight through
+    resid = model.layers[8].layer_output.save()
+    lens = model.project_on_vocab(resid).save()   # logit lens at block 8
     model.steer(10, vector, factor=3, token_positions=-1)   # add to the residual stream leaving block 10
-    resid = model.layers[5].layer_output.save()
-    lens = model.project_on_vocab(resid).save()   # logit lens at block 5
     logits = model.logits.save()
 
 model.get_topk_closest_tokens(resid[0, -1], k=5)   # [{token: probability}] for that position, projected the same way
+model.probs_to_dict(logits[0, -1].softmax(-1), k=5)   # a distribution as {token: probability}
 ```
 
 `skip_layers` hands each skipped block's input on as its `layer_output`,

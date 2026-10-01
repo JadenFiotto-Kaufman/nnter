@@ -1,6 +1,6 @@
 ---
 title: Layouts
-one_liner: "Every standard value has one axis layout on every family (one exception: `layer_output` is `Streams` on DeepSeek-V4), one of twenty-seven named `jaxtyping` types defined beside the envoy that serves them (`Residual`, `Pattern`, `Keys`, ... from `nnter.components`) you can read (`value.dims`), check (`isinstance(t, value.layout)`) and annotate your own values with."
+one_liner: "Every standard value has one axis layout on every family (one exception: `layer_output` is `Streams` on DeepSeek-V4), one of thirty-one named `jaxtyping` types defined beside the envoy that serves them (`Residual`, `Pattern`, `Keys`, ... from `nnter.components`) you can read (`value.dims`), check (`isinstance(t, value.layout)`) and annotate your own values with."
 tags: [usage, layouts, shapes, jaxtyping, dims, heads, kv_heads, Residual, Pattern, Streams, experts, top_k]
 related: [docs/usage/root-values.md, docs/usage/residual-stream.md, docs/reference/families.md, docs/usage/availability.md, docs/extending/custom-values.md]
 sources: [nnter/components/eproperty.py, nnter/components/moe.py, nnter/components/layer.py, nnter/families/deepseek_v4.py, nnter/components/attention.py, nnter/components/linear_attention.py, nnter/components/recurrent.py, nnter/standardized.py, nnter/components/__init__.py]
@@ -11,8 +11,8 @@ sources: [nnter/components/eproperty.py, nnter/components/moe.py, nnter/componen
 ## What this is for
 
 A value's shape is part of what it means. Each standard value is annotated with one of
-twenty-seven named layouts, each defined in the file of the envoy that serves it (`Residual`, `Streams`, `StreamWeights`, `StreamMixing` in `nnter/components/layer.py`; `Queries`, `Keys`, `Values`, `Pattern`, `HeadOutputs` in `nnter/components/attention.py`; `LinearQK`, `LinearV`, `Gates` in `nnter/components/linear_attention.py`; `ScanQK`, `ScanValues`, `ScanSteps`, `ScanDecays`, `ScanState`, `ScanStates` in `nnter/components/selective_scan.py`; `State`, `States` in `nnter/components/recurrent.py`; `RouterLogits`, `ExpertWeights`, `ExpertIndices`, `ExpertOutputs` in `nnter/components/moe.py`; `Logits`, `NextTokenProbs`, `Tokens` beside the root values in `nnter/standardized.py`); `nnter.components`
-re-exports the twenty-four envoy-level names, and the root's three come from `nnter.standardized`.
+thirty-one named layouts, each defined in the file of the envoy that serves it (`Residual`, `Streams`, `StreamWeights`, `StreamMixing` in `nnter/components/layer.py`; `Queries`, `Keys`, `Values`, `Pattern`, `HeadOutputs` in `nnter/components/attention.py`; `LinearQK`, `LinearV`, `Gates` in `nnter/components/linear_attention.py`; `ScanQK`, `ScanValues`, `ScanSteps`, `ScanDecays`, `ScanState`, `ScanStates` in `nnter/components/selective_scan.py`; `SSDQueries`, `SSDKeys`, `SSDValues`, `SSDHeadOutputs` in `nnter/components/state_space.py`; `State`, `States` in `nnter/components/recurrent.py`; `RouterLogits`, `ExpertWeights`, `ExpertIndices`, `ExpertOutputs` in `nnter/components/moe.py`; `Logits`, `NextTokenProbs`, `Tokens` beside the root values in `nnter/standardized.py`); `nnter.components`
+re-exports the twenty-eight envoy-level names, and the root's three come from `nnter.standardized`.
 They are `jaxtyping` types such as `Residual = Float[Tensor, "batch seq hidden"]` and
 `Pattern = Float[Tensor, "batch heads query key"]`. `value.layout` returns that alias itself
 and `value.dims` names its axes. Layouts differ between values, not between families:
@@ -58,7 +58,7 @@ from the base.
 
 ## The layouts
 
-The twenty-seven names, their axes, and the values that carry each:
+The thirty-one names, their axes, and the values that carry each:
 
 | layout | axes | values |
 | --- | --- | --- |
@@ -85,6 +85,9 @@ The twenty-seven names, their axes, and the values that carry each:
 | `ScanDecays` | `batch seq channels state_dim` | a Mamba-1 `linear_attn.decays` (`dt * A`) |
 | `ScanState` | `batch channels state_dim` | a Mamba-1 `state_input`, `state_output`, `state` |
 | `ScanStates` | `batch seq channels state_dim` | a Mamba-1 `states` |
+| `SSDQueries` / `SSDKeys` | `batch seq groups state_dim` | a Mamba-2 `linear_attn.attention_queries` (`C`) / `attention_keys` (`B`) |
+| `SSDValues` | `batch seq heads head_dim` | a Mamba-2 `linear_attn.attention_values` (`x`) |
+| `SSDHeadOutputs` | `batch seq heads head_dim` | a Mamba-2 `linear_attn.attention_head_outputs` (`y`) |
 | `RouterLogits` | `batch seq experts` | a mixture's `router_logits` (`experts` is `num_experts + 1` on ZAYA: the skip class) |
 | `ExpertWeights` | `batch seq top_k` | a mixture's `expert_weights` |
 | `ExpertIndices` | `batch seq top_k` (`Int`) | a mixture's `expert_indices` |

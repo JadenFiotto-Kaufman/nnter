@@ -21,9 +21,9 @@ test asserts, and how a family file states its specifics.
 ```bash
 cd ~/wd/nnter
 export HF_HUB_OFFLINE=1
-pytest                                   # 1200 passed in ~71 s (75 s wall) on CPU
-pytest tests/families/test_gpt2.py -q    # one family: 36 passed in 2.9 s (7.1 s wall)
-pytest tests/test_registry.py -q         # 13 passed in 7.6 s (one test spawns a subprocess)
+pytest                                   # 5221 passed, 906 skipped in ~395 s (6 min 40 s wall) on CPU
+pytest tests/families/test_gpt2.py -q    # one family: 37 passed, 12 skipped in 3.0 s (7.1 s wall)
+pytest tests/test_registry.py -q         # 14 passed in 10.6 s (one test spawns a subprocess)
 pytest "tests/families/test_gpt2.py::TestGPT2::test_contribution_identity" -q -x   # one test, stop on first failure
 ```
 
@@ -57,13 +57,13 @@ once per class: `model` (`suite.py:88-92`), a `StandardizedTransformer` with
 `dispatch=True, attn_implementation="eager"` plus `LOAD_KWARGS`, and
 `raw_model` (`:93-97`), the same checkpoint as a plain `TransformersModel`.
 
-### Class attributes (`suite.py:61-86`)
+### Class attributes (`suite.py:137-170`)
 
 | attribute | meaning |
 |---|---|
 | `REPO` | the pinned tiny checkpoint |
 | `FAMILY` | the family module the checkpoint must resolve to |
-| `NATIVE` | standard path → native path, usually built by `rows(container, layers, embed, norm, attn=, mlp=, ln1=, ln2=)` (`:36-51`); `LLAMA_ROWS` (`:54`) is the Llama layout |
+| `NATIVE` | standard path → native path, usually built by `rows(container, layers, embed, norm, attn=, mlp=, ln1=, ln2=)` (`:58-73`); `LLAMA_ROWS` (`:76`) is the Llama layout |
 | `EXPECTED_UNAVAILABLE` | status key → a substring of the reason, for values this checkpoint lacks; a module no block has (OPT's `mlp`) is absent from `status()` rather than unavailable, so it is not listed here |
 | `REFUSES_IN_PLACE_QKV` | q/k/v come out of a multi-view op (`split`, `chunk`), so torch refuses an in-place edit (GPT-2, MPT) |
 | `ATTENTION_SINK` | the pattern's rows sum to less than one (GPT-OSS) |
@@ -74,9 +74,11 @@ once per class: `model` (`suite.py:88-92`), a `StandardizedTransformer` with
 | `ATTENTION_NORM` | the block module whose output enters the attention; `None` when the block input does (OLMo-2/3) |
 | `MLP_NORM` | the block module whose output enters the MLP, whatever the family calls it |
 | `MLP_NORM_BEFORE_ATTENTION` | the MLP's norm fires before the attention (Falcon 40B norms both inputs up front) |
+| `MOE_UNAVAILABLE` | mixture value → a substring of the reason, for the mixture values this checkpoint lacks on its mixture (a mixture without a shared expert needs no entry for `shared_expert_output`) |
+| `ROUTER_EXTRA_CLASSES` | router classes beyond the experts: ZAYA's skip class is one more column of `router_logits` |
 
-Three helpers: `mixer(layer)` (`:30-33`) is `self_attn` or, on a linear
-block, `linear_attn`; `has_mlp(model)` (`:99-100`) reads `status()`;
+Three helpers: `mixer(layer)` (`:40-43`) is `self_attn` or, on a linear
+block, `linear_attn`; `has_mlp(model)` (`:184-186`) reads `status()`;
 `attn_blocks(model)` is the blocks with softmax attention and `attn_block(model)` the first of them, skipping the test when there is none;
 `recurrent_mixers(model)` is the family's `RecurrentMixer` classes from its `ENVOYS`;
 `expected_values(model)` (`:106-112`) adds the `linear_attn.*` names on a

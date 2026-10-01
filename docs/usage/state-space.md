@@ -29,19 +29,31 @@ is `betas` (the write strength), `A * dt` is `decays` (the log decay), `y` is
 `state_input` / `state_output`. It is a `RecurrentMixer`, so the kernel switch
 and the routing below are the base's.
 
+> **How this mixer differs from a gated DeltaNet and Mamba-1.** The state is served
+> `[state_dim, head_dim]` per head (`B`'s side first), the transpose of the cache. The
+> update is a plain decay-and-add, with no delta-rule correction. `betas` and `decays` are
+> two views of the kernel's one `dt` argument, not two gates: writing either rewrites
+> both. The state after every token is readable (`states`, after `chunk_per_token`) but
+> not writable per token: `state` and `set_state_after` do not exist, and a write goes
+> through `state_input`. A short convolution before the scan (width 4) also carries the
+> last few tokens. [vocabulary.md](vocabulary.md#same-name-different-meaning) puts the
+> three mixers side by side.
+
 ## Canonical pattern
 
 ```python
+import torch
 import nnter
 from nnter import StandardizedTransformer, route_kernels
 
 route_kernels(nnter.families.nemotron_h, "torch")     # when mamba_ssm is installed: before the first trace
 model = StandardizedTransformer("nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16", attn_implementation="eager")
+prompt = "The Eiffel Tower is in the city of"
 
 ssm = [i for i, layer in enumerate(model.layers) if getattr(layer, "linear_attn", None) is not None]
 mix = model.layers[ssm[0]].linear_attn
 
-with model.trace("The Eiffel Tower is in the city of"):
+with model.trace(prompt):
     C = mix.attention_queries.save()        # [batch, seq, groups, state_dim]
     B = mix.attention_keys.save()           # [batch, seq, groups, state_dim]
     x = mix.attention_values.save()         # [batch, seq, heads, head_dim]
@@ -101,8 +113,10 @@ Everything but `attention_output` is read at the scan kernel call. Assign
 `attention_queries`, `attention_keys`, `attention_values`,
 `attention_head_outputs`, `state_input` or `state_output` to replace them, or
 edit the first four in place (`mix.attention_head_outputs[:, -1] = 0` reaches
-the model). `state_input` is a clone: the decode kernel updates the cache's
-buffer in place.
+the model). The queries, keys and values are views torch refuses to edit in place
+while autograd is on (`RuntimeError: Output 0 of Select is a view and is being
+modified inplace`): assign them, or edit in place under `torch.no_grad()`.
+`state_input` is a clone: the decode kernel updates the cache's buffer in place.
 
 The values of one call can be read together in one trace in forward order
 (`attention_queries`, `betas`, `attention_head_outputs`, `state_output`, ...):
@@ -110,14 +124,26 @@ the kernel's arguments are read from the model once per call, and every value
 that needs one of them (`betas` needs `dt_bias`, a prompt's `state_output`
 whether the scan returns a state) takes it from that one read.
 
-### `betas` and `decays` are assignable
+### `betas` and `decays` are one argument
 
 Both are the kernel's `dt` argument seen through `dt_bias`, the softplus and
-`A`. An assignment is carried back into `dt`: `betas` becomes `dt =
+`A`: `betas` is the step `dt` itself, the write strength, and `decays` is `dt * A`,
+the log decay. An assignment is carried back into `dt`: `betas` becomes `dt =
 log(expm1(betas)) - dt_bias`, and `decays` the `betas` it implies,
 `decays / A`, so the kernel computes the gate you wrote and a read after the
-write returns it (to the precision of `dt`, bf16 on a bf16 checkpoint). They
-are one argument: writing one changes the other.
+write returns it. Assign them; an in-place edit (`mix.betas[:, t] = 0`) does not
+reach `dt`. Three consequences:
+
+- **Writing `decays` rewrites `betas` too.** `decays * 0.5` halves `dt`, so each token
+  keeps more of the state *and* writes at half strength, and `decays = 0` ("keep
+  everything") sets `dt` to zero, which writes nothing: the state stays at zero
+  through a whole prompt. There is no way to change the decay alone.
+- **`betas[:, t] = 0` is the exact "skip this token"**: no write and `exp(0) = 1`, no
+  decay, so the state after token `t` equals the state after `t - 1` bit for bit.
+- **Writing the same values back is not a no-op.** The round trip through the
+  softplus's inverse rounds `dt`: `mix.betas = mix.betas` moves float32 logits by about
+  1e-4 and bf16 logits by up to 1.0 on mamba2-130m. As a control, compare against an
+  unedited run in float32, not against a write-back.
 
 ```python
 with model.generate(prompt, max_new_tokens=2, do_sample=False) as tracer:
@@ -127,11 +153,17 @@ with model.generate(prompt, max_new_tokens=2, do_sample=False) as tracer:
         leaving = mix.state_output.save()               # == entering
 
 with model.trace(prompt):
-    mix.decays = mix.decays * 0.5                       # keep more of the state at every token
+    betas = mix.betas.clone()
+    betas[:, 3] = 0                                     # token 3 writes nothing and keeps everything
+    mix.betas = betas
+    logits = model.logits.save()
+
+with model.trace(prompt):
+    mix.decays = mix.decays * 0.5                       # half of dt: slower decay AND half-strength writes
     logits = model.logits.save()
 ```
 
-`betas` must be positive (0 stops the token's write and its decay; the inverse
+`betas` must be positive or zero (zero stops the token's write and its decay; the inverse
 of the softplus is undefined below it). On a prompt the chunk scan clamps
 `dt` to `time_step_limit` after the softplus, so a written value outside the
 limit runs clamped; a decode step does not clamp.
@@ -248,8 +280,19 @@ them.
 - **Route before the layer is traced**, with the family module before loading
   (`nnter.families.mamba2`) or `model.family` after; see
   [recurrent-mixer-internals.md](../developing/recurrent-mixer-internals.md).
-- **A written `betas` must be positive**, and on a prompt it is clamped to
-  `time_step_limit` by the kernel.
+- **`betas` and `decays` are one argument.** Writing `decays` changes `betas`
+  (`decays = 0` zeroes every write); assign, an in-place edit does not land; and a
+  write-back of the unchanged values is not exact in bf16. A written `betas` must be
+  positive or zero, and on a prompt it is clamped to `time_step_limit` by the kernel.
+- **On a decode step read `state_output` before `attention_head_outputs`.** The
+  decode kernel updates the state first and reads `y` from it; the other order is cut
+  short with nnsight's `was never reached: the loop asked for a step the run did not
+  make` warning, which blames the loop, not the order.
+- **The state is not all a block remembers.** The short convolution before the scan
+  (width 4) mixes each token with the three before it, so a state written through
+  `state_input` leaves the last tokens in the convolution's window.
+- **In-place edits on the queries, keys and values need `torch.no_grad()`**;
+  assignment always works.
 - **`chunk_per_token` is not undone by `route_kernels(family, "default")`**;
   call `chunk_per_token(model, False)`.
 - **`state_input` is `None` on a fresh prompt.** Save it only when it is not.

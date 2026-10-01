@@ -55,17 +55,14 @@ nnsight's `rename=` and `envoys=`. A multimodal config nests the language model'
 as `text_config`; the text-generation task builds that model, so its `model_type` is the
 one looked up.
 
-A `model_type` with no family raises `UnsupportedFamily` before anything loads, naming the
-known families:
+A `model_type` with no family raises `UnsupportedFamily` before anything loads, naming every
+known model type, the list `nnter.families.known()` returns (92 shipped families,
+alphabetical):
 
 ```
-UnsupportedFamily: no standardization for model_type 'bogus'; known: ['bloom', 'dbrx',
-'deepseek_v2', 'deepseek_v3', 'falcon', 'gemma', 'gemma2', 'gemma3_text', 'gemma4_text', 'gemma4_unified_text', 'gpt2',
-'gpt_neox', 'gpt_oss', 'gptj', 'llama', 'mistral', 'mixtral', 'mpt', 'olmo', 'olmo2',
-'olmo3', 'olmo_hybrid', 'olmoe', 'opt', 'phi', 'phi3', 'qwen2', 'qwen2_moe', 'qwen3', 'qwen3_5_moe_text',
-'qwen3_5_text', 'qwen3_moe', 'qwen3_next', 'smollm3', 'stablelm']. Add
-nnter/families/bogus.py with MODEL_TYPES, RENAME and ENVOYS, or pass a module to
-nnter.families.register().
+UnsupportedFamily: no standardization for model_type 'bert'; known: ['afmoe', 'apertus', 'arcee',
+'bamba', ..., 'xglm', 'youtu', 'zaya']. Add nnter/families/bert.py with MODEL_TYPES, RENAME and
+ENVOYS, or pass a module to nnter.families.register().
 ```
 
 `model.family` is the module the checkpoint resolved to; `nnter.families.known()` lists
@@ -86,6 +83,18 @@ model.family.__name__            # 'nnter.families.gpt2'
 
 with model.trace("Hello world"):
     x = model.layers[0].layer_output.save()
+```
+
+## `device` and `device_map`
+
+`device="cpu"` (or `"cuda:0"`) puts the whole model on that device. `device_map` is passed on
+to transformers, but nnsight's pipeline passes its own `device` too, which wins: a model loaded
+with `device_map="cpu"` on a machine with a GPU lands on `cuda:0`. Use `device=` to choose
+one device, and `device_map="auto"` to spread a model over several:
+
+```python
+model = StandardizedTransformer("openai-community/gpt2", dispatch=True, device="cpu")
+next(model._module.parameters()).device          # device(type='cpu')
 ```
 
 ## `dispatch` and `attn_implementation`
@@ -224,6 +233,7 @@ The root's own values (`logits`, `token_embeddings`, `next_token_probs`, `input_
   see nnsight docs/usage/rename-modules.md.
 - **The config is read twice** (once for the family, once by the load); with
   `HF_HUB_OFFLINE=1` both reads hit the cache.
+- **`device_map="cpu"` does not keep a model off the GPU**; `device="cpu"` does.
 
 ## Related
 

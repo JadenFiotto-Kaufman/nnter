@@ -23,18 +23,31 @@ It is a `RecurrentMixer`, the base that reaches a recurrent mixer's values at
 its kernel call, so the kernel switch and the per-token state below are the
 base's.
 
+> **How this mixer differs from Mamba-1 and Mamba-2.** The state is `[key_dim, value_dim]`
+> per head, key side first. The update is the delta rule: each token decays the state by
+> `exp(decays)` (one number per head), subtracts what the state already holds at its key
+> and writes the remainder scaled by `betas`. `decays` and `betas` are separate kernel
+> arguments, each writable on its own. The queries and keys are served *before* the
+> kernel's l2-norm and `1/sqrt(key_dim)` scale. The per-token state can be read and
+> written (`state`, `set_state_after`) once the family is routed through the torch
+> kernels. A short convolution before the kernel (width 4) also carries the last few
+> tokens. [vocabulary.md](vocabulary.md#same-name-different-meaning) puts the three
+> mixers side by side.
+
 ## Canonical pattern
 
 ```python
+import torch
 from nnter import StandardizedTransformer
 
 model = StandardizedTransformer("Qwen/Qwen3.5-9B", attn_implementation="eager")
+prompt = "The Eiffel Tower is in the city of"
 
 linear = [i for i, layer in enumerate(model.layers) if getattr(layer, "linear_attn", None) is not None]
 softmax = [i for i, layer in enumerate(model.layers) if getattr(layer, "self_attn", None) is not None]
 mix = model.layers[linear[0]].linear_attn
 
-with model.trace("The Eiffel Tower is in the city of"):
+with model.trace(prompt):
     q = mix.attention_queries.save()        # [batch, seq, heads, key_dim]
     g = mix.decays.save()                   # [batch, seq, heads], float32, <= 0
     b = mix.betas.save()                    # [batch, seq, heads], in (0, 1)
@@ -61,7 +74,7 @@ block', 7: ..., ...}`. `model.status(layer=i)` is flat for one block.
 | value | what it is | layout |
 | --- | --- | --- |
 | `attention_output` | what the mixer adds to the residual stream | `Residual`: `batch seq hidden` |
-| `attention_queries`, `attention_keys` | what the delta rule receives: after the short convolution, the activation and the repeat to the value heads | `LinearQK`: `batch seq heads key_dim` |
+| `attention_queries`, `attention_keys` | what the delta rule receives: after the short convolution, the activation and the repeat to the value heads, before the kernel's l2-norm (and, for the queries, its `1/sqrt(key_dim)` scale) | `LinearQK`: `batch seq heads key_dim` |
 | `attention_values` | the values the delta rule receives | `LinearV`: `batch seq heads value_dim` |
 | `decays` | the gate: the log of how much of the state each token keeps; float32, non-positive | `Gates`: `batch seq heads` |
 | `betas` | how strongly each token's key/value pair is written into the state; in `(0, 1)`, or `(0, 2)` on OLMo-Hybrid with `linear_allow_neg_eigval` (the released checkpoints) | `Gates`: `batch seq heads` |
@@ -77,10 +90,41 @@ float32 in the torch kernels. Everything but `attention_output` is read at the
 delta-rule kernel call, so these are `EProperty` values keyed inside the
 forward (`kernel("inputs")`, the kernel that fires on this call); assign to
 replace them, or edit in place (`mix.attention_head_outputs[:, -1] = 0`
-reaches the model). `state_input` is a clone of the cache's buffer: the cache
+reaches the model). The queries, keys and values are views torch refuses to edit
+in place while autograd is on (`RuntimeError: Output 0 of Select is a view and is
+being modified inplace`): assign them, or edit in place under `torch.no_grad()`;
+`attention_head_outputs`, `decays` and `betas` take in-place edits either way.
+`state_input` is a clone of the cache's buffer: the cache
 hands the kernel its own tensor and overwrites it with the new state
 afterwards, so the live one would read as the step's *output* by the time the
 trace ends.
+
+### Recomputing the recurrence by hand
+
+The kernel l2-normalizes the queries and keys and scales the queries by
+`1/sqrt(key_dim)` before the loop (`use_qk_l2norm_in_kernel`, on Qwen3-Next and
+Qwen3.5), so a recurrence written on the served tensors is off until it does the same
+(a 42% relative error in the final state on Qwen3.5-0.8B). With it, it matches `states`
+and `attention_head_outputs`:
+
+```python
+l2norm = lambda t: t * torch.rsqrt((t * t).sum(-1, keepdim=True) + 1e-6)
+
+with model.trace(prompt):
+    q, k, v = mix.attention_queries.save(), mix.attention_keys.save(), mix.attention_values.save()
+    g, b = mix.decays.save(), mix.betas.save()
+    y = mix.attention_head_outputs.save()
+
+q, k = l2norm(q.float()) / q.shape[-1] ** 0.5, l2norm(k.float())    # what the kernel uses
+S = torch.zeros(q.shape[0], q.shape[2], q.shape[3], v.shape[3])      # [batch, heads, key_dim, value_dim]
+outs = []
+for t in range(q.shape[1]):
+    S = S * g[:, t].exp()[..., None, None]                            # decay
+    write = (v[:, t] - (S * k[:, t, ..., None]).sum(-2)) * b[:, t, :, None]   # what the state lacks at this key
+    S = S + k[:, t, ..., None] * write[..., None, :]
+    outs.append((S * q[:, t, ..., None]).sum(-2))                     # the query's read
+torch.testing.assert_close(torch.stack(outs, 1), y.float(), rtol=1e-4, atol=1e-4)
+```
 
 ## Two kernels, one value
 
@@ -103,7 +147,7 @@ with model.generate(prompt, max_new_tokens=3, do_sample=False) as tracer:
 
 entering[0] is None                              # a fresh prompt
 torch.equal(leaving[0], entering[1])             # step 1 starts from what step 0 left
-mix.attention_queries.shape[1]                   # prompt_len on step 0, then 1 per step
+# inside the loop, mix.attention_queries.shape[1] is prompt_len on step 0, then 1 per step
 ```
 
 The kernels have to be transformers' pure-torch ones. With
@@ -152,12 +196,19 @@ with model.trace(prompt) as tracer:
 with model.trace(prompt) as tracer:
     for t in tracer.iter[7]:
         mix.state = torch.zeros_like(state)    # a write at token 7: tokens 8.. continue from zeros
-    for t in tracer.iter[9]:
-        s9 = mix.state.save()                  # the state after token 9, downstream of the write
+    for t in tracer.iter[8]:
+        s8 = mix.state.save()                  # the state after token 8 (the last of 9), downstream of the write
 ```
 
-Outside any `tracer.iter`, `mix.state` is the state after token 0. `states` is
-every position stacked, read-only:
+A position must lie inside the prompt: `tracer.iter[9]` on this 9-token prompt is never
+reached, and the trace is cut short there with a `was never reached` warning, leaving
+`s9` unbound.
+
+Outside any `tracer.iter`, `mix.state` is the state after token 0. A read and a
+write of the same token in one body work: `mix.state = mix.state * 0` inside
+`tracer.iter[7]` zeroes the state after token 7, the same as
+`mix.set_state_after(7, torch.zeros_like(...))`. `states` is every position stacked,
+read-only:
 
 ```python
 with model.trace(prompt):
@@ -173,9 +224,19 @@ the write:
 with model.trace(prompt):
     before = mix.state_after(3).save()                       # a position before the write: read it first
     mix.set_state_after(7, mix.state_after(7) * 0)           # read-and-write at the same token, as calls
-    after = mix.state_after(9).save()                        # a position after the write: read it after
+    after = mix.state_after(8).save()                        # a position after the write: read it after
     logits = model.logits.save()
 ```
+
+Two things a state write does that "change the memory from token `t` on" does not say:
+
+- **It changes token `t`'s own output.** The state after token `t` is what token `t`'s
+  query reads, so `set_state_after(t, value)` moves `attention_head_outputs[:, t]` too
+  (and nothing before it).
+- **It is not all the block remembers.** The short convolution in front of the kernel
+  (width 4) mixes each token's queries, keys and values with the three tokens before
+  it, so `set_state_after(t, zeros)` is not a clean "forget everything before `t`":
+  tokens `t + 1` to `t + 3` still see tokens up to `t` through the convolution.
 
 Under `generate` the prompt is one kernel call and each decode step another,
 over one token, so the per-token view is an inner loop on step 0 and then one
@@ -223,12 +284,8 @@ this block`.
 
 ## Gotchas
 
-- **Inside `tracer.iter[t]`, assign a tensor you already hold.** `mix.state =
-  mix.state * 0` in the same body reads token `t` and then cannot write it: the
-  block is cut short at the write, silently, and the names after it are never
-  bound. Use `torch.zeros_like(...)`, a saved state, or
-  `mix.set_state_after(t, mix.state_after(t) * 0)`, which reads and writes the
-  same token as calls.
+- **In-place edits on the queries, keys and values need `torch.no_grad()`**; assignment
+  always works.
 - **`state` takes assignment, not in-place edits.** `mix.state[:] = 0` raises
   `OutOfOrderError`; assign a tensor.
 - **Route before the layer is traced.** `route_kernels` after a model has

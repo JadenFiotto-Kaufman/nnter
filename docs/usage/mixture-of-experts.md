@@ -76,20 +76,36 @@ experts module, like `mlp.intermediate_size`. `Moe.SCORING` says what the logits
 | `"sparsemixer"` | Phi-3.5-MoE's masked softmax per slot | Phi-3.5-MoE |
 | `"hash"` / the config's `scoring_func` | DeepSeek-V4, per block: the token id picks the experts on a `hash_moe` block; elsewhere `scoring_func` (`"sqrtsoftplus"`) per expert | DeepSeek-V4 |
 
+`SCORING` names the function, not everything between the logits and `expert_weights`.
+Recomputing the weights from `router_logits` also needs the family's normalization of the
+top-k, a config flag: OLMoE (and Qwen1.5-MoE) leave `norm_topk_prob` off, so the weights
+are the softmax's top-k entries themselves and a token's weights sum to less than one
+(0.33 to 0.77 on one block of OLMoE-1B-7B), while Mixtral renormalizes them to one. Some
+families also scale the weights after (`routed_scaling_factor`). Read `expert_weights`
+rather than recomputing it where you can.
+
 ## Recipes
 
 Each runs as written on the tiny Mixtral above; on every MoE family with the values it
 has ([below](#per-family-caveats)).
 
 ```python
-prompt = "The Eiffel Tower is in the city of"
+prompts = ["The Eiffel Tower is in the city of", "def add(a, b):\n    return a + b"]
+with model.trace(prompts):                   # a batch is left-padded, and the router routes the pads too
+    mask = model.attention_mask.save()       # [batch, seq]: 0 on pad positions
+    logits = moe.router_logits.save()
+    w = moe.expert_weights.save()
+    idx = moe.expert_indices.save()
+real = mask.bool()                           # count real tokens only
 
 # Expert usage: how many slots each expert got (mask w == 0: ZAYA's skipped slots read as expert 0)
-usage = torch.bincount(idx[w != 0], minlength=moe.num_experts)
+usage = torch.bincount(idx[real][w[real] != 0], minlength=moe.num_experts)
 
-# Routing entropy per token, on a softmax router (`SCORING == "softmax"`)
-probs = logits.float().softmax(-1)
-entropy = -(probs * probs.clamp_min(1e-12).log()).sum(-1)          # [batch, seq]
+# Routing entropy per real token, on a softmax router (`SCORING == "softmax"`)
+probs = logits[real].float().softmax(-1)
+entropy = -(probs * probs.clamp_min(1e-12).log()).sum(-1)          # [real tokens]
+
+prompt = "The Eiffel Tower is in the city of"
 
 # Ablate expert 3 everywhere: zero the weight of every slot that chose it
 with model.trace(prompt):
@@ -180,7 +196,7 @@ without it, edit in place under several invokes.
 | DeepSeek-V4 | On a `hash_moe` block the token ids pick the experts (`tid2eid[input_ids]`): writing `router_logits` changes `expert_weights`, not `expert_indices`. `SCORING` is per block. |
 | Laguna | `router_logits` is before the router's tanh softcap; `routed_output` is the experts' sum times `routed_scaling_factor`, so `expert_outputs.sum(2) * routed_scaling_factor == routed_output`. |
 | Qwen2-MoE, Qwen3-Next, Qwen3.5-MoE | `shared_expert_output` is the shared expert's output times its sigmoid gate, the product the mixture adds; `moe.shared_experts.output` is the ungated one. |
-| GraniteMoE, -SWA, -Shared, -Hybrid | `mlp_output` is the scaled term the block adds; `routed_output` and `shared_expert_output` are unscaled. |
+| GraniteMoE, -SWA, -Shared, -Hybrid | `mlp_output` is the scaled term the block adds, the mixture's output times `residual_multiplier` (0.22 on granite-3.0-1b-a400m); `expert_outputs`, `routed_output` and `shared_expert_output` are unscaled, about 4.5 times what reaches the stream there. Multiply by `model.config.residual_multiplier` to compare them with `mlp_output` or another family's experts. |
 | Doge | Its cross-domain mixture (`is_moe`) cannot run in transformers 5.17 (the block drops out its tuple output), so every mixture value is unavailable. |
 
 `model.status()` lists the six values under `mlp.`; on a family with dense blocks beside

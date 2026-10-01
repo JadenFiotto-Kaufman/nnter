@@ -37,7 +37,9 @@ model = StandardizedTransformer("openai-community/gpt2", dispatch=True)
 clean = "The Eiffel Tower is in the city of"
 corrupt = "The Colosseum is in the city of"
 LAYER, POS = model.num_layers // 2, -1
-paris = model.tokenizer.encode(" Paris")[0]
+ids = model.tokenizer(" Paris", add_special_tokens=False).input_ids
+assert len(ids) == 1, model.tokenizer.convert_ids_to_tokens(ids)   # one token, or paris is not the word
+paris = ids[0]
 
 with model.trace(clean):
     clean_resid = model.layers[LAYER].layer_output.save()           # [1, seq, hidden]
@@ -55,6 +57,12 @@ print(f"P(Paris)  corrupt {baseline[0, paris]:.3f}   patched {patched[0, paris]:
 The write is in place on the served tensor, so it reaches the model, and it touches
 only its invoke's rows. `clean_resid` is an ordinary tensor by the time the second
 trace runs, so nothing has to be synchronized.
+
+`add_special_tokens=False` keeps the BOS token out of the target (`tokenizer.encode(" Paris")[0]`
+is the BOS id on Llama and Gemma, and every probability then reads 0.000). The assertion
+catches a word that is more than one token: Mistral's sentencepiece tokenizer gives
+`['▁', '▁Paris']` and Granite's `['ĠPar', 'is']`. Then try the word without the leading
+space (`"Paris"` is `['▁Paris']` on Mistral), or pick a target word that is one token.
 
 ## The ordering rule
 
@@ -196,6 +204,14 @@ is symmetric.
 - On a family whose block returns a tuple (GPT-J, GPT-Neo, BLOOM, MPT,
   Falcon), `layer_output` is still the tensor, and an assignment puts it back in the tuple.
   No `[0]` indexing and no tuple rebuild.
+- On Gemma-4 the KV-sharing blocks attend with an earlier block's keys and values,
+  the same tensor objects: an in-place patch of `attention_keys` / `attention_values`
+  on a block others borrow from also patches every later block of its kind. Assign
+  (`attn.attention_keys = patched`) to patch one block.
+- On Granite (and GraniteMoE, Granite-SWA, HyperCLOVA X, ZAYA) a patch of
+  `attention_output` or `mlp_output` at one position moves the other positions by
+  rounding; in bf16 that can be a visible fraction of a small patch's effect, so load in
+  float32 ([families](../reference/families.md#scaled-residual-adds)).
 
 ## Related
 

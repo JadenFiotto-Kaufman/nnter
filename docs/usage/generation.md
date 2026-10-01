@@ -52,6 +52,10 @@ Every value on the root and on the blocks answers for the current call:
 | `self_attn.attention_queries`, `attention_head_outputs` | `seq == prompt_len` | `seq == 1` |
 | `self_attn.attention_keys`, `attention_values` | `[batch, kv_heads, prompt_len, head_dim]` | `[batch, kv_heads, prompt_len + step, head_dim]`: the cache |
 | `self_attn.attention_scores`, `attention_probabilities` | `[batch, heads, prompt_len, prompt_len]` | `[batch, heads, 1, prompt_len + step]` |
+| `mlp.router_logits` (a mixture of experts) | `[batch, prompt_len, experts]` | `[batch, 1, experts]` |
+| `mlp.expert_weights`, `expert_indices` | `[batch, prompt_len, top_k]` | `[batch, 1, top_k]` |
+| `mlp.expert_outputs` | `[batch, prompt_len, top_k, hidden]` | `[batch, 1, top_k, hidden]` |
+| `mlp.routed_output`, `shared_expert_output` | `[batch, prompt_len, hidden]` | `[batch, 1, hidden]` |
 | `model.logits` | `[batch, prompt_len, vocab]` | `[batch, 1, vocab]` |
 | `model.next_token_probs` | `[batch, vocab]` | `[batch, vocab]` |
 
@@ -87,10 +91,19 @@ with model.generate(prompt, max_new_tokens=3, do_sample=False) as tracer:
 
 Inside one step's body the reads follow the forward like in a trace:
 `input_ids` first, a block's `self_attn.*` and `mlp.*` before that block's
-`layer_output`, `logits` and `next_token_probs` last. A misplaced read raises
-`OutOfOrderError`, and under `generate` the error can name a later location
-than the one you misplaced (`'model.output.i0' was requested but the model
-already ran past it` for a pattern read after its block's `layer_output`).
+`layer_output`, `logits` and `next_token_probs` last, and a block's interior values
+before its `attention_output`.
+
+A misplaced read fails differently here. In a single trace it raises
+`OutOfOrderError`. Inside `tracer.iter` under `generate` it usually does not: the read
+waits for the value's *next* occurrence, which is the next step's, so the list is
+shifted by one step without an error. On GPT-2, reading block 6's
+`attention_probabilities` after its `attention_output` in `tracer.iter[:3]` returns steps
+1 and 2's patterns as entries 0 and 1, and the read on the last step is never reached,
+which ends the loop with nnsight's `was never reached: the loop asked for a step the run
+did not make` warning. That warning blames the loop bound; the cause is the order. Check
+the shapes against the step (a decode step's pattern is `[batch, heads, 1, prompt + step]`)
+and treat that warning as a read-order error.
 
 ## Gotchas
 
@@ -110,6 +123,10 @@ already ran past it` for a pattern read after its block's `layer_output`).
 - **On a DeltaNet hybrid, a decode step runs the recurrent kernel**, and
   `linear_attn.state_input` carries the previous step's `state_output`; see
   [delta-net.md](delta-net.md).
+- **On Mamba-1 and Mamba-2, a decode step reads `state_output` before
+  `attention_head_outputs`** (on Mamba-1 the reverse of a prompt's scan); the wrong order returns the next
+  step's state or cuts the loop short ([selective-scan.md](selective-scan.md#gotchas),
+  [state-space.md](state-space.md#gotchas)).
 
 ## Related
 
