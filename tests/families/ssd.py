@@ -10,7 +10,7 @@ before it returns: the model is shared by the class.
 
 import pytest
 import torch
-from suite import LINEAR, PROMPT
+from suite import LINEAR, PROMPT, listed
 
 from nnter import Unavailable, chunk_per_token, route_kernels
 from nnter.components.state_space import NO_STATE_OCCURRENCES, NO_STATE_WRITES
@@ -304,4 +304,4 @@ class StateSpaceChecks:
     def test_ssd_values_listed_in_the_repr(self, model):
         text = repr(self.ssd(model))
         for name in LINEAR:
-            assert f"({name}):" in text, name
+            assert listed(name, text), name

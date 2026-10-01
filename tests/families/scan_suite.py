@@ -8,7 +8,7 @@ the class routes the family before its first trace and restores it after.
 
 import pytest
 import torch
-from suite import LINEAR, PROMPT
+from suite import LINEAR, PROMPT, listed
 
 from nnter import StandardizedTransformer, route_kernels
 
@@ -132,7 +132,7 @@ class SelectiveScanSuite:
     def test_linear_values_listed_in_the_repr(self, model):
         text = repr(self.scan_mixer(model))
         for name in LINEAR:
-            assert f"({name}):" in text, name
+            assert listed(name, text), name
 
     def test_values_follow_the_step_under_generate(self, model):
         """A prompt runs the scan and each decode step the single-step update; the values follow the

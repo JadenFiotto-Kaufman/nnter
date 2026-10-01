@@ -21,7 +21,16 @@ The block, in order::
   ``mlp``: ``post_feedforward_layernorm_1(mlp(...)) +
   post_feedforward_layernorm_2(experts(pre_feedforward_layernorm_2(x1)))``, and
   ``post_feedforward_layernorm`` norms that sum, so ``mlp_output`` is the dense
-  MLP and the experts together, what the block adds.
+  MLP and the experts together, what the block adds. The mixture has no module
+  of its own, so ``mlp`` (a `Moe`) hosts its values: the block hands its
+  ``router`` and ``experts`` envoys down to it when it is built. The router
+  runs on the block's *input* (``residual``), with its own norm, and returns
+  probabilities; ``router_logits`` are its projection's output
+  (``router.proj``). ``shared_expert_output`` is the dense MLP's output, before
+  its post-norm: ``mlp_output == post_feedforward_layernorm(
+  post_feedforward_layernorm_1(shared_expert_output) +
+  post_feedforward_layernorm_2(routed_output))``. On a dense checkpoint every
+  mixture value is unavailable.
 * **Per-layer embeddings** (E2B/E4B, ``hidden_size_per_layer_input``): a third
   add, served as ``layers[i].per_layer_output`` (the post-per-layer-input norm's
   output). ``per_layer_input`` is the block's second argument, one slice of the
@@ -56,7 +65,7 @@ from typing import TYPE_CHECKING
 from nnsight.intervention.envoy import Envoy
 from transformers.models.gemma4.modeling_gemma4 import Gemma4TextAttention, Gemma4TextDecoderLayer, Gemma4TextMLP
 
-from ..components import Attention, EProperty, Layer, Mlp, Residual
+from ..components import Attention, EProperty, Layer, Moe, Residual, RouterLogits, Unavailable, mixture_reason
 
 if TYPE_CHECKING:
     from ..standardized import StandardizedTransformer
@@ -84,8 +93,18 @@ class Layer(Layer):
     """Gemma-4's decoder block; returns a bare tensor (the sum times ``layer_scalar``), so the base holds.
 
     Adds ``per_layer_output``, the third thing the block adds on a checkpoint
-    with per-layer embeddings.
+    with per-layer embeddings. On a mixture-of-experts checkpoint the block's
+    ``router`` and ``experts`` have no module of their own to host their values,
+    so the block hands their envoys to its `Mlp` when it is built; the envoys
+    outlive a weight swap.
     """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.mlp.has_experts = bool(self._module.enable_moe_block)
+        if self.mlp.has_experts:
+            self.mlp.router = self.router
+            self.mlp.experts = self.experts
 
     @EProperty(
         "post_per_layer_input_norm.output",
@@ -112,14 +131,44 @@ class Attention(Attention):
         return value
 
 
-class Mlp(Mlp):
-    """Gemma-4's MLP: what reaches the residual stream is the post-feedforward norm's output (with the experts', on a mixture block)."""
+class Mlp(Moe):
+    """Gemma-4's MLP: what reaches the residual stream is the post-feedforward norm's output (with the experts', on a mixture block).
+
+    On a mixture block it hosts the block's mixture of experts, whose
+    ``router`` and ``experts`` the block hands it; the dense MLP itself is the
+    shared expert. Read order: ``shared_expert_output`` (the dense MLP runs
+    first), then the routing values, then ``routed_output``.
+    """
+
+    #: Set by the block: whether it runs a mixture of experts beside this MLP.
+    has_experts: bool
+
+    def no_mixture(self) -> str | None:
+        if self.has_experts:
+            return None
+        return "this checkpoint's blocks run no mixture of experts (enable_moe_block is false)"
+
+    @property
+    def top_k(self) -> int:
+        """Experts each token is routed to: the router's config's ``top_k_experts``."""
+        if self.no_mixture():
+            raise Unavailable(f"{self.path}.top_k is not available: {self.no_mixture()}")
+        return self.router._module.config.top_k_experts
 
     @EProperty(
         "../post_feedforward_layernorm.output",
         description="What the MLP (and, on a mixture block, the experts) adds to the residual stream: the post-feedforward norm's output",
     )
     def mlp_output(self, value) -> Residual:
+        return value
+
+    @EProperty("router.proj.output", tokens=True, description=Moe.router_logits.description, unavailable=mixture_reason)
+    def router_logits(self, value) -> RouterLogits:
+        """The router's projection, ``[batch, seq, experts]``: the router returns their softmax."""
+        return value
+
+    @EProperty("output", tokens=True, description="The dense MLP's output, before its post-norm: the shared expert beside the mixture", unavailable=mixture_reason)
+    def shared_expert_output(self, value) -> Residual:
         return value
 
 

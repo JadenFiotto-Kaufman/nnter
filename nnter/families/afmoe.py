@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 
 from transformers.models.afmoe.modeling_afmoe import AfmoeAttention, AfmoeDecoderLayer, AfmoeMLP, AfmoeSparseMoeBlock
 
-from ..components import Attention, EProperty, Layer, Mlp, Residual
+from ..components import Attention, EProperty, Layer, Mlp, Moe, Residual, RouterLogits
 
 if TYPE_CHECKING:
     from nnsight.intervention.envoy import Envoy
@@ -69,5 +69,19 @@ class Mlp(Mlp):
         return value
 
 
+class Moe(Moe, Mlp):
+    """AFMoE's mixture of experts: a sigmoid router with a selection bias (``expert_bias``, the mixture's), routed experts and a shared expert.
+
+    The router projects with a child ``nn.Linear``, ``gate``: its output is the
+    logits. The shared expert runs between the router and the experts.
+    """
+
+    SCORING = "sigmoid"
+
+    @EProperty("router.gate.output", tokens=True, description=Moe.router_logits.description)
+    def router_logits(self, value) -> RouterLogits:
+        return value
+
+
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.
-ENVOYS = {AfmoeDecoderLayer: Layer, AfmoeAttention: Attention, AfmoeMLP: Mlp, AfmoeSparseMoeBlock: Mlp}
+ENVOYS = {AfmoeDecoderLayer: Layer, AfmoeAttention: Attention, AfmoeMLP: Mlp, AfmoeSparseMoeBlock: Moe}

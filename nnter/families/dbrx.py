@@ -8,14 +8,19 @@ returns. So the attention module's own output is its contribution (the add
 happens outside it, in ``norm_attn_norm``) and the base classes hold; the
 aliases reach through ``norm_attn_norm`` so the block reads like any other.
 The attention is on the shared interface since transformers 5.17. The FFN is
-a mixture of experts returning the hidden states.
+a mixture of experts (`Moe`) returning the hidden states. Its router's projection is
+a child ``nn.Linear``, ``router.layer``, whose output is the logits; the FFN's own
+``route_tokens_to_experts`` takes a softmax top-k and p-normalizes the weights
+(``moe_normalize_expert_weights``). The experts are DBRX's own loop over experts,
+taking and returning ``[batch, seq, hidden]``, so the per-slot outputs are
+unavailable.
 """
 
 from typing import TYPE_CHECKING
 
 from transformers.models.dbrx.modeling_dbrx import DbrxAttention, DbrxBlock, DbrxFFN
 
-from ..components import Attention, Layer, Mlp
+from ..components import Attention, EProperty, Layer, Moe, RouterLogits, unavailable
 
 if TYPE_CHECKING:
     from ..standardized import StandardizedTransformer
@@ -41,8 +46,14 @@ class Attention(Attention):
     """DBRX's attention; the shared eager forward, and the residual added outside it in ``norm_attn_norm``."""
 
 
-class Mlp(Mlp):
+class Mlp(Moe):
     """DBRX's mixture of experts; the residual is added in the block, so the base holds."""
+
+    @EProperty("router.layer.output", tokens=True, description=Moe.router_logits.description)
+    def router_logits(self, value) -> RouterLogits:
+        return value
+
+    expert_outputs = unavailable("DBRX's experts loop over the experts in their own forward; no tensor holds each slot's output")
 
 
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.

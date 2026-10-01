@@ -15,7 +15,9 @@ The binding is in the block's forward, read after the block has started, so the
 family's `Layer` sets ``sourced``; the mixture keeps no config, so the `Layer` also
 hands its `Mlp` the multiplier and whether the block has a shared expert
 (``residual_multiplier``, ``shared``) when it is built. The attention, ``embedding_multiplier`` and
-``logits_scaling`` are as on Granite.
+``logits_scaling`` are as on Granite. The mixture is a `Moe` (GraniteMoE's routing);
+its ``shared_expert_output`` is the block's ``shared_mlp``'s output, unscaled, so
+``routed_output + shared_expert_output == mlp_output / residual_multiplier``.
 """
 
 from nnsight.intervention.envoy import Envoy
@@ -25,7 +27,7 @@ from transformers.models.granitemoeshared.modeling_granitemoeshared import (
     GraniteMoeSharedMoE,
 )
 
-from ..components import EProperty, Layer, Mlp, Residual
+from ..components import EProperty, Layer, Moe, Residual
 from .granite import Attention as GraniteAttention
 from .granite import project_on_vocab  # noqa: F401  the logit lens divides by logits_scaling, as Granite's
 from .granitemoe import hand_residual_multiplier, scaled_back
@@ -49,6 +51,10 @@ def _experts_sum(envoy: Envoy) -> str:
     return f"../source.{EXPERTS_SUM if envoy.shared else EXPERTS_ONLY}.output"
 
 
+def _no_shared_mlp(envoy: Envoy) -> str | None:
+    return None if envoy.shared else "this block has no shared expert (shared_intermediate_size is 0)"
+
+
 class Layer(Layer):
     """GraniteMoE-Shared's decoder block; returns a bare tensor.
 
@@ -70,8 +76,10 @@ class Attention(GraniteAttention):
     """GraniteMoE-Shared's attention: Granite's, the block adds its output times ``residual_multiplier``."""
 
 
-class Mlp(Mlp):
+class Mlp(Moe):
     """GraniteMoE-Shared's mixture of experts; the block adds it plus the shared expert, times ``residual_multiplier``."""
+
+    SCORING = "topk_softmax"
 
     #: Set by the block: its multiplier, and whether a shared expert runs beside the mixture.
     residual_multiplier: float
@@ -88,6 +96,11 @@ class Mlp(Mlp):
     @mlp_output.transform
     def mlp_output(self, value, raw):
         return scaled_back(value, raw, self.residual_multiplier)
+
+    @EProperty("../shared_mlp.output", description=Moe.shared_expert_output.description, unavailable=_no_shared_mlp)
+    def shared_expert_output(self, value) -> Residual:
+        """The block's ``shared_mlp``'s output: the shared expert is the block's child, beside the mixture."""
+        return value
 
 
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.

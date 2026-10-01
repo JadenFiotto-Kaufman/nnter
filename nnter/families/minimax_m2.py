@@ -18,7 +18,7 @@ from transformers.models.minimax_m2.modeling_minimax_m2 import (
     MiniMaxM2SparseMoeBlock,
 )
 
-from ..components import Attention, Layer, Mlp
+from ..components import Attention, Layer, Moe
 
 MODEL_TYPES = ("minimax_m2",)
 
@@ -26,6 +26,7 @@ RENAME = {
     "model.embed_tokens": "embed_tokens",
     "model.layers": "layers",
     "model.norm": "norm",
+    "gate": "router",
 }
 
 
@@ -37,8 +38,10 @@ class Attention(Attention):
     """MiniMax-M2's attention; the shared eager forward and the residual added in the block, so the base holds."""
 
 
-class Mlp(Mlp):
+class Mlp(Moe):
     """A mixture of experts: the module returns the routed hidden states as a bare tensor, so the base holds."""
+
+    SCORING = "sigmoid"
 
 
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.

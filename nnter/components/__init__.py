@@ -3,6 +3,7 @@
 A family gives its modules standard *values* by wrapping them in `Envoy`
 subclasses (nnsight's ``envoys=``): `Layer` on the decoder block, `Attention`
 on the softmax-attention module, `Mlp` on the feed-forward, and
+`Moe` on a mixture of experts (an `Mlp` with routing values),
 `LinearAttention` on a hybrid's gated DeltaNet mixer, `SelectiveScan` on a
 Mamba-1 mixer and `StateSpace` on a Mamba-2 (SSD) mixer, all `RecurrentMixer`s
 (the mechanism every recurrent mixer shares). The families under
@@ -49,11 +50,15 @@ from .attention import (
     seq_first,
 )
 from .eproperty import (
-    DerivedEProperty, EProperty, Unavailable, unavailable,
+    DerivedEProperty, EProperty, Unavailable, splice, unavailable,
 )
 from .layer import Layer, Residual, StreamMixing, Streams, StreamWeights
 from .linear_attention import Gates, LinearAttention, LinearQK, LinearV
 from .mlp import Mlp
+from .moe import (
+    DISPATCH, LOGITS, PER_SLOT, ExpertIndices, ExpertOutputs, ExpertWeights, Moe, RouterLogits, mixture_reason,
+    needs_grouped_experts, no_shared_expert,
+)
 from .recurrent import (
     RecurrentMixer, State, States, needs_recurrent_routing, needs_torch_kernels, per_call, pinned,
     route_delta_rule, route_kernels,
@@ -68,12 +73,12 @@ from .state_space import (
 )
 
 __all__ = [
-    "Attention", "DerivedEProperty", "EProperty", "Gates", "HeadOutputs", "INTERFACE", "Keys", "Layer", "LinearAttention",
-    "LinearQK", "LinearV", "Mlp", "Pattern", "Queries", "RecurrentMixer", "Residual", "ScanDecays", "ScanQK", "ScanState",
+    "Attention", "DISPATCH", "DerivedEProperty", "EProperty", "ExpertIndices", "ExpertOutputs", "ExpertWeights", "Gates", "HeadOutputs", "INTERFACE", "Keys", "Layer", "LinearAttention",
+    "LOGITS", "LinearQK", "LinearV", "Mlp", "Moe", "PER_SLOT", "Pattern", "Queries", "RecurrentMixer", "Residual", "RouterLogits", "ScanDecays", "ScanQK", "ScanState",
     "ScanStates", "ScanSteps", "ScanValues", "SelectiveScan", "State", "States", "StreamMixing", "StreamWeights", "Streams",
     "Values",
     "NOT_ON_INTERFACE", "SSDHeadOutputs", "SSDKeys", "SSDQueries", "SSDValues", "Standard", "StateSpace", "Unavailable",
-    "chunk_per_token", "first_tensor", "interface_reason", "needs_eager",
-    "needs_kernel_source", "needs_per_token_chunks", "needs_recurrent_routing", "needs_token_loop", "needs_torch_kernels",
-    "per_call", "pinned", "rewrap", "route_delta_rule", "route_kernels", "seq_first", "unavailable",
+    "chunk_per_token", "first_tensor", "interface_reason", "mixture_reason", "needs_eager",
+    "needs_grouped_experts", "needs_kernel_source", "needs_per_token_chunks", "needs_recurrent_routing", "needs_token_loop", "needs_torch_kernels", "no_shared_expert",
+    "per_call", "pinned", "rewrap", "route_delta_rule", "route_kernels", "seq_first", "splice", "unavailable",
 ]

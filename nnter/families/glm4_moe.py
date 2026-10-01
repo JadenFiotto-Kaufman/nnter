@@ -16,7 +16,7 @@ shared expert (``mlp.shared_experts``) is a dense MLP of the same class.
 
 from transformers.models.glm4_moe.modeling_glm4_moe import Glm4MoeAttention, Glm4MoeDecoderLayer, Glm4MoeMLP, Glm4MoeMoE
 
-from ..components import Attention, Layer, Mlp
+from ..components import Attention, Layer, Mlp, Moe
 
 MODEL_TYPES = ("glm4_moe",)
 
@@ -24,6 +24,7 @@ RENAME = {
     "model.embed_tokens": "embed_tokens",
     "model.layers": "layers",
     "model.norm": "norm",
+    "gate": "router",
 }
 
 
@@ -39,5 +40,11 @@ class Mlp(Mlp):
     """GLM-4-MoE's dense MLP or mixture of experts; both return the hidden states (the mixture with its shared expert added), and the residual is added in the block."""
 
 
+class Moe(Moe, Mlp):
+    """GLM-4-MoE's mixture of experts: DeepSeek-V3's sigmoid router, routed experts and a shared expert."""
+
+    SCORING = "sigmoid"
+
+
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.
-ENVOYS = {Glm4MoeDecoderLayer: Layer, Glm4MoeAttention: Attention, Glm4MoeMLP: Mlp, Glm4MoeMoE: Mlp}
+ENVOYS = {Glm4MoeDecoderLayer: Layer, Glm4MoeAttention: Attention, Glm4MoeMLP: Mlp, Glm4MoeMoE: Moe}

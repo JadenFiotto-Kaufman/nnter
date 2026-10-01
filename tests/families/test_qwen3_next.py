@@ -2,7 +2,7 @@
 
 import pytest
 import torch
-from suite import LINEAR, LLAMA_ROWS, VALUES, FamilySuite, PROMPT
+from suite import FamilySuite, LINEAR, LLAMA_ROWS, PROMPT, VALUES, listed
 
 from nnter import StandardizedTransformer, Unavailable, route_delta_rule
 
@@ -89,7 +89,7 @@ class TestQwen3Next(FamilySuite):
     def test_linear_values_listed_in_the_repr(self, model):
         text = repr(model.layers[0].linear_attn)
         for name in LINEAR:
-            assert f"({name}):" in text, name
+            assert listed(name, text), name
 
     def test_values_follow_the_step_under_generate(self, model):
         """A prompt runs the chunked kernel and each decode step the recurrent one; the values

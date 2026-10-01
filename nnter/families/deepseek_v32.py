@@ -26,7 +26,7 @@ DeepSeek-V2's.
 
 from transformers.models.deepseek_v32.modeling_deepseek_v32 import DeepseekV32Attention, DeepseekV32DecoderLayer, DeepseekV32MLP, DeepseekV32MoE
 
-from ..components import Attention, Layer, Mlp
+from ..components import Attention, Layer, Mlp, Moe
 from .deepseek_v2 import head_dim, qk_head_dim  # noqa: F401  the same latent attention: the same sizes
 
 MODEL_TYPES = ("deepseek_v32",)
@@ -35,6 +35,7 @@ RENAME = {
     "model.embed_tokens": "embed_tokens",
     "model.layers": "layers",
     "model.norm": "norm",
+    "gate": "router",
 }
 
 
@@ -50,5 +51,11 @@ class Mlp(Mlp):
     """DeepSeek's dense MLP or mixture of experts; both return the hidden states, and the residual is added in the block."""
 
 
+class Moe(Moe, Mlp):
+    """DeepSeek-V3.2's mixture of experts: DeepSeek-V3's."""
+
+    SCORING = "sigmoid"
+
+
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.
-ENVOYS = {DeepseekV32DecoderLayer: Layer, DeepseekV32Attention: Attention, DeepseekV32MLP: Mlp, DeepseekV32MoE: Mlp}
+ENVOYS = {DeepseekV32DecoderLayer: Layer, DeepseekV32Attention: Attention, DeepseekV32MLP: Mlp, DeepseekV32MoE: Moe}

@@ -78,6 +78,8 @@ rest of this page says which.
    │       ├── self_attn   family.Attention ── attention_output, attention_probabilities, queries, ...
    │       ├── linear_attn family.LinearAttention (hybrids) ── attention_output, decays, betas, state*, ...
    │       └── mlp         family.Mlp        ── mlp_output
+   │                       (a mixture: family.Moe or a Moe-based Mlp ── + router_logits, expert_weights/indices,
+   │                        expert_outputs, routed_output, shared_expert_output)
    ├── norm ──────────┘ alias
    └── lm_head
         │
@@ -160,7 +162,7 @@ eproperty that carries a `description` (`envoy.py:1066-1095`), which is how
 
 | layer | owns | must not know |
 |---|---|---|
-| `nnter/families/<model_type>.py` | `MODEL_TYPES`; `RENAME` (native name → standard name); `Layer`/`Attention`/`Mlp`/`LinearAttention` subclasses that point a value at *this family's* op or sibling; `ENVOYS` keyed on transformers types; a module-level `def <size>(model)` for each root size *this family's* config spells its own way (`falcon.py`: `num_kv_heads`, `intermediate_size`; `deepseek_v2.py`: `head_dim`, `qk_head_dim`) | what a value means, how nnsight serves it; the plain rule for a size |
+| `nnter/families/<model_type>.py` | `MODEL_TYPES`; `RENAME` (native name → standard name); `Layer`/`Attention`/`Mlp`/`Moe`/`LinearAttention` subclasses that point a value at *this family's* op or sibling; `ENVOYS` keyed on transformers types; a module-level `def <size>(model)` for each root size *this family's* config spells its own way (`falcon.py`: `num_kv_heads`, `intermediate_size`; `deepseek_v2.py`: `head_dim`, `qk_head_dim`) | what a value means, how nnsight serves it; the plain rule for a size |
 | `nnter/components/` | what each standard value **means** (`layer_output` is the residual stream leaving the block, `attention_output` the contribution, `attention_probabilities` the post-dropout pattern); how to read/write it (`EProperty` with a path for a key, `DerivedEProperty`); availability (`unavailable=`, `status`); the default op on transformers' shared interface (`INTERFACE`, `attention.py:28`) | any one family's module names or classes |
 | `nnter/standardized.py` | the root values (`logits`, `token_embeddings`, `next_token_probs`, `input_ids`, `attention_mask`, `input_size`); the methods (`skip_layers`, `steer`, `project_on_vocab`, `get_topk_closest_tokens`); the sizes (`num_layers` … `intermediate_size`, `standardized.py:398-438`), each a `StandardizedProperty` (`:26-50`) holding the plain rule over the config and yielding on read to a same-named function in `model.family`; `status()` over the tree (`:287-348`: `_hosts` unions each block's `Standard` children under their standard names, each alias read off its own binding on the block, a mounted alias such as DBRX's `norm_attn_norm.attn` and a module another block owns (shared weights) included, so a value installed through `envoys=` is listed and a module no block has is not); the remote key (`:440-451`) | op names inside a forward; any one family's config keys |
 
@@ -205,7 +207,21 @@ and `layer_output` (`:58-77`, `first_tensor` in, `rewrap` out). `Attention`
 interior values on `INTERFACE`; `off_interface` (`:87-89`) is the one method
 a family overrides to give another reason the interface does not run
 (`families/gpt2.py:50-53` for `reorder_and_upcast_attn`). `Mlp`
-(`components/mlp.py:14-51`) adds `mlp_output`. `RecurrentMixer`
+(`components/mlp.py:14-51`) adds `mlp_output`. `Moe` (`components/moe.py`), an
+`Mlp`, adds a mixture of experts' six values, read where the model consumes them:
+`router_logits` at the router's logits op (`LOGITS`, `F_linear_0`), the routing pair
+as the experts module's arguments, `expert_outputs` inside transformers'
+`grouped_mm` / `batched_mm` experts forward (`DISPATCH`, `PER_SLOT`),
+`routed_output` as the experts' output, `shared_expert_output` as the shared
+expert's. The model routes flat `[batch * seq, ...]` tensors; the values are
+declared `tokens=True`, which `EProperty` serves as this invoke's `[batch, seq, ...]`
+rows (`rows`, from the interleaver batcher's `total` and the worker's
+`batch_group`) and splices a write back into the flat tensor (`splice`).
+`no_mixture` (`None` on the base) is the one method a family overrides when its
+host runs no mixture on some checkpoints (Gemma-4's dense MLP, which hosts the
+block's experts; GraniteMoE-Hybrid's shared MLP; Doge), as `off_interface` is for
+attention; `num_experts`, `top_k` and `SCORING` are its sizes and its router's kind.
+`RecurrentMixer`
 (`components/recurrent.py`) adds `attention_output`, the kernel choice, the
 per-token state and the kernel routing for a mixer read at a kernel call, and
 `LinearAttention` (`components/linear_attention.py`) sets its kernel

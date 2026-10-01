@@ -36,6 +36,10 @@ everywhere. Everything nnsight does (`trace`, `generate`, `.save()`, `tracer.ite
 - [docs/usage/attention-interior.md](docs/usage/attention-interior.md) — `attention_probabilities`, `attention_queries/keys/values/scores/head_outputs`; needs eager; per-family caveats
 - [docs/patterns/attention-patterns.md](docs/patterns/attention-patterns.md) — head metrics and pattern edits
 
+### "Mixture of experts: the router, the experts, expert ablation and rerouting"
+- [docs/usage/mixture-of-experts.md](docs/usage/mixture-of-experts.md) — `layers[i].mlp` is a `Moe` on the 36 MoE families: `router_logits` (writable, before the scoring), `expert_weights` / `expert_indices` (`[batch, seq, top_k]`), `expert_outputs` (needs `experts_implementation="grouped_mm"`, the default), `routed_output`, `shared_expert_output`; `num_experts`, `top_k`, `SCORING`
+- [docs/patterns/expert-ablation.md](docs/patterns/expert-ablation.md) — every expert's effect on a prediction
+
 ### "Logits, embeddings, next-token probabilities, the input, the sizes"
 - [docs/usage/root-values.md](docs/usage/root-values.md) — `logits`, `token_embeddings`, `next_token_probs`, `input_ids`, `attention_mask`, `input_size`, `num_layers`, `head_dim`, ... (each root size a `StandardizedProperty`: the config's value, by the plain rule or the family's spelling); a block's own sizes on `layers[i].self_attn` (`num_heads`, `num_kv_heads`, `head_dim`, `qk_head_dim`) and `layers[i].mlp` (`intermediate_size`), which differ from the root's on Gemma-4 and MiMo-V2-Flash
 
@@ -114,6 +118,7 @@ everywhere. Everything nnsight does (`trace`, `generate`, `.save()`, `tracer.ite
 - **GPT-2 and MPT queries/keys/values are split views**: assign, do not edit in place. Falcon's `mlp_output` is a copy carried back by a transform; both in-place and assignment reach the model.
 - **DeltaNet per-token state needs `nnter.route_kernels(model.family, "torch")` (or `route_delta_rule(model.family, "recurrent")`) before the first trace of a linear block**; write the state by assignment from a tensor you already hold (a token's `state` is served once, so reading it and then assigning it in the same `tracer.iter` step cuts the block), never in place.
 - **Mamba-1 families (Mamba, Falcon-Mamba, Jamba) need `nnter.route_kernels(model.family, "torch")` before the first trace** when `mamba_ssm` is installed: its CUDA kernels have no source and do not run on CPU. In a decode step the state (`state_output`) comes before `attention_head_outputs`; in the prompt's scan, after.
+- **A mixture's routing is the sparse pair `[batch, seq, top_k]`**: ablate expert `e` with `moe.expert_weights = moe.expert_weights.masked_fill(moe.expert_indices == e, 0)`; a rerouted index keeps the old slot's weight. Read a mixture's values in forward order (`router_logits`, weights/indices, `expert_outputs`, `routed_output`); where `shared_expert_output` falls differs per family. ZAYA's skipped slots read as expert 0 with weight 0. Under two or more invokes, edit the routing in place; an assignment there needs nnsight PR #738.
 - **`envoys=` keys match by module type or native path, never by alias**; to displace a family's envoy, key yours on the type.
 - **Import nnter (or nnsight) before any `transformers.models...` module**; the reverse order segfaults on this stack.
 - **Every snippet in `docs/` ran against the tiny checkpoints in `tests/families/`**; when a page and the code disagree, the suite is the arbiter: `HF_HUB_OFFLINE=1 pytest tests/families/test_<family>.py`.

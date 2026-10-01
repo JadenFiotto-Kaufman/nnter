@@ -7,7 +7,7 @@ added in the block, attention through the shared eager forward. The MLP is a spa
 
 from transformers.models.qwen2_moe.modeling_qwen2_moe import Qwen2MoeAttention, Qwen2MoeDecoderLayer, Qwen2MoeSparseMoeBlock
 
-from ..components import Attention, Layer, Mlp
+from ..components import Attention, EProperty, Layer, Moe, Residual, no_shared_expert
 
 MODEL_TYPES = ("qwen2_moe",)
 
@@ -15,6 +15,8 @@ RENAME = {
     "model.embed_tokens": "embed_tokens",
     "model.layers": "layers",
     "model.norm": "norm",
+    "gate": "router",
+    "shared_expert": "shared_experts",
 }
 
 
@@ -26,8 +28,20 @@ class Attention(Attention):
     """Qwen2-MoE's attention; the shared eager forward and the residual added in the block, so the base holds."""
 
 
-class Mlp(Mlp):
-    """A mixture of experts: the module returns the routed hidden states (a bare tensor on this transformers), so the base holds."""
+class Mlp(Moe):
+    """A mixture of experts plus a gated shared expert, returned as one bare tensor, so the base `mlp_output` holds.
+
+    The shared expert's contribution is its output times a sigmoid gate,
+    ``F.sigmoid(shared_expert_gate(x)) * shared_expert(x)``, bound in this
+    forward after the experts have run, so the forward is instrumented at build.
+    """
+
+    sourced = True
+
+    @EProperty("source.shared_expert_output_1.output", tokens=True, description=Moe.shared_expert_output.description, unavailable=no_shared_expert)
+    def shared_expert_output(self, value) -> Residual:
+        """The shared expert's output times its sigmoid gate (``shared_expert_gate``), the product the mixture adds."""
+        return value
 
 
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.

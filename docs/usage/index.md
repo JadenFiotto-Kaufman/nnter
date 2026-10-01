@@ -33,6 +33,7 @@ model = StandardizedTransformer("openai-community/gpt2", dispatch=True, attn_imp
 - [delta-net](delta-net.md) — the hybrids' `linear_attn`: `decays`, `betas`, `state_input`/`state_output`, and the per-token `state`/`states` behind `route_delta_rule`.
 - [selective-scan](selective-scan.md) — Mamba, Falcon-Mamba and Jamba's `linear_attn`: the Mamba-1 scan's `C`/`B`/`x`, step sizes and decays as tokens-first views, and the scan's own per-token state behind `route_kernels`.
 - [state-space](state-space.md) — the Mamba-2 (SSD) `linear_attn` on Mamba-2, Nemotron-H, Bamba and Falcon-H1: `C`/`B`/`x`/`dt` under the shared names, the state between steps.
+- [mixture-of-experts](mixture-of-experts.md) — a mixture's `router_logits`, `expert_weights` / `expert_indices` (`[batch, seq, top_k]`), `expert_outputs`, `routed_output`, `shared_expert_output` on `layers[i].mlp` (a `Moe`); ablation, rerouting, `experts_implementation=`.
 - [layouts](layouts.md) — one axis layout per value on every family, a named `jaxtyping` type from `nnter.components` (`Residual`, `Pattern`, ...; `value.dims`, `value.layout`).
 - [availability](availability.md) — `model.status()`, `nnter.Unavailable`, and the reasons a checkpoint lacks a value.
 

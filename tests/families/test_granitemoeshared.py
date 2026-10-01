@@ -10,9 +10,17 @@ REPO = "hf-tiny-v2/tiny-random-GraniteMoeSharedForCausalLM"
 NATIVE = {**LLAMA_ROWS, "layers.0.mlp": "model.layers.0.block_sparse_moe"}
 
 
+def scaled_mixture(self, model, host):
+    """The block's sum of the mixture and the shared expert: ``mlp_output`` over the multiplier."""
+    with model.trace(PROMPT):
+        out = host.mlp_output.save()
+    return out / model.config.residual_multiplier
+
+
 class TestGraniteMoeShared(FamilySuite):
     REPO = REPO
     FAMILY = granitemoeshared
+    mixture_output = scaled_mixture
     NATIVE = NATIVE
 
     def test_mlp_output_is_the_mixture_plus_the_shared_expert(self, model):
@@ -28,6 +36,7 @@ class TestGraniteMoeSharedScaled(test_granite.TestGraniteScaled):
 
     REPO = test_granite._scaled_checkpoint(REPO)
     FAMILY = granitemoeshared
+    mixture_output = scaled_mixture
     NATIVE = NATIVE
 
     def test_contributions_are_the_scaled_module_outputs(self, model):
@@ -46,6 +55,8 @@ class TestGraniteMoeSharedWithoutSharedExpert(FamilySuite):
 
     REPO = test_granite._scaled_checkpoint(REPO, shared_intermediate_size=0)
     FAMILY = granitemoeshared
+    mixture_output = scaled_mixture
+    MOE_UNAVAILABLE = {"shared_expert_output": "no shared expert"}
     NATIVE = NATIVE
 
     def test_no_shared_expert(self, model):

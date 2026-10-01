@@ -7,7 +7,7 @@ added in the block, attention through the shared eager forward. The MLP is a spa
 
 from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeAttention, Qwen3MoeDecoderLayer, Qwen3MoeSparseMoeBlock
 
-from ..components import Attention, Layer, Mlp
+from ..components import Attention, Layer, Moe
 
 MODEL_TYPES = ("qwen3_moe",)
 
@@ -15,6 +15,7 @@ RENAME = {
     "model.embed_tokens": "embed_tokens",
     "model.layers": "layers",
     "model.norm": "norm",
+    "gate": "router",
 }
 
 
@@ -26,7 +27,7 @@ class Attention(Attention):
     """Qwen3-MoE's attention; the shared eager forward and the residual added in the block, so the base holds."""
 
 
-class Mlp(Mlp):
+class Mlp(Moe):
     """A mixture of experts: the module returns the routed hidden states (a bare tensor on this transformers), so the base holds."""
 
 

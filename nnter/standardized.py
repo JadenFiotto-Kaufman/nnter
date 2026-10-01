@@ -153,6 +153,15 @@ class StandardizedTransformer(TransformersModel):
         )
         for key, value in (tokenizer_kwargs or {}).items():
             setattr(self.tokenizer, key, value)
+        if "experts_implementation" in kwargs:
+            # nnsight builds the meta model a lazy load starts from without this
+            # kwarg, so before the weights load its config says the default and
+            # `status` would report the per-slot expert outputs available; the
+            # real load honours it. Say on the meta config what the load will run.
+            for module in self._module.modules():
+                config = getattr(module, "config", None)
+                if hasattr(config, "_experts_implementation"):
+                    config._experts_implementation = kwargs["experts_implementation"]
 
     @staticmethod
     def _base_envoys(repo_id: Any, kwargs: dict) -> dict:

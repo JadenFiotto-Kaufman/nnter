@@ -22,7 +22,7 @@ from transformers.models.glm4_moe_lite.modeling_glm4_moe_lite import (
     Glm4MoeLiteMoE,
 )
 
-from ..components import Attention, Layer, Mlp
+from ..components import Attention, Layer, Mlp, Moe
 from .deepseek_v2 import head_dim, qk_head_dim  # noqa: F401  the same latent attention: the same sizes
 
 MODEL_TYPES = ("glm4_moe_lite",)
@@ -31,6 +31,7 @@ RENAME = {
     "model.embed_tokens": "embed_tokens",
     "model.layers": "layers",
     "model.norm": "norm",
+    "gate": "router",
 }
 
 
@@ -46,5 +47,11 @@ class Mlp(Mlp):
     """GLM-4-MoE-Lite's dense MLP or mixture of experts; both return the hidden states (the mixture with its shared expert added), and the residual is added in the block."""
 
 
+class Moe(Moe, Mlp):
+    """GLM-4-MoE-Lite's mixture of experts: DeepSeek-V3's sigmoid router, routed experts and a shared expert."""
+
+    SCORING = "sigmoid"
+
+
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.
-ENVOYS = {Glm4MoeLiteDecoderLayer: Layer, Glm4MoeLiteAttention: Attention, Glm4MoeLiteMLP: Mlp, Glm4MoeLiteMoE: Mlp}
+ENVOYS = {Glm4MoeLiteDecoderLayer: Layer, Glm4MoeLiteAttention: Attention, Glm4MoeLiteMLP: Mlp, Glm4MoeLiteMoE: Moe}

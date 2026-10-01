@@ -24,7 +24,7 @@ import tempfile
 
 import pytest
 import torch
-from suite import FamilySuite, LLAMA_ROWS, PROMPT
+from suite import MOE, FamilySuite, LLAMA_ROWS, PROMPT
 
 from nnter import StandardizedTransformer, Unavailable
 from nnter.families import llama4_text
@@ -49,6 +49,7 @@ def _patched_checkpoint(repo="yujiepan/llama-4-tiny-random"):
 class TestLlama4Text(FamilySuite):
     REPO = _patched_checkpoint()
     FAMILY = llama4_text
+    MOE_UNAVAILABLE = {"expert_weights": "dense score", "expert_outputs": "dense score"}
     NATIVE = NATIVE
 
     def test_the_checkpoint_has_every_kind_of_block(self, model):
@@ -171,8 +172,9 @@ def test_a_wrapper_module_binds_through_language_model():
     assert model.lm_head is model.get("language_model.lm_head")
     assert model.embed_tokens is model.get("language_model.model.embed_tokens")
     assert model.norm is model.get("language_model.model.norm")
-    assert all(type(layer) is llama4_text.Layer and type(layer.mlp) is llama4_text.Mlp for layer in model.layers)
-    assert all(reason is None for reason in model.status().values())
+    assert all(type(layer) is llama4_text.Layer and type(layer.mlp) in (llama4_text.Mlp, llama4_text.Moe) for layer in model.layers)
+    # the mixture values are per block (dense blocks have none) and two are unavailable on Llama 4: TestLlama4Text checks them
+    assert all(reason is None for name, reason in model.status().items() if name.removeprefix("mlp.") not in MOE)
     causal = StandardizedTransformer(repo, attn_implementation="eager")
     parts = []  # filled inside the block: a name bound there does not survive the trace
     with model.trace(PROMPT):

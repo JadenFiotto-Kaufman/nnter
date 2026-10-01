@@ -12,7 +12,7 @@ are ``intermediate_size`` wide.
 
 from transformers.models.flex_olmo.modeling_flex_olmo import FlexOlmoAttention, FlexOlmoDecoderLayer, FlexOlmoSparseMoeBlock
 
-from ..components import Attention, EProperty, Layer, Mlp, Residual
+from ..components import Attention, EProperty, Layer, Moe, Residual
 
 MODEL_TYPES = ("flex_olmo",)
 
@@ -20,6 +20,7 @@ RENAME = {
     "model.embed_tokens": "embed_tokens",
     "model.layers": "layers",
     "model.norm": "norm",
+    "gate": "router",
 }
 
 
@@ -38,7 +39,7 @@ class Attention(Attention):
         return value
 
 
-class Mlp(Mlp):
+class Mlp(Moe):
     """FlexOlmo's mixture of experts: what reaches the residual stream is the post-feedforward norm's output."""
 
     @EProperty(

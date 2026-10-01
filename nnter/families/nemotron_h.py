@@ -42,7 +42,7 @@ from transformers.models.nemotron_h.modeling_nemotron_h import (
     NemotronHMoE,
 )
 
-from ..components import Attention, Layer, Mlp, StateSpace
+from ..components import Attention, EProperty, ExpertOutputs, Layer, Mlp, Moe, Residual, StateSpace, needs_grouped_experts
 
 MODEL_TYPES = ("nemotron_h",)
 
@@ -59,6 +59,7 @@ RENAME = {
     "model.norm_f": "norm",
     # One native name, four meanings: the standard name follows the mixer's class.
     **MIXER_NAMES,
+    "gate": "router",
 }
 
 #: The standard name of a block's ``mixer``, by the mixer's class.
@@ -85,11 +86,45 @@ def project_on_vocab(model, hidden: torch.Tensor) -> torch.Tensor:
     return model.lm_head(model.norm(hidden)).float()
 
 
+def _latent(envoy) -> bool:
+    return envoy._module.config.moe_latent_size is not None
+
+
+def _routed(envoy) -> str:
+    return "fc2_latent_proj.output" if _latent(envoy) else "experts.output"
+
+
+def _no_residual_slots(envoy) -> str | None:
+    if _latent(envoy):
+        return "the experts run in the latent width (moe_latent_size); their per-slot outputs are not residual contributions"
+    return needs_grouped_experts(envoy)
+
+
+class Moe(Moe, Mlp):
+    """Nemotron-H's mixture of experts: DeepSeek-V3's sigmoid router, routed experts and a shared expert.
+
+    With ``moe_latent_size`` the experts run between two projections,
+    ``fc1_latent_proj`` down and ``fc2_latent_proj`` back up: ``routed_output`` is
+    the up projection's output, and the per-slot outputs, latent-width, are
+    unavailable. Without it the projections are identities and the base holds.
+    """
+
+    SCORING = "sigmoid"
+
+    @EProperty(Moe.expert_outputs.key, tokens=True, description=Moe.expert_outputs.description, unavailable=_no_residual_slots)
+    def expert_outputs(self, value) -> ExpertOutputs:
+        return value
+
+    @EProperty(_routed, tokens=True, description=Moe.routed_output.description)
+    def routed_output(self, value) -> Residual:
+        return value
+
+
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.
 ENVOYS = {
     NemotronHBlock: Layer,
     NemotronHAttention: Attention,
     NemotronHMamba2Mixer: StateSpace,
-    NemotronHMoE: Mlp,
+    NemotronHMoE: Moe,
     NemotronHMLP: Mlp,
 }
