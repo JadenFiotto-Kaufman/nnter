@@ -42,7 +42,9 @@ from transformers.models.nemotron_h.modeling_nemotron_h import (
     NemotronHMoE,
 )
 
-from ..components import Attention, EProperty, ExpertOutputs, Layer, Mlp, Moe, Residual, StateSpace, needs_grouped_experts
+from ..components import (
+    Attention, ExpertOutputs, Layer, Mlp, Moe, Residual, StateSpace, TokenEProperty, needs_grouped_experts,
+)
 
 MODEL_TYPES = ("nemotron_h",)
 
@@ -111,11 +113,11 @@ class Moe(Moe, Mlp):
 
     SCORING = "sigmoid"
 
-    @EProperty(Moe.expert_outputs.key, tokens=True, description=Moe.expert_outputs.description, unavailable=_no_residual_slots)
+    @TokenEProperty(Moe.expert_outputs.key, description=Moe.expert_outputs.description, unavailable=_no_residual_slots)
     def expert_outputs(self, value) -> ExpertOutputs:
         return value
 
-    @EProperty(_routed, tokens=True, description=Moe.routed_output.description)
+    @TokenEProperty(_routed, description=Moe.routed_output.description)
     def routed_output(self, value) -> Residual:
         return value
 

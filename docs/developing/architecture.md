@@ -214,9 +214,10 @@ as the experts module's arguments, `expert_outputs` inside transformers'
 `grouped_mm` / `batched_mm` experts forward (`DISPATCH`, `PER_SLOT`),
 `routed_output` as the experts' output, `shared_expert_output` as the shared
 expert's. The model routes flat `[batch * seq, ...]` tensors; the values are
-declared `tokens=True`, which `EProperty` serves as this invoke's `[batch, seq, ...]`
-rows (`rows`, from the interleaver batcher's `total` and the worker's
-`batch_group`) and splices a write back into the flat tensor (`splice`).
+`TokenEProperty`s (`components/tokens.py`), an `EProperty` subclass that serves
+this invoke's `[batch, seq, ...]` rows of what `EProperty` reads (`rows`, from the
+interleaver batcher's `total` and the worker's `batch_group`) and splices a write
+back into the flat tensor before `EProperty` writes it (`splice`).
 `no_mixture` (`None` on the base) is the one method a family overrides when its
 host runs no mixture on some checkpoints (Gemma-4's dense MLP, which hosts the
 block's experts; GraniteMoE-Hybrid's shared MLP; Doge), as `off_interface` is for

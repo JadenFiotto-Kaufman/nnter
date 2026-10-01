@@ -9,7 +9,7 @@ values live at ``layers[i].linear_attn`` (see `nnter.LinearAttention`). The MLP 
 
 from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextAttention, Qwen3NextDecoderLayer, Qwen3NextGatedDeltaNet, Qwen3NextMLP, Qwen3NextSparseMoeBlock
 
-from ..components import Attention, EProperty, Layer, LinearAttention, Mlp, Moe, Residual, no_shared_expert
+from ..components import Attention, Layer, LinearAttention, Mlp, Moe, Residual, TokenEProperty, no_shared_expert
 
 MODEL_TYPES = ("qwen3_next",)
 
@@ -48,7 +48,7 @@ class Moe(Moe, Mlp):
 
     sourced = True
 
-    @EProperty("source.shared_expert_output_1.output", tokens=True, description=Moe.shared_expert_output.description, unavailable=no_shared_expert)
+    @TokenEProperty("source.shared_expert_output_1.output", description=Moe.shared_expert_output.description, unavailable=no_shared_expert)
     def shared_expert_output(self, value) -> Residual:
         """The shared expert's output times its sigmoid gate (``shared_expert_gate``), the product the mixture adds."""
         return value

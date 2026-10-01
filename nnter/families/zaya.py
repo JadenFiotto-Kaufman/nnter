@@ -46,7 +46,9 @@ import torch
 from nnsight.intervention.envoy import Envoy
 from transformers.models.zaya.modeling_zaya import ZayaAttention, ZayaDecoderLayer, ZayaSparseMoeBlock
 
-from ..components import Attention, EProperty, Layer, Moe, Residual, RouterLogits, first_tensor, rewrap
+from ..components import (
+    Attention, EProperty, Layer, Moe, Residual, RouterLogits, TokenEProperty, first_tensor, rewrap,
+)
 
 if TYPE_CHECKING:
     from ..standardized import StandardizedTransformer
@@ -136,7 +138,7 @@ class Mlp(Moe):
     def mlp_output(self, value, raw):
         return _scaled_back(value, raw, self.merge._module)
 
-    @EProperty("router.router_mlp.output", tokens=True, description="The router's logits, one per expert and a last one for skip, before the scoring")
+    @TokenEProperty("router.router_mlp.output", description="The router's logits, one per expert and a last one for skip, before the scoring")
     def router_logits(self, value) -> RouterLogits:
         return value
 

@@ -52,7 +52,9 @@ from transformers.models.llama4.modeling_llama4 import (
     Llama4TextAttention, Llama4TextDecoderLayer, Llama4TextMLP, Llama4TextMoe,
 )
 
-from ..components import Attention, EProperty, ExpertIndices, Layer, Mlp, Moe, Residual, RouterLogits, splice, unavailable
+from ..components import (
+    Attention, EProperty, ExpertIndices, Layer, Mlp, Moe, Residual, RouterLogits, TokenEProperty, unavailable,
+)
 
 if TYPE_CHECKING:
     from nnsight.intervention.envoy import Envoy
@@ -135,12 +137,12 @@ class Moe(Moe, Mlp):
     SCORING = "sigmoid"
     sourced = True
 
-    @EProperty("router.source.forward_0.output", tokens=True, description=Moe.router_logits.description)
+    @TokenEProperty("router.source.forward_0.output", description=Moe.router_logits.description)
     def router_logits(self, value) -> RouterLogits:
         """The router's projection, ``[batch, seq, experts]`` (the router is an ``nn.Linear`` whose forward calls its parent's)."""
         return value
 
-    @EProperty("router.source.torch_topk_0.output", select=1, tokens=True, description=Moe.expert_indices.description)
+    @TokenEProperty("router.source.torch_topk_0.output", select=1, description=Moe.expert_indices.description)
     def expert_indices(self, value) -> ExpertIndices:
         """The router's top-k over the logits, ``[batch, seq, top_k]``; the scores it scatters are built from them."""
         return value
@@ -148,21 +150,21 @@ class Moe(Moe, Mlp):
     expert_weights = unavailable(DENSE_SCORES)
     expert_outputs = unavailable(DENSE_SCORES)
 
-    @EProperty("source.sum_0.output", tokens=True, description=Moe.routed_output.description)
+    @TokenEProperty("source.sum_0.output", description=Moe.routed_output.description)
     def routed_output(self, value) -> Residual:
         """The experts' outputs summed over the experts, ``[batch, seq, hidden]``: what the mixture adds into the shared expert's output."""
         return value
 
-    @EProperty("shared_experts.output", tokens=True, description="The shared expert's output (a copy, since the mixture adds the routed sum into the live tensor in place)")
+    @TokenEProperty("shared_experts.output", description="The shared expert's output (a copy, since the mixture adds the routed sum into the live tensor in place)")
     def shared_expert_output(self, value) -> Residual:
         """The shared expert's output as it returns, a copy: the mixture then adds the routed sum into that tensor in place."""
         return value.clone()
 
     @shared_expert_output.transform
     def shared_expert_output(self, value, raw):
-        # Fires on the model side, after the read: hand an edited copy back, a
-        # second copy so the mixture's in-place add leaves the user's tensor clean.
-        return splice(raw, value.clone(), 3)
+        # Fires on the model side, after the read, with the copy the read was a view of:
+        # hand back a second copy, so the mixture's in-place add leaves the user's tensor clean.
+        return value.clone()
 
 
 #: Module type -> Envoy subclass, for nnsight's ``envoys=``.

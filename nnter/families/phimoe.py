@@ -10,7 +10,7 @@ that returns the routed hidden states as a bare tensor; the experts are
 
 from transformers.models.phimoe.modeling_phimoe import PhimoeAttention, PhimoeDecoderLayer, PhimoeSparseMoeBlock
 
-from ..components import Attention, EProperty, Layer, Moe, RouterLogits
+from ..components import Attention, Layer, Moe, RouterLogits, TokenEProperty
 
 MODEL_TYPES = ("phimoe",)
 
@@ -39,7 +39,7 @@ class Mlp(Moe):
 
     SCORING = "sparsemixer"
 
-    @EProperty("router.source.forward_0.output", tokens=True, description=Moe.router_logits.description)
+    @TokenEProperty("router.source.forward_0.output", description=Moe.router_logits.description)
     def router_logits(self, value) -> RouterLogits:
         return value
 

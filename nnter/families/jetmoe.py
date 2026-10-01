@@ -29,7 +29,7 @@ per-slot outputs, sorted by expert, are unavailable.
 from transformers.models.jetmoe.modeling_jetmoe import JetMoeAttention, JetMoeDecoderLayer, JetMoeMoE
 
 from ..components import (
-    Attention, EProperty, ExpertIndices, ExpertWeights, Layer, Moe, Residual, RouterLogits, unavailable,
+    Attention, ExpertIndices, ExpertWeights, Layer, Moe, Residual, RouterLogits, TokenEProperty, unavailable,
 )
 
 MODEL_TYPES = ("jetmoe",)
@@ -62,23 +62,23 @@ class Mlp(Moe):
     SCORING = "topk_softmax"
     sourced = True
 
-    @EProperty("router.layer.output", tokens=True, description=Moe.router_logits.description)
+    @TokenEProperty("router.layer.output", description=Moe.router_logits.description)
     def router_logits(self, value) -> RouterLogits:
         return value
 
-    @EProperty("router.source.top_k_gates_0.output", tokens=True, description=Moe.expert_weights.description)
+    @TokenEProperty("router.source.top_k_gates_0.output", description=Moe.expert_weights.description)
     def expert_weights(self, value) -> ExpertWeights:
         """The router's softmax over the top-k logits, ``[batch, seq, top_k]``, in token order before the router sorts the slots by expert."""
         return value
 
-    @EProperty("router.source.logits_topk_0.output", select=1, tokens=True, description=Moe.expert_indices.description)
+    @TokenEProperty("router.source.logits_topk_0.output", select=1, description=Moe.expert_indices.description)
     def expert_indices(self, value) -> ExpertIndices:
         """The router's top-k indices, ``[batch, seq, top_k]``, in token order before the router sorts the slots by expert."""
         return value
 
     expert_outputs = unavailable("JetMoE's mixture runs its experts over the slots sorted by expert; no tensor holds them in token order")
 
-    @EProperty("source.layer_output_1.output", tokens=True, description="The routed experts' combined output, before the mixture's bias")
+    @TokenEProperty("source.layer_output_1.output", description="The routed experts' combined output, before the mixture's bias")
     def routed_output(self, value) -> Residual:
         """The routed sum in the residual's shape, before ``+ bias``: ``mlp.output - routed_output`` is the bias."""
         return value

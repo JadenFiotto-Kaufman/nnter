@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 
 from transformers.models.dbrx.modeling_dbrx import DbrxAttention, DbrxBlock, DbrxFFN
 
-from ..components import Attention, EProperty, Layer, Moe, RouterLogits, unavailable
+from ..components import Attention, Layer, Moe, RouterLogits, TokenEProperty, unavailable
 
 if TYPE_CHECKING:
     from ..standardized import StandardizedTransformer
@@ -49,7 +49,7 @@ class Attention(Attention):
 class Mlp(Moe):
     """DBRX's mixture of experts; the residual is added in the block, so the base holds."""
 
-    @EProperty("router.layer.output", tokens=True, description=Moe.router_logits.description)
+    @TokenEProperty("router.layer.output", description=Moe.router_logits.description)
     def router_logits(self, value) -> RouterLogits:
         return value
 

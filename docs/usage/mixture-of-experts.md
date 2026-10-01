@@ -127,12 +127,15 @@ one tensor only in `grouped_mm` and `batched_mm`, so `expert_outputs` is unavail
 the others, with a reason naming the kwarg:
 
 ```python
-eager = StandardizedTransformer("hf-internal-testing/tiny-random-MixtralForCausalLM", experts_implementation="eager")
+eager = StandardizedTransformer("hf-internal-testing/tiny-random-MixtralForCausalLM", dispatch=True, experts_implementation="eager")
 eager.status(layer=1)["mlp.expert_outputs"]
 # "read inside transformers' grouped_mm / batched_mm experts forward, but this model runs 'eager';
 #  load with experts_implementation='grouped_mm' (the default) or 'batched_mm'"
 ```
 
+`status()` reads the implementation off the model's config, so on a lazy load it is
+right once the weights are in (`dispatch=True`, or after the first trace), or before
+that where nnsight's meta build forwards `experts_implementation=`.
 Everything else reads and writes the same under every implementation: the routing pair
 and the routed sum are module boundaries. transformers also picks `eager` by itself where
 `grouped_mm` cannot run (CUDA below SM80). Unweighted per-slot outputs are
@@ -156,7 +159,7 @@ in doubt, as the suite does.
 
 ## Batches and invokes
 
-The model routes tensors flat over tokens, `[batch * seq, ...]`. Each value is served as
+The model routes tensors flat over tokens, `[batch * seq, ...]`. Each value is a `TokenEProperty`, served as
 `[batch, seq, ...]`: a whole batch in one invoke, this invoke's rows under several. The
 rows are a view, so in-place edits land on the model's tensor and reach that invoke only.
 An assignment under one invoke always lands; under two or more it needs nnsight's widen

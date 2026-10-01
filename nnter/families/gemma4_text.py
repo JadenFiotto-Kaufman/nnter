@@ -65,7 +65,9 @@ from typing import TYPE_CHECKING
 from nnsight.intervention.envoy import Envoy
 from transformers.models.gemma4.modeling_gemma4 import Gemma4TextAttention, Gemma4TextDecoderLayer, Gemma4TextMLP
 
-from ..components import Attention, EProperty, Layer, Moe, Residual, RouterLogits, Unavailable, mixture_reason
+from ..components import (
+    Attention, EProperty, Layer, Moe, Residual, RouterLogits, TokenEProperty, Unavailable, mixture_reason,
+)
 
 if TYPE_CHECKING:
     from ..standardized import StandardizedTransformer
@@ -162,12 +164,12 @@ class Mlp(Moe):
     def mlp_output(self, value) -> Residual:
         return value
 
-    @EProperty("router.proj.output", tokens=True, description=Moe.router_logits.description, unavailable=mixture_reason)
+    @TokenEProperty("router.proj.output", description=Moe.router_logits.description, unavailable=mixture_reason)
     def router_logits(self, value) -> RouterLogits:
         """The router's projection, ``[batch, seq, experts]``: the router returns their softmax."""
         return value
 
-    @EProperty("output", tokens=True, description="The dense MLP's output, before its post-norm: the shared expert beside the mixture", unavailable=mixture_reason)
+    @TokenEProperty("output", description="The dense MLP's output, before its post-norm: the shared expert beside the mixture", unavailable=mixture_reason)
     def shared_expert_output(self, value) -> Residual:
         return value
 

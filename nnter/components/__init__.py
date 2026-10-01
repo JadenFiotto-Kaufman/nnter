@@ -50,7 +50,7 @@ from .attention import (
     seq_first,
 )
 from .eproperty import (
-    DerivedEProperty, EProperty, Unavailable, splice, unavailable,
+    DerivedEProperty, EProperty, Unavailable, unavailable,
 )
 from .layer import Layer, Residual, StreamMixing, Streams, StreamWeights
 from .linear_attention import Gates, LinearAttention, LinearQK, LinearV
@@ -68,6 +68,7 @@ from .selective_scan import (
     needs_token_loop,
 )
 from .standard import Standard, first_tensor, rewrap
+from .tokens import TokenEProperty
 from .state_space import (
     SSDHeadOutputs, SSDKeys, SSDQueries, SSDValues, StateSpace, chunk_per_token, needs_per_token_chunks,
 )
@@ -75,10 +76,10 @@ from .state_space import (
 __all__ = [
     "Attention", "DISPATCH", "DerivedEProperty", "EProperty", "ExpertIndices", "ExpertOutputs", "ExpertWeights", "Gates", "HeadOutputs", "INTERFACE", "Keys", "Layer", "LinearAttention",
     "LOGITS", "LinearQK", "LinearV", "Mlp", "Moe", "PER_SLOT", "Pattern", "Queries", "RecurrentMixer", "Residual", "RouterLogits", "ScanDecays", "ScanQK", "ScanState",
-    "ScanStates", "ScanSteps", "ScanValues", "SelectiveScan", "State", "States", "StreamMixing", "StreamWeights", "Streams",
+    "ScanStates", "ScanSteps", "ScanValues", "SelectiveScan", "State", "States", "StreamMixing", "StreamWeights", "Streams", "TokenEProperty",
     "Values",
     "NOT_ON_INTERFACE", "SSDHeadOutputs", "SSDKeys", "SSDQueries", "SSDValues", "Standard", "StateSpace", "Unavailable",
     "chunk_per_token", "first_tensor", "interface_reason", "mixture_reason", "needs_eager",
     "needs_grouped_experts", "needs_kernel_source", "needs_per_token_chunks", "needs_recurrent_routing", "needs_token_loop", "needs_torch_kernels", "no_shared_expert",
-    "per_call", "pinned", "rewrap", "route_delta_rule", "route_kernels", "seq_first", "splice", "unavailable",
+    "per_call", "pinned", "rewrap", "route_delta_rule", "route_kernels", "seq_first", "unavailable",
 ]

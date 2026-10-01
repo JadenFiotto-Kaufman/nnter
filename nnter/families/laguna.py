@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING
 
 from transformers.models.laguna.modeling_laguna import LagunaAttention, LagunaDecoderLayer, LagunaMLP, LagunaSparseMoeBlock
 
-from ..components import Attention, EProperty, Layer, Mlp, Moe, Residual, first_tensor, rewrap
+from ..components import Attention, EProperty, Layer, Mlp, Moe, Residual, TokenEProperty, first_tensor, rewrap
 
 if TYPE_CHECKING:
     from nnsight.intervention.envoy import Envoy
@@ -81,7 +81,7 @@ class Moe(Moe, Mlp):
     SCORING = "sigmoid"
     sourced = True
 
-    @EProperty("source.hidden_states_2.output", tokens=True, description="The routed experts' combined output, times routed_scaling_factor")
+    @TokenEProperty("source.hidden_states_2.output", description="The routed experts' combined output, times routed_scaling_factor")
     def routed_output(self, value) -> Residual:
         return value
 

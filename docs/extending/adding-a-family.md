@@ -194,7 +194,7 @@ class Layer(Layer):
   computes its logits with `F.linear` (`LOGITS`), the experts module takes
   `(hidden, top_k_index, top_k_weights)` under transformers' `@use_experts_implementation`,
   and the shared expert's output is what the mixture adds. Otherwise redefine the value
-  at the right place, declared `tokens=True` with the base's layout: the router's
+  at the right place, a `TokenEProperty` with the base's layout: the router's
   projection module (`"router.wg.output"`, Hunyuan), an op of the mixture's own forward
   (`"source.hidden_states_2.output"`, Laguna, with `sourced = True` since the read
   follows a child's), `unavailable(...)` where no tensor holds the value (DBRX's

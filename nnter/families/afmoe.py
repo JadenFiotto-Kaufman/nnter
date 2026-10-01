@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 
 from transformers.models.afmoe.modeling_afmoe import AfmoeAttention, AfmoeDecoderLayer, AfmoeMLP, AfmoeSparseMoeBlock
 
-from ..components import Attention, EProperty, Layer, Mlp, Moe, Residual, RouterLogits
+from ..components import Attention, EProperty, Layer, Mlp, Moe, Residual, RouterLogits, TokenEProperty
 
 if TYPE_CHECKING:
     from nnsight.intervention.envoy import Envoy
@@ -78,7 +78,7 @@ class Moe(Moe, Mlp):
 
     SCORING = "sigmoid"
 
-    @EProperty("router.gate.output", tokens=True, description=Moe.router_logits.description)
+    @TokenEProperty("router.gate.output", description=Moe.router_logits.description)
     def router_logits(self, value) -> RouterLogits:
         return value
 

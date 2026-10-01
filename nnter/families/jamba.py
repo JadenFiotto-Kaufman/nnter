@@ -26,7 +26,7 @@ from transformers.models.jamba.modeling_jamba import (
     JambaAttention, JambaAttentionDecoderLayer, JambaMambaDecoderLayer, JambaMambaMixer, JambaMLP, JambaSparseMoeBlock,
 )
 
-from ..components import Attention, EProperty, Layer, Mlp, Moe, RouterLogits, SelectiveScan
+from ..components import Attention, Layer, Mlp, Moe, RouterLogits, SelectiveScan, TokenEProperty
 
 MODEL_TYPES = ("jamba",)
 
@@ -63,7 +63,7 @@ class Moe(Moe, Mlp):
     them, without renormalizing.
     """
 
-    @EProperty("router.output", tokens=True, description=Moe.router_logits.description)
+    @TokenEProperty("router.output", description=Moe.router_logits.description)
     def router_logits(self, value) -> RouterLogits:
         return value
 

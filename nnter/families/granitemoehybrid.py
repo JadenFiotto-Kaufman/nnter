@@ -46,7 +46,9 @@ from transformers.models.granitemoehybrid.modeling_granitemoehybrid import (
     GraniteMoeHybridMLP,
 )
 
-from ..components import EProperty, Layer, Moe, Residual, StateSpace, first_tensor, mixture_reason, rewrap
+from ..components import (
+    EProperty, Layer, Moe, Residual, StateSpace, TokenEProperty, first_tensor, mixture_reason, rewrap,
+)
 from .granite import Attention as GraniteAttention
 from .granite import project_on_vocab  # noqa: F401  the logit lens divides by logits_scaling, as Granite's
 from .granitemoe import hand_residual_multiplier, scaled_back
@@ -136,7 +138,7 @@ class Mlp(Moe):
     def no_mixture(self) -> str | None:
         return None if self.has_experts else "this block runs no routed experts (num_local_experts is 0)"
 
-    @EProperty("output", tokens=True, description="The shared expert's output, unscaled", unavailable=mixture_reason)
+    @TokenEProperty("output", description="The shared expert's output, unscaled", unavailable=mixture_reason)
     def shared_expert_output(self, value) -> Residual:
         """This MLP's own output: the shared expert beside the routed ones, before the block's multiplier."""
         return value

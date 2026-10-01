@@ -14,7 +14,7 @@ outputs inside transformers' shared experts implementation, the routed sum as
 the experts' output. Every write lands on the tensor the model uses.
 
 The routing tensors are flat over tokens; each value is served as this
-invoke's ``[batch, seq, ...]`` (``tokens=True`` on the descriptor), a view,
+invoke's ``[batch, seq, ...]`` (a `TokenEProperty`), a view,
 so in-place edits land, and an assignment is spliced back into the flat
 tensor.
 """
@@ -28,7 +28,7 @@ from jaxtyping import Float, Int
 from nnsight.intervention.envoy import Envoy
 from torch import Tensor
 
-from .eproperty import EProperty
+from .tokens import TokenEProperty
 from .layer import Residual
 from .mlp import Mlp
 from .standard import module_int, unsized
@@ -151,7 +151,7 @@ class Moe(Mlp):
 
     # -- the routing --------------------------------------------------------------
 
-    @EProperty(f"router.source.{LOGITS}.output", tokens=True, description="The router's logits, one per expert, before the scoring", unavailable=mixture_reason)
+    @TokenEProperty(f"router.source.{LOGITS}.output", description="The router's logits, one per expert, before the scoring", unavailable=mixture_reason)
     def router_logits(self, value: torch.Tensor) -> RouterLogits:
         """The router's logits, ``[batch, seq, experts]``, where the router's forward produces them.
 
@@ -162,7 +162,7 @@ class Moe(Mlp):
         """
         return value
 
-    @EProperty("experts.inputs", select=2, tokens=True, description="The weight each selected expert's output is scaled by", unavailable=mixture_reason)
+    @TokenEProperty("experts.inputs", select=2, description="The weight each selected expert's output is scaled by", unavailable=mixture_reason)
     def expert_weights(self, value: torch.Tensor) -> ExpertWeights:
         """The weights the experts receive, ``[batch, seq, top_k]``, one per routing slot.
 
@@ -172,7 +172,7 @@ class Moe(Mlp):
         """
         return value
 
-    @EProperty("experts.inputs", select=1, tokens=True, description="The expert each routing slot sends the token to", unavailable=mixture_reason)
+    @TokenEProperty("experts.inputs", select=1, description="The expert each routing slot sends the token to", unavailable=mixture_reason)
     def expert_indices(self, value: torch.Tensor) -> ExpertIndices:
         """The experts each token is routed to, ``[batch, seq, top_k]``, int64.
 
@@ -181,8 +181,8 @@ class Moe(Mlp):
         """
         return value
 
-    @EProperty(
-        f"experts.source.{DISPATCH}.source.{PER_SLOT}.output", tokens=True,
+    @TokenEProperty(
+        f"experts.source.{DISPATCH}.source.{PER_SLOT}.output",
         description="Each routing slot's weighted expert output", unavailable=needs_grouped_experts,
     )
     def expert_outputs(self, value: torch.Tensor) -> ExpertOutputs:
@@ -194,12 +194,12 @@ class Moe(Mlp):
         """
         return value
 
-    @EProperty("experts.output", tokens=True, description="The routed experts' combined output", unavailable=mixture_reason)
+    @TokenEProperty("experts.output", description="The routed experts' combined output", unavailable=mixture_reason)
     def routed_output(self, value: torch.Tensor) -> Residual:
         """The routed experts' weighted sum, ``[batch, seq, hidden]``, without the shared expert."""
         return value
 
-    @EProperty("shared_experts.output", tokens=True, description="The shared expert's output", unavailable=no_shared_expert)
+    @TokenEProperty("shared_experts.output", description="The shared expert's output", unavailable=no_shared_expert)
     def shared_expert_output(self, value: torch.Tensor) -> Residual:
         """What the shared expert adds beside the routed ones, ``[batch, seq, hidden]``; unavailable on a mixture without one."""
         return value

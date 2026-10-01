@@ -11,8 +11,6 @@ from __future__ import annotations
 from functools import partial
 from typing import Any, Callable
 
-import torch
-
 from nnsight.intervention.envoy import Envoy
 from nnsight.intervention.eproperty import eproperty
 from nnsight.intervention.interleaver import Mediator
@@ -72,12 +70,6 @@ class EProperty(eproperty):
             a value whose position differs between the calls a forward branches
             to (`SelectiveScan`'s prompt and decode kernels, `StateSpace`'s
             two kernels).
-        tokens: The model may hold the value flat over tokens, ``[batch * seq,
-            ...]`` batch-major, one rank below the layout (a mixture of experts'
-            routing tensors). A flat tensor is served as this invoke's rows,
-            ``[batch, seq, ...]``, a view so in-place edits land, and a write
-            is spliced back into the whole flat tensor (`rows`, `splice`). A
-            tensor already at the layout's rank passes through.
 
     The location is served by nnsight the way any eproperty's is, whatever the
     path: a module's output, a sibling norm's, or an operation's arguments,
@@ -97,12 +89,10 @@ class EProperty(eproperty):
         description: str | None = None,
         unavailable: str | Callable[[Envoy], str | None] | None = None,
         select: int | str | Callable[[Envoy], int | str | None] | None = None,
-        tokens: bool = False,
     ) -> None:
         self.locate = key if callable(key) else None
         self.unavailable = unavailable
         self.select = select
-        self.tokens = tokens
         super().__init__(key=f"<{key.__name__}>" if callable(key) else key, description=description)
 
     def __set_name__(self, owner: type, name: str) -> None:
@@ -264,8 +254,6 @@ class EProperty(eproperty):
         select = self._selection(obj)  # before the read: a select function may read an earlier value of the call
         raw = Mediator.value(location)
         value = self._pick(key.rsplit(".", 1)[-1], raw, select)
-        if self.tokens:
-            value = rows(value, len(self.dims))
         if self._preprocess is not None:
             value = self._preprocess(obj, value)
         if self._transform is not None:
@@ -284,51 +272,9 @@ class EProperty(eproperty):
         location = self._resolve(obj, key)
         attribute = key.rsplit(".", 1)[-1]
         select = self._selection(obj)
-        if self.tokens:
-            value = splice(self._pick(attribute, Mediator.value(location), select), value, len(self.dims))
         if select is not None or attribute == "input":
             value = self._put(attribute, Mediator.value(location), value, select)
         Mediator.swap(location, value)
-
-
-# -- values flat over tokens ----------------------------------------------------------
-# A mixture of experts routes ``[batch * seq, ...]`` tensors, batch-major. nnsight
-# narrows a served tensor to an invoke's rows only when its leading dim is the
-# whole batch, which a flat token axis is only on a one-token step; otherwise
-# every invoke is served the whole run's tokens, and these narrow it.
-
-
-def _rows_of_invoke() -> tuple[int | None, list | None]:
-    """The run's batch size and this invoke's ``[start, size]`` rows (``None`` when it has the whole batch)."""
-    mediator = Mediator.current("rows")
-    batcher = mediator.interleaver.batcher if mediator.interleaver is not None else None
-    if batcher is None:
-        return None, None
-    return batcher.total, (mediator.batch_group if batcher.batching else None)
-
-
-def rows(value: Any, rank: int) -> Any:
-    """A tensor flat over tokens (one rank below ``rank``) as this invoke's ``[batch, seq, ...]``, a view; anything else as is."""
-    if not isinstance(value, torch.Tensor) or value.dim() != rank - 1:
-        return value
-    total, group = _rows_of_invoke()
-    if group is not None and value.shape[0] == group[1]:  # nnsight already narrowed it: one token per row
-        return value.unflatten(0, (group[1], -1))
-    whole = value.unflatten(0, (total, -1)) if total else value.unsqueeze(0)
-    return whole if group is None else whole.narrow(0, group[0], group[1])
-
-
-def splice(whole: Any, value: Any, rank: int) -> Any:
-    """``value``, this invoke's ``[batch, seq, ...]``, written into ``whole`` where the model holds it flat over tokens."""
-    if not isinstance(whole, torch.Tensor) or whole.dim() != rank - 1:
-        return value
-    flat = value.flatten(0, 1)
-    if flat.shape[0] == whole.shape[0]:  # the whole batch, or rows nnsight narrowed and widens itself
-        return flat
-    total, group = _rows_of_invoke()
-    seq = whole.shape[0] // total
-    start, size = group[0] * seq, group[1] * seq
-    return torch.cat([whole[:start], flat.to(whole.dtype), whole[start + size:]])
 
 
 def layout_name(layout: Any) -> str:

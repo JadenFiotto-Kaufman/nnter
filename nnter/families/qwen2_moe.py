@@ -7,7 +7,7 @@ added in the block, attention through the shared eager forward. The MLP is a spa
 
 from transformers.models.qwen2_moe.modeling_qwen2_moe import Qwen2MoeAttention, Qwen2MoeDecoderLayer, Qwen2MoeSparseMoeBlock
 
-from ..components import Attention, EProperty, Layer, Moe, Residual, no_shared_expert
+from ..components import Attention, Layer, Moe, Residual, TokenEProperty, no_shared_expert
 
 MODEL_TYPES = ("qwen2_moe",)
 
@@ -38,7 +38,7 @@ class Mlp(Moe):
 
     sourced = True
 
-    @EProperty("source.shared_expert_output_1.output", tokens=True, description=Moe.shared_expert_output.description, unavailable=no_shared_expert)
+    @TokenEProperty("source.shared_expert_output_1.output", description=Moe.shared_expert_output.description, unavailable=no_shared_expert)
     def shared_expert_output(self, value) -> Residual:
         """The shared expert's output times its sigmoid gate (``shared_expert_gate``), the product the mixture adds."""
         return value

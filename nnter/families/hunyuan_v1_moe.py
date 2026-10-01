@@ -14,7 +14,7 @@ from transformers.models.hunyuan_v1_moe.modeling_hunyuan_v1_moe import (
     HunYuanMoEV1Moe,
 )
 
-from ..components import Attention, EProperty, Layer, Moe, RouterLogits
+from ..components import Attention, Layer, Moe, RouterLogits, TokenEProperty
 
 MODEL_TYPES = ("hunyuan_v1_moe",)
 
@@ -42,7 +42,7 @@ class Mlp(Moe):
     its output is the logits.
     """
 
-    @EProperty("router.wg.output", tokens=True, description=Moe.router_logits.description)
+    @TokenEProperty("router.wg.output", description=Moe.router_logits.description)
     def router_logits(self, value) -> RouterLogits:
         return value
 
