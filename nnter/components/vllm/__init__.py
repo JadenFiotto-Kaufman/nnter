@@ -22,13 +22,16 @@ layer (its ``attn`` child) and gets the per-head outputs back, each
 ``[tokens, heads * head_dim]``; they are that child's inputs and output,
 served in nnter's layouts with the heads split out. What the layer computes
 between them (the scores, the pattern) is inside its kernel, not Python on
-this engine, and is marked unavailable; `StandardizedVLLM.status` says so
-like it does for any other value.
+this engine, so those two are recomputed from the queries and keys:
+read-only, and there on the prefill only, where a step holds every key.
 """
 
-from .attention import KERNEL, Attention
+from .attention import DECODE_STEP, Attention, on_decode_step
 from .flat import Flat, batched, unbatched
 from .layer import FusedLayer, Layer, argument, with_argument
 from .mlp import Mlp
 
-__all__ = ["Attention", "Flat", "FusedLayer", "KERNEL", "Layer", "Mlp", "argument", "batched", "unbatched", "with_argument"]
+__all__ = [
+    "Attention", "DECODE_STEP", "Flat", "FusedLayer", "Layer", "Mlp", "argument", "batched", "on_decode_step", "unbatched",
+    "with_argument",
+]

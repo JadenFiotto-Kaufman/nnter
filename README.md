@@ -411,7 +411,7 @@ with model.trace("The Eiffel Tower is in the city of", temperature=0.0, max_toke
 
 A request is one sequence, so the batch axis is 1; values are private copies; the engine's
 defaults and sampling arguments are vLLM's; the pattern and scores are inside its attention
-kernel and unavailable. `docs/usage/vllm.md` has the differences and how to add a family.
+kernel, so they are recomputed from the queries and keys: read-only, and on the prefill only. `docs/usage/vllm.md` has the differences and how to add a family.
 Its suite, `tests/vllm_families/`, holds every value against the transformers engine's and
 needs vLLM and a GPU (`tests/vllm_families/run.sh`).
 
