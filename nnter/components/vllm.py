@@ -17,9 +17,13 @@ transformers' in three ways a value has to absorb:
   residual)``: the stream is their sum. `FusedLayer` is that block, `Layer`
   one that is called with the stream and returns it.
 
-Everything inside the attention kernel (the scores, the pattern) is not
-Python on this engine and is marked unavailable; `StandardizedVLLM.status`
-says so like it does for any other value.
+The attention module hands its queries, keys and values to vLLM's attention
+layer (its ``attn`` child) and gets the per-head outputs back, each
+``[tokens, heads * head_dim]``; they are that child's inputs and output,
+served in nnter's layouts with the heads split out. What the layer computes
+between them (the scores, the pattern) is inside its kernel, not Python on
+this engine, and is marked unavailable; `StandardizedVLLM.status` says so
+like it does for any other value.
 """
 
 from __future__ import annotations
@@ -32,34 +36,47 @@ from nnsight.intervention.envoy import Envoy
 from nnsight.intervention.interleaver import Mediator
 
 from . import attention, layer, mlp
+from .attention import HeadOutputs, Keys, Queries, Values
 from .eproperty import EProperty, unavailable
 from .layer import Residual
 
 #: Why nothing between the queries and the head outputs is readable: the softmax runs inside the engine's kernel.
 KERNEL = "computed inside vLLM's attention kernel, which serves nothing between its inputs and its output"
-#: A value the kernel's inputs or output would give, not mapped onto vLLM's forwards yet.
-NOT_MAPPED = "not mapped onto vLLM's attention forward yet; read it on the transformers engine"
 
 
-def batched(rows: torch.Tensor) -> torch.Tensor:
-    """``[tokens, ...]`` as a private ``[1, tokens, ...]`` copy."""
-    return rows.clone().unsqueeze(0)
+def batched(rows: torch.Tensor, head_dim: int | None = None, heads_first: bool = False) -> torch.Tensor:
+    """``[tokens, ...]`` as a private ``[1, tokens, ...]`` copy; with ``head_dim``, the last axis split into heads.
+
+    ``[tokens, heads * head_dim]`` becomes ``[1, tokens, heads, head_dim]``,
+    or ``[1, heads, tokens, head_dim]`` with ``heads_first``.
+    """
+    view = rows.clone().unsqueeze(0)
+    if head_dim is None:
+        return view
+    view = view.unflatten(-1, (-1, head_dim))
+    return view.transpose(1, 2) if heads_first else view
 
 
-def unbatched(value: torch.Tensor, rows: torch.Tensor, name: str) -> torch.Tensor:
-    """``[1, tokens, ...]`` back as the ``[tokens, ...]`` the model holds, refusing another shape.
+def unbatched(value: torch.Tensor, rows: torch.Tensor, name: str, head_dim: int | None = None, heads_first: bool = False) -> torch.Tensor:
+    """What `batched` served, back as the ``[tokens, ...]`` the model holds, refusing another shape.
 
     A written value is spliced into the step the engine is running, among
     other requests' rows. One of the wrong height would reach the next kernel
     as it is, where the mismatch can end the engine and every request in it,
     so it is refused here, in the block that wrote it.
     """
-    if value.shape != (1, *rows.shape):
+    expected = (1, *rows.shape)
+    if head_dim is not None:
+        tokens, heads = rows.shape[0], rows.shape[-1] // head_dim
+        expected = (1, heads, tokens, head_dim) if heads_first else (1, tokens, heads, head_dim)
+    if value.shape != expected:
         raise ValueError(
-            f"{name} is {(1, *rows.shape)} on this request and cannot be replaced by a value of shape "
+            f"{name} is {expected} on this request and cannot be replaced by a value of shape "
             f"{tuple(value.shape)}; write into the rows you mean instead (``value[:, positions] = ...``)"
         )
-    return value.squeeze(0).to(rows.dtype)
+    if head_dim is not None and heads_first:
+        value = value.transpose(1, 2)
+    return value.reshape(rows.shape).to(rows.dtype)
 
 
 class Flat(EProperty):
@@ -70,29 +87,47 @@ class Flat(EProperty):
     returns the value; its annotation is the layout. In-place edits are handed
     back to the model when the block moves on, and an assignment is checked
     against the rows this request has before it is swapped in.
+
+    Args:
+        heads: For a ``[tokens, heads * head_dim]`` tensor, where the head
+            axis goes: ``"first"`` serves ``[1, heads, tokens, head_dim]``
+            (the queries, keys and values), ``"last"`` ``[1, tokens, heads,
+            head_dim]`` (the head outputs). The width of a head is the host
+            module's ``head_dim``.
     """
+
+    def __init__(self, *args: Any, heads: str | None = None, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.heads = heads
+
+    def _layout(self, obj: Envoy) -> dict:
+        """How this value's rows are laid out for the reader: the keyword arguments of `batched` and `unbatched`."""
+        if self.heads is None:
+            return {}
+        return {"head_dim": obj._module.head_dim, "heads_first": self.heads == "first"}
 
     def __call__(self, preprocess: Callable) -> "Flat":
         @functools.wraps(preprocess)
         def read(envoy: Envoy, value: torch.Tensor) -> torch.Tensor:
-            return preprocess(envoy, batched(value))
+            return preprocess(envoy, batched(value, **self._layout(envoy)))
 
         super().__call__(read)
         self._transform = self._hand_back
         return self
 
+    def _rows(self, obj: Envoy, value: torch.Tensor, rows: torch.Tensor) -> torch.Tensor:
+        return unbatched(value, rows, f"{obj.path}.{self.name}", **self._layout(obj))
+
     def _hand_back(self, obj: Envoy, view: torch.Tensor, raw: Any) -> Any:
         attribute, select = self.path(obj).rsplit(".", 1)[-1], self._selection(obj)
-        rows = self._pick(attribute, raw, select)
-        return self._put(attribute, raw, unbatched(view, rows, f"{obj.path}.{self.name}"), select)
+        return self._put(attribute, raw, self._rows(obj, view, self._pick(attribute, raw, select)), select)
 
     def __set__(self, obj: Envoy, value: torch.Tensor) -> None:
         self._check(obj)
         key = self.path(obj)
         location, attribute, select = self._resolve(obj, key), key.rsplit(".", 1)[-1], self._selection(obj)
         current = Mediator.value(location)
-        rows = self._pick(attribute, current, select)
-        Mediator.swap(location, self._put(attribute, current, unbatched(value, rows, f"{obj.path}.{self.name}"), select))
+        Mediator.swap(location, self._put(attribute, current, self._rows(obj, value, self._pick(attribute, current, select)), select))
 
 
 def argument(inputs: tuple, index: int, name: str) -> Any:
@@ -213,14 +248,44 @@ class FusedLayer(layer.Layer):
 
 
 class Attention(attention.Attention):
-    """A vLLM attention module: its contribution is its output; the kernel's interior is not served."""
+    """A vLLM attention module: its contribution, and what goes into and comes out of the engine's attention layer.
 
-    attention_queries = unavailable(NOT_MAPPED)
-    attention_keys = unavailable(NOT_MAPPED)
-    attention_values = unavailable(NOT_MAPPED)
+    The module projects (and, on a rotary family, rotates) its queries, keys
+    and values and calls vLLM's attention layer on them, ``self.attn(q, k,
+    v)``, which returns the per-head outputs the output projection then
+    mixes. Those four are the ``attn`` child's inputs and output, each
+    ``[tokens, heads * head_dim]``, served with the heads split out by the
+    module's own ``head_dim``. A family whose attention module names that
+    child, or its head width, another way points the values at it.
+
+    They are this step's rows: on a decode step the keys and values are the
+    new token's alone, and the earlier ones are in the engine's cache, which
+    the kernel reads for itself. The scores and the pattern are inside the
+    kernel.
+    """
+
     attention_scores = unavailable(KERNEL)
     attention_probabilities = unavailable(KERNEL)
-    attention_head_outputs = unavailable(NOT_MAPPED)
+
+    @Flat("attn.inputs", select=0, heads="first", description="The queries entering vLLM's attention layer, [1, heads, tokens, head_dim]")
+    def attention_queries(self, value: torch.Tensor) -> Queries:
+        """The queries the attention layer receives, after the projection, any query norm and the rotary embedding."""
+        return value
+
+    @Flat("attn.inputs", select=1, heads="first", description="The keys entering vLLM's attention layer, [1, kv_heads, tokens, head_dim]")
+    def attention_keys(self, value: torch.Tensor) -> Keys:
+        """This step's keys as the attention layer receives them; ``num_kv_heads`` wide under grouped-query attention."""
+        return value
+
+    @Flat("attn.inputs", select=2, heads="first", description="The values entering vLLM's attention layer, [1, kv_heads, tokens, head_dim]")
+    def attention_values(self, value: torch.Tensor) -> Values:
+        """This step's values as the attention layer receives them; ``num_kv_heads`` wide under grouped-query attention."""
+        return value
+
+    @Flat("attn.output", heads="last", description="The per-head outputs before the output projection, [1, tokens, heads, head_dim]")
+    def attention_head_outputs(self, value: torch.Tensor) -> HeadOutputs:
+        """Each head's output as the attention layer returns it, before the output projection mixes them."""
+        return value
 
     @Flat("output", description="What the attention adds to the residual stream, [1, tokens, hidden]")
     def attention_output(self, value: torch.Tensor) -> Residual:

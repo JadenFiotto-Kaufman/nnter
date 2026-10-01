@@ -22,6 +22,7 @@ from nnter.components.vllm import KERNEL, Attention, Mlp
 PROMPT = "The Eiffel Tower is in the city of"
 ROOT = {"logits", "token_embeddings", "next_token_probs", "input_ids", "input_size", "attention_mask"}
 BOUNDARY = ("layer_input", "attention_output", "mlp_output", "layer_output")
+INTERIOR = ("attention_queries", "attention_keys", "attention_values", "attention_head_outputs")
 SIZES = ("num_layers", "hidden_size", "vocab_size", "num_heads", "num_kv_heads", "head_dim", "intermediate_size")
 
 LLAMA_ROWS = {
@@ -35,13 +36,13 @@ LLAMA_ROWS = {
 
 
 def boundary(layer):
-    """A block's four boundary values, read in forward order, on the CPU."""
-    return {
-        "layer_input": layer.layer_input.cpu(),
-        "attention_output": layer.self_attn.attention_output.cpu(),
-        "mlp_output": layer.mlp.mlp_output.cpu(),
-        "layer_output": layer.layer_output.cpu(),
-    }
+    """A block's boundary values and its attention's interior, read in forward order, on the CPU."""
+    values = {"layer_input": layer.layer_input.cpu()}
+    values.update({name: getattr(layer.self_attn, name).cpu() for name in INTERIOR})
+    values["attention_output"] = layer.self_attn.attention_output.cpu()
+    values["mlp_output"] = layer.mlp.mlp_output.cpu()
+    values["layer_output"] = layer.layer_output.cpu()
+    return values
 
 
 def close(got, want, tolerance, name=""):
@@ -59,7 +60,7 @@ def transformers_values(repo, skip):
     Without gradients: a value saved with its graph keeps the weights it was
     computed from on the card, and the engine sizes itself from what is free.
     """
-    hf = StandardizedTransformer(repo, device_map="cuda", dtype=torch.float32)
+    hf = StandardizedTransformer(repo, device_map="cuda", dtype=torch.float32, attn_implementation="eager")
     ids = hf.tokenizer(PROMPT)["input_ids"]
     picked = sorted({0, hf.num_layers // 2, hf.num_layers - 1})
     vector = torch.randn(hf.hidden_size, generator=torch.Generator().manual_seed(0))
@@ -72,11 +73,14 @@ def transformers_values(repo, skip):
         hf.steer(picked[1], vector, factor=scale)
         steered = hf.logits[:, -1:].cpu().save()
     with hf.trace(torch.tensor([ids])):
+        hf.layers[picked[1]].self_attn.attention_head_outputs[:, :, 0] = 0
+        headless = hf.logits[:, -1:].cpu().save()
+    with hf.trace(torch.tensor([ids])):
         hf.skip_layers(*skip)
         skipped = hf.logits[:, -1:].cpu().save()
     return {
         "ids": ids, "picked": picked, "vector": vector, "scale": scale, "embeddings": embeddings, "layers": layers,
-        "logits": logits, "steered": steered, "skipped": skipped, "sizes": {name: getattr(hf, name) for name in SIZES},
+        "logits": logits, "steered": steered, "headless": headless, "skipped": skipped, "sizes": {name: getattr(hf, name) for name in SIZES},
     }
 
 
@@ -93,6 +97,10 @@ class VLLMFamilySuite:
     MEMORY = 0.2
     #: Agreement with transformers, relative to each value's largest magnitude.
     TOLERANCE = 5e-3
+    #: Agreement of the attention's interior (and of the logits after editing it). The two engines' kernels sum a
+    #: sharp softmax differently, which a checkpoint with very large queries and keys shows in its head outputs, and
+    #: from there in every later block's queries, keys and values, more than in the residual stream they are small in.
+    KERNEL_TOLERANCE = 5e-3
     #: The blocks `test_skip_layers` skips.
     SKIP = (2, 3)
 
@@ -147,11 +155,9 @@ class VLLMFamilySuite:
         status = model.status()
         assert ROOT <= set(status)
         unavailable = {name for name, reason in status.items() if reason}
-        assert unavailable == {"attention_mask"} | {
-            f"self_attn.{name}" for name in ("attention_queries", "attention_keys", "attention_values", "attention_scores", "attention_probabilities", "attention_head_outputs")
-        }
+        assert unavailable == {"attention_mask", "self_attn.attention_scores", "self_attn.attention_probabilities"}
         assert all(reason == KERNEL for reason in status["self_attn.attention_probabilities"].values())
-        for name in ("layer_input", "layer_output", "self_attn.attention_output", "mlp.mlp_output"):
+        for name in ("layer_input", "layer_output", "self_attn.attention_output", "mlp.mlp_output", *(f"self_attn.{name}" for name in INTERIOR)):
             assert status[name] is None, name
 
     def test_status_matches_what_reads(self, model):
@@ -178,6 +184,41 @@ class VLLMFamilySuite:
             for name in BOUNDARY:
                 assert values[name].shape == (1, tokens, hidden), (i, name)
                 close(values[name], reference["layers"][i][name], self.TOLERANCE, f"layers[{i}].{name}")
+
+    def test_attention_interior_matches_transformers(self, model, reference):
+        """The queries, keys, values and head outputs are transformers' eager ones, in its layouts, heads split out."""
+        with self.run(model, reference):
+            got = nnsight.save({i: boundary(model.layers[i]) for i in reference["picked"]})
+        tokens, heads, kv_heads, head_dim = len(reference["ids"]), model.num_heads, model.num_kv_heads, model.head_dim
+        shapes = {
+            "attention_queries": (1, heads, tokens, head_dim),
+            "attention_keys": (1, kv_heads, tokens, head_dim),
+            "attention_values": (1, kv_heads, tokens, head_dim),
+            "attention_head_outputs": (1, tokens, heads, head_dim),
+        }
+        for i, values in got.items():
+            for name in INTERIOR:
+                assert values[name].shape == shapes[name], (i, name)
+                close(values[name], reference["layers"][i][name], self.KERNEL_TOLERANCE, f"layers[{i}].self_attn.{name}")
+
+    @pytest.mark.parametrize("name", INTERIOR)
+    def test_interior_writes_land(self, model, reference, name):
+        clean = self.clean(model, reference)
+        attention = model.layers[reference["picked"][1]].self_attn
+        with self.run(model, reference):
+            getattr(attention, name)[:] *= 0.5
+            in_place = model.logits.cpu().save()
+        with self.run(model, reference):
+            setattr(attention, name, getattr(attention, name) * 0.5)
+            assigned = model.logits.cpu().save()
+        assert not torch.allclose(clean, in_place)
+        close(assigned, in_place, self.TOLERANCE, name)
+
+    def test_a_zeroed_head_is_transformers_zeroed_head(self, model, reference):
+        with self.run(model, reference):
+            model.layers[reference["picked"][1]].self_attn.attention_head_outputs[:, :, 0] = 0
+            headless = model.logits.cpu().save()
+        close(headless, reference["headless"], self.KERNEL_TOLERANCE, "logits with one head's output zeroed")
 
     def test_contribution_identity(self, model, reference):
         """``layer_input + attention_output + mlp_output == layer_output`` on every block."""
@@ -281,6 +322,11 @@ class VLLMFamilySuite:
             for step in tracer.iter[:3]:  # one value a step and nothing between: each step is the model's next call
                 streams.append(layer.layer_output.cpu())
         assert [s.shape[1] for s in streams] == [tokens, 1, 1] and not torch.equal(streams[1], streams[2])
+        with model.trace(reference["ids"], temperature=0.0, max_tokens=3, ignore_eos=True) as tracer:
+            keys = nnsight.save([])
+            for step in tracer.iter[:3]:  # a decode step's keys are the new token's; the rest are in the engine's cache
+                keys.append(tuple(layer.self_attn.attention_keys.shape))
+        assert [k[2] for k in keys] == [tokens, 1, 1]
 
     def test_one_prompt_per_invoke(self, model, reference):
         layer = model.layers[reference["picked"][1]]
