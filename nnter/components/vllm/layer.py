@@ -27,11 +27,18 @@ def with_argument(inputs: tuple, index: int, name: str, value: Any) -> tuple:
 
 
 class Layer(standard.Layer):
-    """A vLLM block that is called with the residual stream and returns it (GPT-2).
+    """A vLLM block that is called with the residual stream and returns it.
 
-    A family whose block takes the positions first says where the stream is:
-    ``layer_input = Flat("inputs", select=1, ...)``.
+    Two things vary between the blocks that work this way, and a family
+    states them: `STREAM`, where the stream sits in the block's call (GPT-2's
+    block takes it alone, most take the positions first), and the base's
+    ``returns_tuple``, for a block that returns the stream with something
+    beside it (Exaone4's and Cohere's return ``(hidden_states, residual)``
+    with the whole stream first, where a `FusedLayer` returns its two halves).
     """
+
+    #: The index of the residual stream in the block's call.
+    STREAM = 0
 
     def skip_with(self, hidden: torch.Tensor) -> None:
         """Skip this block, handing ``hidden`` (``[1, tokens, hidden]``) on as its residual stream.
@@ -40,13 +47,14 @@ class Layer(standard.Layer):
         flight into one step, and a skipped block has to answer for all of
         it; see nnsight's vLLM guide before skipping on a shared engine.
         """
-        self.skip(hidden.squeeze(0))
+        hidden = hidden.squeeze(0)
+        self.skip((hidden, hidden) if self.returns_tuple else hidden)
 
-    @Flat("input", description="The residual stream entering the block, [1, tokens, hidden]")
+    @Flat("inputs", select=lambda envoy: envoy.STREAM, description="The residual stream entering the block, [1, tokens, hidden]")
     def layer_input(self, value: torch.Tensor) -> Residual:
         return value
 
-    @Flat("output", description="The residual stream leaving the block, [1, tokens, hidden]")
+    @Flat("output", select=lambda envoy: 0 if envoy.returns_tuple else None, description="The residual stream leaving the block, [1, tokens, hidden]")
     def layer_output(self, value: torch.Tensor) -> Residual:
         return value
 

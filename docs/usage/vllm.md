@@ -20,8 +20,10 @@ Everything else is nnsight's `VLLM`, with vLLM's own defaults: a trace is a gene
 and each invoke is one prompt. Read nnsight's vLLM guide for the engine; this page is what
 nnter adds and what differs from the transformers engine.
 
-Families on this engine: `llama`, `qwen2`, `qwen3`, `gemma2`, `gpt2`. Another `model_type`
-raises `UnsupportedFamily`.
+Families on this engine: `llama`, `mistral`, `phi3`, `qwen2`, `qwen3`, `gemma`, `gemma2`,
+`gemma3_text`, `exaone4`, `cohere`, `cohere2`, `mixtral`, `qwen2_moe`, `qwen3_moe`, `olmoe`,
+`deepseek_v2`, `deepseek_v3`, `gpt2`, `gptj`, `gpt_neox`, `bloom`, `mpt`, `falcon`, `phi`,
+`olmo3` ([family notes](#family-notes)). Another `model_type` raises `UnsupportedFamily`.
 
 The snippets on this page ran on vLLM 0.27.1 with `HuggingFaceTB/SmolLM2-135M-Instruct`.
 
@@ -235,11 +237,28 @@ it, write its contributions to zero.
 
 ## Family notes
 
+What vLLM's block does decides which base a family uses; the last column is what differs from
+the same family on transformers.
+
 | family | vLLM's block | notes |
 | --- | --- | --- |
-| `llama`, `qwen2`, `qwen3` | fused: `(hidden_states, residual)` | names are transformers' |
-| `gemma2` | fused, sandwich norms | contributions are the post-norms' outputs, as on transformers. No `lm_head` module: the unembedding is `embed_tokens`' weight, and `project_on_vocab` uses it. `token_embeddings` is the lookup *before* the `sqrt(hidden_size)` scaling (transformers' module scales itself); `layers[0].layer_input` is the scaled stream. |
+| `llama`, `mistral`, `phi3`, `qwen2`, `qwen3` | fused: `(hidden_states, residual)` | names are transformers'. vLLM runs Phi-3 through its Llama classes. |
+| `gemma` | fused | no `lm_head` module: the unembedding is `embed_tokens`' weight, and `project_on_vocab` uses it. `token_embeddings` is the lookup *before* the `sqrt(hidden_size)` scaling (transformers' module scales itself); `layers[0].layer_input` is the scaled stream. |
+| `gemma2`, `gemma3_text` | fused, sandwich norms | contributions are the post-norms' outputs, as on transformers. `token_embeddings` as on `gemma`. `gemma2` has no `lm_head` module either. |
+| `mixtral`, `qwen2_moe`, `qwen3_moe`, `olmoe` | fused, a mixture of experts for an MLP | `mlp_output` is the mixture's output. The routing is inside vLLM's fused MoE kernel: no router values. Mixtral's `block_sparse_moe` is aliased to `mlp`. |
+| `deepseek_v2`, `deepseek_v3` | fused, latent attention, a mixture of experts | the attention's interior is unavailable: vLLM runs latent attention in its own kernel on compressed keys and values. That kernel is half-precision only; `VLLM_MLA_DISABLE=1` selects vLLM's ordinary attention layer, which runs in float32. |
+| `exaone4` | returns `(stream, residual)`, post-norm | not fused, whatever the signature says: the first element is the whole stream. Contributions are the post-norms' outputs, as on transformers. |
+| `cohere`, `cohere2` | returns `(stream, residual)`, parallel | not fused either. No `lm_head` module; `project_on_vocab` unembeds with `embed_tokens`. |
+| `olmo3` | plain, positions first, post-norm | contributions are the post-norms' outputs, as on transformers. |
 | `gpt2` | plain: takes and returns the stream | names are transformers' (`transformer.h`, `attn`, `ln_1`, `ln_2`) |
+| `gptj`, `phi` | plain, positions first, parallel | the head has a bias, which `project_on_vocab` adds as the model does. |
+| `gpt_neox` | plain, positions first | `embed_out` is `lm_head`. |
+| `bloom`, `mpt` | plain, positions first, ALiBi | vLLM's attention and MLP modules return their contributions alone (transformers' add the residual inside). The recomputed scores carry the ALiBi bias as slope times distance behind the query, which differs from transformers' by one constant per query and leaves the pattern the same. Needs nnsight with the meta-build `tolist` fix. |
+| `falcon` | plain, positions first, parallel | attention and MLP return `(output, bias)`. On a checkpoint whose projections have a bias (Falcon-RW) the contributions are unavailable. |
+
+vLLM's attention kernels need a head width of at least 16 (32 for the float32 one), so the
+tiny random checkpoints nnter's transformers suite pins do not run on this engine; the vLLM
+suite names a small real checkpoint per family.
 
 ## Adding a vLLM family
 
@@ -250,20 +269,28 @@ One module, `nnter/families/vllm/<model_type>.py`, with what a transformers fami
 
 - `FusedLayer` for a block that takes and returns `(hidden_states, residual)` whose sum is the
   stream; set `HIDDEN` / `RESIDUAL` if the block orders its arguments another way.
-- `Layer` for a block that takes and returns the stream; if it takes the positions first, say
-  where the stream is: `layer_input = Flat("inputs", select=1, ...)`.
+- `Layer` for a block that takes and returns the stream. `STREAM` is the stream's index in the
+  block's call (`0` on GPT-2, `1` where the positions come first), and `returns_tuple = True`
+  says the block returns the stream with something beside it (`exaone4`, `cohere`).
 - `Attention` and `Mlp` when the module's output is what the block adds; otherwise point the
   value at the right place with `Flat`, the descriptor for a `[tokens, ...]` tensor
   (`Flat("../post_attention_layernorm.output")` in `gemma2.py`).
 - `Attention`'s interior is the inputs and output of the module's `attn` child (vLLM's attention
-  layer, called `self.attn(q, k, v)`), split into heads by the module's `head_dim`. A family
-  whose attention names either another way redefines the four values:
-  `Flat("<child>.inputs", select=0, heads="first", ...)`.
+  layer, called `self.attn(q, k, v)`), split into heads by that layer's `head_size`. A family
+  whose attention names the child another way redefines the four values
+  (`Flat("<child>.inputs", select=0, heads="first", ...)`); one with no such call marks them
+  `unavailable(...)` (`deepseek_v2.py`).
+- `def project_on_vocab(model, hidden)` where the model does not unembed with `lm_head` alone:
+  `project(model, hidden, model.embed_tokens)` for tied embeddings (`gemma.py`),
+  `project(model, hidden, model.lm_head, model.lm_head.bias)` for a head with a bias (`phi.py`).
+- A size the config spells its own way is the transformers family's function, imported
+  (`from ..falcon import num_kv_heads`).
 
-Read vLLM's forward before choosing: the return type does not tell. StableLM's block returns a
-pair whose first element is already the whole stream. Then add
+Read vLLM's forward before choosing: the return type does not tell. Exaone4's and Cohere's
+blocks return a pair whose first element is already the whole stream. Then add
 `tests/vllm_families/test_vllm_<model_type>.py`, a `VLLMFamilySuite` subclass naming a
-checkpoint; the suite compares every value with `StandardizedTransformer`'s.
+checkpoint both engines load, with an attention head at least 32 wide; the suite compares
+every value with `StandardizedTransformer`'s.
 `nnter.families.register(module, engine="vllm")` adds one from outside the package.
 
 ## Gotchas

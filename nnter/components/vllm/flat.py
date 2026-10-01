@@ -15,13 +15,14 @@ from ..eproperty import EProperty
 def batched(rows: torch.Tensor, head_dim: int | None = None, heads_first: bool = False) -> torch.Tensor:
     """``[tokens, ...]`` as a private ``[1, tokens, ...]`` copy; with ``head_dim``, the last axis split into heads.
 
-    ``[tokens, heads * head_dim]`` becomes ``[1, tokens, heads, head_dim]``,
-    or ``[1, heads, tokens, head_dim]`` with ``heads_first``.
+    ``[tokens, heads * head_dim]`` (or ``[tokens, heads, head_dim]``, where a
+    module keeps its heads apart) becomes ``[1, tokens, heads, head_dim]``, or
+    ``[1, heads, tokens, head_dim]`` with ``heads_first``.
     """
     view = rows.clone().unsqueeze(0)
     if head_dim is None:
         return view
-    view = view.unflatten(-1, (-1, head_dim))
+    view = view.flatten(2).unflatten(-1, (-1, head_dim))
     return view.transpose(1, 2) if heads_first else view
 
 
@@ -35,7 +36,7 @@ def unbatched(value: torch.Tensor, rows: torch.Tensor, name: str, head_dim: int 
     """
     expected = (1, *rows.shape)
     if head_dim is not None:
-        tokens, heads = rows.shape[0], rows.shape[-1] // head_dim
+        tokens, heads = rows.shape[0], rows[0].numel() // head_dim
         expected = (1, heads, tokens, head_dim) if heads_first else (1, tokens, heads, head_dim)
     if value.shape != expected:
         raise ValueError(
@@ -60,8 +61,8 @@ class Flat(EProperty):
         heads: For a ``[tokens, heads * head_dim]`` tensor, where the head
             axis goes: ``"first"`` serves ``[1, heads, tokens, head_dim]``
             (the queries, keys and values), ``"last"`` ``[1, tokens, heads,
-            head_dim]`` (the head outputs). The width of a head is the host
-            module's ``head_dim``.
+            head_dim]`` (the head outputs). The width of a head is the
+            ``head_size`` of the module the key names, vLLM's attention layer.
     """
 
     def __init__(self, *args: Any, heads: str | None = None, **kwargs: Any) -> None:
@@ -72,7 +73,9 @@ class Flat(EProperty):
         """How this value's rows are laid out for the reader: the keyword arguments of `batched` and `unbatched`."""
         if self.heads is None:
             return {}
-        return {"head_dim": obj._module.head_dim, "heads_first": self.heads == "first"}
+        *walk, _ = self.path(obj).split(".")
+        layer = obj.get(".".join(walk)) if walk else obj
+        return {"head_dim": layer._module.head_size, "heads_first": self.heads == "first"}
 
     def __call__(self, preprocess: Callable) -> "Flat":
         @functools.wraps(preprocess)

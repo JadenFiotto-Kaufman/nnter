@@ -55,15 +55,15 @@ def test_register_adds_a_family_and_can_override():
 def test_an_engine_has_its_own_families():
     """vLLM's families are a package under the transformers ones, looked up by the same model type."""
     assert "vllm" not in families.known() and {"llama", "gpt2"} <= set(families.known("vllm"))
-    with pytest.raises(UnsupportedFamily, match="'bloom' on vllm.*nnter/families/vllm/bloom.py"):
-        families.lookup("bloom", engine="vllm")
-    custom = types.SimpleNamespace(MODEL_TYPES=("bloom",), RENAME={}, ENVOYS={})
+    with pytest.raises(UnsupportedFamily, match="'stablelm' on vllm.*nnter/families/vllm/stablelm.py"):
+        families.lookup("stablelm", engine="vllm")
+    custom = types.SimpleNamespace(MODEL_TYPES=("stablelm",), RENAME={}, ENVOYS={})
     try:
         families.register(custom, engine="vllm")
-        assert families.lookup("bloom", engine="vllm") is custom
-        assert families.lookup("bloom") is not custom
+        assert families.lookup("stablelm", engine="vllm") is custom
+        assert families.lookup("stablelm") is not custom
     finally:
-        del families.REGISTRY["vllm.bloom"]
+        del families.REGISTRY["vllm.stablelm"]
 
 
 def test_preloaded_module_uses_its_own_config():

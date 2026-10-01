@@ -392,7 +392,7 @@ is pickled by reference anyway, and an `eproperty` cannot be pickled by value.
 ## The vLLM engine
 
 `StandardizedVLLM` is nnsight's `VLLM` under the same vocabulary, values and layouts, for the
-families under `nnter/families/vllm/` (Llama, Qwen2, Qwen3, Gemma-2, GPT-2):
+25 families under `nnter/families/vllm/` (Llama, Mistral, Qwen, Gemma, Phi, the MoEs, DeepSeek, GPT-2/J/NeoX, BLOOM, MPT, Falcon, ...):
 
 ```python
 from nnter import StandardizedVLLM
