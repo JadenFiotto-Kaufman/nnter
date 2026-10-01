@@ -150,19 +150,42 @@ except RuntimeError as error:
 
 Errors raised in the engine's worker arrive as `RuntimeError` naming the original type.
 
+### The attention interior: what goes into the kernel and what comes out
+
+vLLM's attention module projects (and rotates) its queries, keys and values and hands them to
+the engine's attention layer, which returns the per-head outputs. Those four are served in
+nnter's layouts, heads split out, and are writable like any other value:
+
+```python
+attention = model.layers[12].self_attn
+with model.trace("The Eiffel Tower is in the city of", temperature=0.0, max_tokens=1):
+    queries = attention.attention_queries.save()         # [1, heads, tokens, head_dim]
+    keys = attention.attention_keys.save()               # [1, kv_heads, tokens, head_dim]
+    values = attention.attention_values.save()           # [1, kv_heads, tokens, head_dim]
+    attention.attention_head_outputs[:, :, 0] = 0        # [1, tokens, heads, head_dim]: ablate head 0
+    ablated = model.logits.save()
+
+print(tuple(queries.shape), tuple(keys.shape), tuple(values.shape))
+# (1, 9, 9, 64) (1, 3, 9, 64) (1, 3, 9, 64)
+assert not torch.equal(ablated, logits)
+```
+
+They are this step's rows. On a decode step the keys and values are the new token's alone;
+the earlier ones are in the engine's cache, which the kernel reads for itself (transformers'
+eager attention is handed the whole cache). The queries and keys are read after the rotary
+embedding, as on transformers.
+
 ### What is unavailable
 
 ```python
 status = model.status()
 print(sorted(name for name, reason in status.items() if reason))
-# ['attention_mask', 'self_attn.attention_head_outputs', 'self_attn.attention_keys',
-#  'self_attn.attention_probabilities', 'self_attn.attention_queries', 'self_attn.attention_scores',
-#  'self_attn.attention_values']
+# ['attention_mask', 'self_attn.attention_probabilities', 'self_attn.attention_scores']
 ```
 
-The scores and the pattern are computed inside vLLM's attention kernel; the queries, keys,
-values and head outputs are reachable but not mapped yet. A request is one unpadded sequence,
-so there is no `attention_mask`. `input_ids` and `input_size` are read-only. `project_on_vocab`
+The scores and the pattern are computed inside vLLM's attention kernel, which serves nothing
+between its inputs and its output. A request is one unpadded sequence, so there is no
+`attention_mask`. `input_ids` and `input_size` are read-only. `project_on_vocab`
 and `get_topk_closest_tokens` call the engine's modules, so they work inside a trace only.
 Gradients, `.source` inside a kernel and `scan` are nnsight's limits on this engine.
 
@@ -195,6 +218,10 @@ One module, `nnter/families/vllm/<model_type>.py`, with what a transformers fami
 - `Attention` and `Mlp` when the module's output is what the block adds; otherwise point the
   value at the right place with `Flat`, the descriptor for a `[tokens, ...]` tensor
   (`Flat("../post_attention_layernorm.output")` in `gemma2.py`).
+- `Attention`'s interior is the inputs and output of the module's `attn` child (vLLM's attention
+  layer, called `self.attn(q, k, v)`), split into heads by the module's `head_dim`. A family
+  whose attention names either another way redefines the four values:
+  `Flat("<child>.inputs", select=0, heads="first", ...)`.
 
 Read vLLM's forward before choosing: the return type does not tell. StableLM's block returns a
 pair whose first element is already the whole stream. Then add
@@ -211,11 +238,15 @@ checkpoint; the suite compares every value with `StandardizedTransformer`'s.
   inside a block ships the root with every invoke (nnsight's vLLM guide, "per-invoke cost").
 - **`layers[i].input` is not the stream** on a fused family; it is the positions.
 - **Reads follow forward order** within a step, as everywhere: a block's `layer_input`, its
-  contributions, then its `layer_output`.
+  attention's queries, keys and values, then its head outputs, the contributions, then its
+  `layer_output`.
 - **`model.edit()` needs `enable_prefix_caching=False`** at construction (nnsight's rule); a
   trace forces its own recompute.
 - **bf16 checkpoints differ from transformers by more than float32 ones**; the suite compares
   in float32 (`dtype="float32"`).
+- **The two engines' attention kernels are not bit-identical.** Given the same queries, keys and
+  values, the head outputs agree to about 1e-3 of their scale on most checkpoints and to 2e-2 on
+  one with a very sharp softmax (Qwen2.5-0.5B's first block).
 
 ## Related
 

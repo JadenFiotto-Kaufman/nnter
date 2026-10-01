@@ -36,8 +36,10 @@ class StandardizedVLLM(Standardized, VLLM):
       last position only. ``logits[:, -1]`` and ``next_token_probs`` read the
       same on both engines.
     * Values are private copies, so a saved one stays what it was read as.
-    * The scores and the pattern are inside the attention kernel and
-      unavailable; ``status()`` reports it. There is no ``attention_mask``.
+    * The queries, keys, values and head outputs are what goes into and
+      comes out of the engine's attention layer, for this step's tokens. The
+      scores and the pattern are inside its kernel and unavailable;
+      ``status()`` reports it. There is no ``attention_mask``.
     * `project_on_vocab` runs the engine's modules, so it works inside a
       trace only.
 
