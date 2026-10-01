@@ -38,8 +38,9 @@ class StandardizedVLLM(Standardized, VLLM):
     * Values are private copies, so a saved one stays what it was read as.
     * The queries, keys, values and head outputs are what goes into and
       comes out of the engine's attention layer, for this step's tokens. The
-      scores and the pattern are inside its kernel and unavailable;
-      ``status()`` reports it. There is no ``attention_mask``.
+      scores and the pattern are inside its kernel, so they are recomputed
+      from the queries and keys: read-only, and on the prefill only (a decode
+      step raises `Unavailable`). There is no ``attention_mask``.
     * `project_on_vocab` runs the engine's modules, so it works inside a
       trace only.
 

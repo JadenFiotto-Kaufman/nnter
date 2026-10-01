@@ -175,17 +175,54 @@ the earlier ones are in the engine's cache, which the kernel reads for itself (t
 eager attention is handed the whole cache). The queries and keys are read after the rotary
 embedding, as on transformers.
 
+### The pattern is recomputed: read-only, and the prefill's
+
+The scores and the pattern are computed inside vLLM's attention kernel, which serves nothing
+between its inputs and its output, and no attention backend of vLLM's does it in Python. nnter
+recomputes them from the queries and keys it serves, with the layer's own scale, softcap and
+sliding window, in transformers' layout:
+
+```python
+with model.trace("The Eiffel Tower is in the city of", temperature=0.0, max_tokens=1):
+    scores = attention.attention_scores.save()             # [1, heads, query, key]; -inf where a key is not seen
+    pattern = attention.attention_probabilities.save()     # [1, heads, query, key]
+
+print(tuple(pattern.shape), pattern[0, :, -1].sum(-1).mean().item())
+# (1, 9, 9, 9) 1.0
+```
+
+Two things follow from "recomputed":
+
+- **Read-only.** The kernel never takes a pattern, so an edit could not reach the model, and an
+  assignment raises. To change what a head attends to, edit its queries or keys; to change what
+  it wrote, edit its head outputs.
+- **The prefill only.** A decode step holds one token's keys; the rest are in vLLM's cache.
+  nnter knows which step a read would be served before reading anything, and raises
+  `nnter.Unavailable` there (it arrives as a `RuntimeError` naming it, like any error from the
+  engine's worker):
+
+```python
+try:
+    with model.trace("The Eiffel Tower is in the city of", temperature=0.0, max_tokens=2, ignore_eos=True) as tracer:
+        for step in tracer.iter[:2]:
+            pattern = attention.attention_probabilities.save()
+except RuntimeError as error:
+    print("on a decode step" in str(error))
+# True
+```
+
+A trace with no `tracer.iter` runs its block on the prefill, so the pattern is there whatever
+`max_tokens` is. `status()`, which runs outside any step, lists both as available.
+
 ### What is unavailable
 
 ```python
 status = model.status()
 print(sorted(name for name, reason in status.items() if reason))
-# ['attention_mask', 'self_attn.attention_probabilities', 'self_attn.attention_scores']
+# ['attention_mask']
 ```
 
-The scores and the pattern are computed inside vLLM's attention kernel, which serves nothing
-between its inputs and its output. A request is one unpadded sequence, so there is no
-`attention_mask`. `input_ids` and `input_size` are read-only. `project_on_vocab`
+A request is one unpadded sequence, so there is no `attention_mask`. `input_ids` and `input_size` are read-only. `project_on_vocab`
 and `get_topk_closest_tokens` call the engine's modules, so they work inside a trace only.
 Gradients, `.source` inside a kernel and `scan` are nnsight's limits on this engine.
 
@@ -238,8 +275,8 @@ checkpoint; the suite compares every value with `StandardizedTransformer`'s.
   inside a block ships the root with every invoke (nnsight's vLLM guide, "per-invoke cost").
 - **`layers[i].input` is not the stream** on a fused family; it is the positions.
 - **Reads follow forward order** within a step, as everywhere: a block's `layer_input`, its
-  attention's queries, keys and values, then its head outputs, the contributions, then its
-  `layer_output`.
+  attention's queries, keys and values (and the scores and pattern, which are computed from
+  them), then its head outputs, the contributions, then its `layer_output`.
 - **`model.edit()` needs `enable_prefix_caching=False`** at construction (nnsight's rule); a
   trace forces its own recompute.
 - **bf16 checkpoints differ from transformers by more than float32 ones**; the suite compares

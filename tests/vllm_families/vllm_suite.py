@@ -17,12 +17,13 @@ from nnsight.intervention.envoy import Envoy
 
 from nnter import StandardizedTransformer, StandardizedVLLM, Unavailable
 from nnter.components import EProperty
-from nnter.components.vllm import KERNEL, Attention, Mlp
+from nnter.components.vllm import Attention, Mlp
 
 PROMPT = "The Eiffel Tower is in the city of"
 ROOT = {"logits", "token_embeddings", "next_token_probs", "input_ids", "input_size", "attention_mask"}
 BOUNDARY = ("layer_input", "attention_output", "mlp_output", "layer_output")
 INTERIOR = ("attention_queries", "attention_keys", "attention_values", "attention_head_outputs")
+PATTERN = ("attention_scores", "attention_probabilities")
 SIZES = ("num_layers", "hidden_size", "vocab_size", "num_heads", "num_kv_heads", "head_dim", "intermediate_size")
 
 LLAMA_ROWS = {
@@ -38,7 +39,7 @@ LLAMA_ROWS = {
 def boundary(layer):
     """A block's boundary values and its attention's interior, read in forward order, on the CPU."""
     values = {"layer_input": layer.layer_input.cpu()}
-    values.update({name: getattr(layer.self_attn, name).cpu() for name in INTERIOR})
+    values.update({name: getattr(layer.self_attn, name).cpu() for name in (*INTERIOR[:3], *PATTERN, INTERIOR[3])})
     values["attention_output"] = layer.self_attn.attention_output.cpu()
     values["mlp_output"] = layer.mlp.mlp_output.cpu()
     values["layer_output"] = layer.layer_output.cpu()
@@ -155,9 +156,8 @@ class VLLMFamilySuite:
         status = model.status()
         assert ROOT <= set(status)
         unavailable = {name for name, reason in status.items() if reason}
-        assert unavailable == {"attention_mask", "self_attn.attention_scores", "self_attn.attention_probabilities"}
-        assert all(reason == KERNEL for reason in status["self_attn.attention_probabilities"].values())
-        for name in ("layer_input", "layer_output", "self_attn.attention_output", "mlp.mlp_output", *(f"self_attn.{name}" for name in INTERIOR)):
+        assert unavailable == {"attention_mask"}
+        for name in ("layer_input", "layer_output", "self_attn.attention_output", "mlp.mlp_output", *(f"self_attn.{name}" for name in (*INTERIOR, *PATTERN))):
             assert status[name] is None, name
 
     def test_status_matches_what_reads(self, model):
@@ -200,6 +200,35 @@ class VLLMFamilySuite:
             for name in INTERIOR:
                 assert values[name].shape == shapes[name], (i, name)
                 close(values[name], reference["layers"][i][name], self.KERNEL_TOLERANCE, f"layers[{i}].self_attn.{name}")
+
+    def test_pattern_matches_transformers(self, model, reference):
+        """The scores and the pattern, recomputed from the queries and keys, are transformers' eager ones."""
+        with self.run(model, reference):
+            got = nnsight.save({i: boundary(model.layers[i]) for i in reference["picked"]})
+        tokens, heads = len(reference["ids"]), model.num_heads
+        seen = torch.ones(tokens, tokens, dtype=torch.bool).tril()  # transformers masks with the dtype's minimum, not -inf
+        for i, values in got.items():
+            scores, probs = values["attention_scores"], values["attention_probabilities"]
+            assert scores.shape == probs.shape == (1, heads, tokens, tokens), i
+            assert torch.isinf(scores[..., ~seen]).all() and torch.equal(probs, probs.tril())
+            torch.testing.assert_close(probs.sum(-1), torch.ones(1, heads, tokens), atol=1e-5, rtol=0)
+            wanted = reference["layers"][i]
+            close(scores.where(seen, 0), wanted["attention_scores"].where(seen, 0), self.KERNEL_TOLERANCE, f"layers[{i}].self_attn.attention_scores")
+            close(probs, wanted["attention_probabilities"], self.KERNEL_TOLERANCE, f"layers[{i}].self_attn.attention_probabilities")
+
+    def test_pattern_is_the_prefills_and_read_only(self, model, reference):
+        attention = model.layers[reference["picked"][1]].self_attn
+        with model.trace(reference["ids"], temperature=0.0, max_tokens=3, ignore_eos=True):  # no iter: the block runs on the prefill
+            prefill = attention.attention_probabilities.cpu().save()
+        assert prefill.shape[-1] == len(reference["ids"])
+        with pytest.raises(RuntimeError, match="on a decode step"):
+            with model.trace(reference["ids"], temperature=0.0, max_tokens=2, ignore_eos=True) as tracer:
+                for step in tracer.iter[:2]:
+                    pattern = attention.attention_probabilities.cpu().save()
+        with pytest.raises(RuntimeError, match="derived and read-only"):
+            with self.run(model, reference):
+                attention.attention_probabilities = attention.attention_probabilities * 0
+        assert torch.equal(self.clean(model, reference), self.clean(model, reference))  # the engine lives
 
     @pytest.mark.parametrize("name", INTERIOR)
     def test_interior_writes_land(self, model, reference, name):
