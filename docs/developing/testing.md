@@ -268,11 +268,23 @@ PYTHON=/path/to/python tests/vllm_families/run.sh          # every family, one p
 PYTHON=/path/to/python tests/vllm_families/run.sh llama    # one
 ```
 
-One process per file because each class starts an engine, and engines sharing
-a card overrun their memory fractions. The directory is not named `vllm`: with
-`tests/` on the path that would be importable as `vllm`. A family's file names
-a real checkpoint both engines load (`MEMORY` is its engine's share of the
-card); 19 tests each, about 30 to 50 s.
+One process per test class (`run.sh` does it) because each class starts an
+engine, and engines sharing a card overrun their memory fractions. The
+directory is not named `vllm`: with `tests/` on the path that would be
+importable as `vllm`.
+
+A family's file names a real checkpoint both engines load (`MEMORY` is its
+engine's share of the card), because vLLM's attention kernels need a head
+width of at least 16 (32 in float32) and the tiny random checkpoints of
+`tests/families/` are narrower. The reference reads the attention's interior
+one value a trace, since each transformers family reads its own in its own
+order. Class attributes say what a family differs in: `SERVED` (the interior
+values vLLM serves; `()` on DeepSeek), `UNAVAILABLE`, `TOLERANCE` and
+`KERNEL_TOLERANCE` (set, with the measurement beside them, on the two
+checkpoints whose sharp softmax the two kernels sum differently: Qwen2.5-0.5B
+and Pythia-70m), `DTYPE` and `ENGINE`. DeepSeek's file has two classes, one
+per attention backend. 27 tests a class, 25 to 80 s each; the checkpoints are
+about 150 GB together.
 
 ## The root tests
 

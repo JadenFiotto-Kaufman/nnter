@@ -9,7 +9,7 @@ from nnsight.modeling.vllm import VLLM
 
 from . import families
 from .components import EProperty, Residual, unavailable
-from .components.vllm import Flat, argument
+from .components.vllm import Flat, argument, project
 from .standardized import Logits, NextTokenProbs, Standardized, StandardizedCapability, Tokens
 
 
@@ -151,8 +151,7 @@ class StandardizedVLLM(Standardized, VLLM):
         projects another way defines ``def project_on_vocab(model, hidden)``
         in its module.
         """
-        rows = hidden.reshape(-1, hidden.shape[-1]).contiguous()  # the norm kernel takes [rows, hidden]
-        return self.logits_processor(self.lm_head, self.norm(rows)).reshape(*hidden.shape[:-1], -1)
+        return project(self, hidden, self.lm_head)
 
     # -- remote ------------------------------------------------------------------
 
