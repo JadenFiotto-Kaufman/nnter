@@ -38,10 +38,14 @@ def on_decode_step(envoy: Envoy) -> str | None:
 def scores(self: "Attention") -> Pattern:
     """The scaled, masked scores the kernel's softmax runs on, ``[1, heads, query, key]``, recomputed.
 
-    ``queries @ keys.T * scale``, softcapped where the layer softcaps, with
-    the keys a query may not see (later tokens, and tokens past the layer's
-    sliding window) at ``-inf``. The scale, the softcap and the window are
-    the ones vLLM's attention layer was built with.
+    ``queries @ keys.T * scale``, softcapped where the layer softcaps, plus
+    the ALiBi bias where the layer has slopes, with the keys a query may not
+    see (later tokens, and tokens past the layer's sliding window) at
+    ``-inf``. The scale, the softcap, the slopes and the window are the ones
+    vLLM's attention layer was built with. The ALiBi bias is each head's
+    slope times how far behind the query the key is; transformers' families
+    write the same bias from another origin, which moves a query's scores by
+    one constant and leaves the pattern alone.
     """
     queries, keys = self.attention_queries, self.attention_keys
     keys = keys.repeat_interleave(queries.shape[1] // keys.shape[1], dim=1)  # grouped-query: one key head per group
@@ -51,6 +55,9 @@ def scores(self: "Attention") -> Pattern:
         values = layer.impl.logits_soft_cap * torch.tanh(values / layer.impl.logits_soft_cap)
     position = torch.arange(values.shape[-1], device=values.device)
     behind = position[:, None] - position[None, :]  # how far behind the query each key is
+    slopes = getattr(layer.impl, "alibi_slopes", None)
+    if slopes is not None:
+        values = values - slopes.to(values)[:, None, None] * behind
     hidden = behind < 0
     if layer.sliding_window is not None:
         hidden = hidden | (behind >= layer.sliding_window)
