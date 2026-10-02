@@ -63,7 +63,7 @@ starts its engine in a spawned process, which re-imports the main module.
   for the same prompt.
 - **The layouts**: `[batch, seq, hidden]` with a batch of 1, `logits[:, -1]` the last position.
 - **The methods**: `steer`, `skip_layers`, `project_on_vocab`, `get_topk_closest_tokens`,
-  `status()`, and the sizes (`num_layers`, `hidden_size`, `num_heads`, ...).
+  `support()`, and the sizes (`num_layers`, `hidden_size`, `num_heads`, ...).
 - **Reads, in-place edits and assignment** all reach the model.
 
 ```python
@@ -214,13 +214,13 @@ except RuntimeError as error:
 ```
 
 A trace with no `tracer.iter` runs its block on the prefill, so the pattern is there whatever
-`max_tokens` is. `status()`, which runs outside any step, lists both as available.
+`max_tokens` is. `support()`, which runs outside any step, lists both as available.
 
 ### What is unavailable
 
 ```python
-status = model.status()
-print(sorted(name for name, reason in status.items() if reason))
+support = model.support()
+print(sorted(name for name, reason in support.items() if reason))
 # ['attention_mask']
 ```
 

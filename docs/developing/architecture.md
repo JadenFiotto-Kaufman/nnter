@@ -96,7 +96,7 @@ rest of this page says which.
 ## Two engines, one base
 
 `Standardized` (`nnter/standardized.py`) holds what does not depend on the
-engine: the sizes, `status()`, `steer`, `skip_layers`,
+engine: the sizes, `support()`, `steer`, `skip_layers`,
 `get_topk_closest_tokens`, `_read_config`. `StandardizedTransformer` mixes it
 over `TransformersModel`, `StandardizedVLLM` (`nnter/standardized_vllm.py`)
 over nnsight's `VLLM`; each leaf resolves its family, merges `rename=` /

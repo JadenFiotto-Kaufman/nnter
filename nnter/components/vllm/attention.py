@@ -26,7 +26,7 @@ def on_decode_step(envoy: Envoy) -> str | None:
     prompt token at once, and each later one a decode step of one token. The
     worker knows which visit a read would ask for before anything is read,
     so the value refuses there, by name. Outside a trace there is no step to
-    ask about and the answer is the prefill's: `status` lists it available.
+    ask about and the answer is the prefill's: `support` lists it available.
     """
     try:
         mediator = Mediator.current(envoy.path)

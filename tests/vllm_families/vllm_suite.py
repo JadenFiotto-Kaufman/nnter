@@ -84,9 +84,9 @@ def transformers_values(repo, skip):
         embeddings = hf.token_embeddings.cpu().save()
         layers = nnsight.save({i: boundary(hf.layers[i]) for i in picked})
         logits = hf.logits[:, -1:].cpu().save()
-    status = hf.status()
+    support = hf.support()
     for name in (*INTERIOR, *PATTERN):
-        if status.get(f"self_attn.{name}"):
+        if support.get(f"self_attn.{name}"):
             continue  # transformers does not serve it on this checkpoint
         with hf.trace(torch.tensor([ids])):
             read = nnsight.save({i: getattr(hf.layers[i].self_attn, name).cpu() for i in picked})
@@ -133,7 +133,7 @@ class VLLMFamilySuite:
     SKIP = None
     #: The attention values vLLM's implementation of this family serves (the scores and the pattern included).
     SERVED = (*INTERIOR, *PATTERN)
-    #: The values this family lacks on vLLM, by status name.
+    #: The values this family lacks on vLLM, by `support()` name.
     UNAVAILABLE = frozenset({"attention_mask"})
     #: Engine arguments this checkpoint needs.
     ENGINE: dict = {}
@@ -190,17 +190,17 @@ class VLLMFamilySuite:
 
     # -- availability -----------------------------------------------------------
 
-    def test_status(self, model):
-        status = model.status()
-        assert ROOT <= set(status)
-        unavailable = {name for name, reason in status.items() if reason}
+    def test_support(self, model):
+        support = model.support()
+        assert ROOT <= set(support)
+        unavailable = {name for name, reason in support.items() if reason}
         assert unavailable == self.UNAVAILABLE
         for name in ("layer_input", "layer_output", "self_attn.attention_output", "mlp.mlp_output", *(f"self_attn.{name}" for name in self.SERVED)):
-            assert status[name] is None, name
+            assert support[name] is None, name
 
-    def test_status_matches_what_reads(self, model):
+    def test_support_matches_what_reads(self, model):
         layer = model.layers[0]
-        for name, reason in model.status(layer=0).items():
+        for name, reason in model.support(layer=0).items():
             module, _, value = name.rpartition(".")
             host = getattr(layer, module) if module else layer
             if reason is None:
