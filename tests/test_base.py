@@ -365,3 +365,45 @@ def test_value_repr_line_names_the_layout():
     assert str(Attention.attention_probabilities).startswith("(attention_probabilities) -> Pattern [batch heads query key]: ")
     assert str(LinearAttention.state_input).startswith("(state_input) -> State | None [batch heads key_dim value_dim]: ")
     assert str(Root.input_size) == "(input_size): [batch, seq] of the current call; read-only"
+
+
+# -- top-k tokens ----------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def gpt2():
+    return StandardizedTransformer("hf-internal-testing/tiny-random-gpt2", dispatch=True)
+
+
+def test_probs_to_dict_keeps_tokens_that_decode_alike(gpt2):
+    """Byte tokens 94-97 all decode to the replacement character; each keeps its own entry, keyed by its raw token."""
+    tokenizer = gpt2.tokenizer
+    colliding = [94, 95, 96, 97]
+    assert {tokenizer.decode(i) for i in colliding} == {"�"}
+    probs = torch.zeros(gpt2.vocab_size)
+    weights = [0.3, 0.2, 0.15, 0.1, 0.05]
+    for index, weight in zip([500, *colliding], weights):
+        probs[index] = weight
+    got = gpt2.probs_to_dict(probs, k=5)
+    raw = [tokenizer.convert_ids_to_tokens(i) for i in colliding]
+    assert list(got) == [tokenizer.decode(500), *raw]
+    assert list(got.values()) == pytest.approx(weights)
+
+
+def test_probs_to_dict_without_a_collision_keys_by_text(gpt2):
+    probs = torch.zeros(gpt2.vocab_size)
+    ids, weights = [500, 600, 700], [0.5, 0.3, 0.2]
+    probs[ids] = torch.tensor(weights)
+    got = gpt2.probs_to_dict(probs, k=3)
+    assert list(got) == [gpt2.tokenizer.decode(i) for i in ids]
+    assert list(got.values()) == pytest.approx(weights)
+
+
+def test_get_topk_closest_tokens_returns_k_per_position(gpt2):
+    with gpt2.trace("The quick brown fox jumps over the lazy dog"):
+        resid = gpt2.layers[0].layer_output.save()
+    k = 50
+    top = gpt2.get_topk_closest_tokens(resid[0], k=k)
+    assert len(top) == resid.shape[1]
+    for row in top:
+        assert len(row) == k
+        assert list(row.values()) == sorted(row.values(), reverse=True)

@@ -179,6 +179,11 @@ model.get_topk_closest_tokens(last[0, -1], k=3)   # one position: a list of one 
 model.get_topk_closest_tokens(last[0], k=3)       # every position: seq dicts
 ```
 
+Each dict holds exactly `k` entries, most likely first. Where two or more of them decode to
+the same text (partial UTF-8 byte tokens all decode to `'�'`), those entries are keyed by
+the tokenizer's raw vocabulary token (`tokenizer.convert_ids_to_tokens(id)`, such as `'Ġthe'`
+or a byte token) instead, each with its own probability.
+
 `probs_to_dict` does the last step alone on a `[vocab]` distribution:
 
 ```python
