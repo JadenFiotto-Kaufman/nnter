@@ -108,6 +108,111 @@ class Gemma4Suite(FamilySuite):
                 model.skip_layers(0, 0)
                 model.logits.save()
 
+    # -- keys and values private to the block --------------------------------------
+    # A source block hands its borrowers the very tensors it attends with; the
+    # values are served as copies so that an edit on one block stays there.
+
+    def sharing(self, model):
+        """``(source, borrower)``: the first KV-sharing block's source and that block; skips without KV sharing."""
+        attention = [layer.self_attn._module for layer in model.layers]
+        borrower = next((i for i, module in enumerate(attention) if module.is_kv_shared_layer), None)
+        if borrower is None:
+            pytest.skip("no KV sharing on this checkpoint")
+        kind = attention[borrower].layer_type
+        source = max(i for i in range(borrower) if attention[i].layer_type == kind)
+        assert attention[source].store_full_length_kv
+        return source, borrower
+
+    def test_a_plain_read_of_keys_and_values_is_bit_identical(self, model):
+        with model.trace(PROMPT):
+            clean = model.logits.save()
+        with model.trace(PROMPT):
+            for layer in model.layers:
+                layer.self_attn.attention_keys.save()
+                layer.self_attn.attention_values.save()
+            read = model.logits.save()
+        assert torch.equal(clean, read)
+
+    @pytest.mark.parametrize("name", ["attention_keys", "attention_values"])
+    def test_editing_the_source_block_leaves_its_borrower(self, model, name):
+        """Zeroing the source block's keys (values) in place changes its own attention; the borrower attends as in the clean run.
+
+        The borrower's input is held at the clean run's, so its queries are the
+        clean ones and its pattern and head outputs can be compared exactly."""
+        source, borrower = self.sharing(model)
+        src, bor = model.layers[source].self_attn, model.layers[borrower].self_attn
+        with model.trace(PROMPT):
+            clean_own = src.attention_head_outputs.save()
+            clean_input = model.layers[borrower].input.save()
+            clean = getattr(bor, name).save()
+            clean_pattern = bor.attention_probabilities.save()
+            clean_heads = bor.attention_head_outputs.save()
+        with model.trace(PROMPT):
+            getattr(src, name)[:] = 0
+            own = src.attention_head_outputs.save()
+            model.layers[borrower].input = clean_input
+            got = getattr(bor, name).save()
+            pattern = bor.attention_probabilities.save()
+            heads = bor.attention_head_outputs.save()
+        assert not torch.equal(clean_own, own)
+        assert torch.equal(clean, got) and not torch.equal(got, torch.zeros_like(got))
+        assert torch.equal(clean_pattern, pattern) and torch.equal(clean_heads, heads)
+
+    def test_an_edit_of_the_source_projection_reaches_the_borrower(self, model):
+        """The way to change the shared keys for every borrower: the source block's ``k_proj`` output."""
+        source, borrower = self.sharing(model)
+        with model.trace(PROMPT):
+            model.layers[source].self_attn.k_proj.output[:] = 0
+            keys = model.layers[borrower].self_attn.attention_keys.save()
+        assert torch.equal(keys, torch.zeros_like(keys))
+
+    @pytest.mark.parametrize("name", ["attention_keys", "attention_values"])
+    @pytest.mark.parametrize("block", [0, 1])
+    def test_in_place_and_assignment_agree(self, model, name, block):
+        """An in-place edit and an assignment of the same tensor give the same logits, on the source block (0) and its borrower (1)."""
+        attn = model.layers[self.sharing(model)[block]].self_attn
+        with model.trace(PROMPT):
+            value = getattr(attn, name).save()
+            clean = model.logits.save()
+        edited = value.clone()
+        edited[:, :, -1] = 0
+        with model.trace(PROMPT):
+            getattr(attn, name)[:, :, -1] = 0
+            inplace = model.logits.save()
+        with model.trace(PROMPT):
+            setattr(attn, name, edited)
+            assigned = model.logits.save()
+        assert not torch.equal(clean, inplace)
+        assert torch.equal(inplace, assigned)
+
+    def test_an_edit_on_a_borrower_stays_on_that_borrower(self, model):
+        """With two blocks borrowing from one source, zeroing the first borrower's keys and values in place leaves the second's."""
+        from transformers import AutoConfig, AutoModelForCausalLM
+
+        self.sharing(model)
+        full = {"head_dim": model.layers[1].self_attn.head_dim}  # block 1 is a full block on both sharing checkpoints
+        config = AutoConfig.from_pretrained(
+            self.REPO, num_hidden_layers=6, num_kv_shared_layers=4, layer_types=["sliding_attention", "full_attention"] * 3,
+            per_layer_config={str(i): full for i in (1, 3, 5)},
+        )
+        torch.manual_seed(0)
+        wide = StandardizedTransformer(AutoModelForCausalLM.from_config(config, attn_implementation="eager"))
+        assert [layer.self_attn._module.is_kv_shared_layer for layer in wide.layers] == [False] * 2 + [True] * 4
+        first, second = wide.layers[2].self_attn, wide.layers[4].self_attn  # both borrow block 0's sliding keys and values
+        with wide.trace(PROMPT):
+            clean_input = wide.layers[4].input.save()
+            clean_keys, clean_values = second.attention_keys.save(), second.attention_values.save()
+            clean_heads = second.attention_head_outputs.save()
+        with wide.trace(PROMPT):
+            first.attention_keys[:] = 0
+            first.attention_values[:] = 0
+            first_heads = first.attention_head_outputs.save()
+            wide.layers[4].input = clean_input
+            keys, values = second.attention_keys.save(), second.attention_values.save()
+            heads = second.attention_head_outputs.save()
+        assert torch.equal(first_heads, torch.zeros_like(first_heads))
+        assert torch.equal(keys, clean_keys) and torch.equal(values, clean_values) and torch.equal(heads, clean_heads)
+
     def test_contributions_are_the_post_norms(self, model):
         layer = model.layers[0]
         with model.trace(PROMPT):
@@ -241,7 +346,7 @@ class TestGemma4Text(Gemma4Suite):
                 scalar.copy_(value)
 
     def test_kv_sharing_blocks_attend_to_borrowed_keys_and_values(self, model):
-        """Blocks 2 and 3 receive blocks 0's and 1's keys and values: the same tensors, not copies."""
+        """Blocks 2 and 3 receive blocks 0's and 1's keys and values."""
         read = {}
         for name in ("attention_keys", "attention_values"):
             with model.trace(PROMPT):
@@ -252,27 +357,6 @@ class TestGemma4Text(Gemma4Suite):
             assert torch.equal(read[paths[2], name], read[paths[0], name])
             assert torch.equal(read[paths[3], name], read[paths[1], name])
             assert not torch.equal(read[paths[0], name][..., :4], read[paths[1], name][..., :4])
-
-    def test_editing_borrowed_keys(self, model):
-        """In place on the source block's keys reaches the borrowing block; an assignment is that block's alone."""
-        source, borrower = model.layers[0].self_attn, model.layers[2].self_attn
-        with model.trace(PROMPT):
-            clean = borrower.attention_keys.save()
-        with model.trace(PROMPT):
-            source.attention_keys[:, :, -1] = 0
-            inplace = borrower.attention_keys.save()
-        with model.trace(PROMPT):
-            source.attention_keys = source.attention_keys * 0
-            assigned = borrower.attention_keys.save()
-        assert torch.equal(inplace[:, :, -1], torch.zeros_like(inplace[:, :, -1]))
-        torch.testing.assert_close(inplace[:, :, :-1], clean[:, :, :-1])
-        torch.testing.assert_close(assigned, clean)
-        with model.trace(PROMPT):
-            clean_logits = model.logits.save()
-        with model.trace(PROMPT):
-            borrower.attention_values = borrower.attention_values * 0
-            edited = model.logits.save()
-        assert not torch.equal(clean_logits, edited)
 
 
 class TestGemma4Wrapper(Gemma4Suite):
@@ -307,6 +391,24 @@ class TestGemma4KEqV(Gemma4Suite):
         projected = attn.k_proj(normed).view(batch, seq, -1, attn.head_dim)
         torch.testing.assert_close(values, attn.v_norm(projected).transpose(1, 2))
         assert values.shape[1] == model.config.text_config.per_layer_config[1].num_key_value_heads != model.num_kv_heads
+
+    @pytest.mark.parametrize("name, other", [("attention_keys", "attention_values"), ("attention_values", "attention_keys")])
+    def test_keys_and_values_from_one_projection_edit_apart(self, model, name, other):
+        """On a full block both come from ``k_proj``; zeroing one in place leaves the other, and equals assigning it alone."""
+        attn = model.layers[1].self_attn
+        with model.trace(PROMPT):
+            keys, values = attn.attention_keys.save(), attn.attention_values.save()
+            clean_logits = model.logits.save()
+        clean = {"attention_keys": keys, "attention_values": values}
+        with model.trace(PROMPT):
+            getattr(attn, name)[:] = 0
+            kept = getattr(attn, other).save()
+            inplace = model.logits.save()
+        with model.trace(PROMPT):
+            setattr(attn, name, torch.zeros_like(clean[name]))
+            assigned = model.logits.save()
+        assert torch.equal(kept, clean[other])
+        assert not torch.equal(inplace, clean_logits) and torch.equal(inplace, assigned)
 
     def test_per_layer_output_is_unavailable(self, model):
         from nnter import Unavailable
