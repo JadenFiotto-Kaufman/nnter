@@ -80,7 +80,7 @@ class TestGPTNeoXJapanese(FamilySuite):
         from nnter import StandardizedTransformer
 
         model = StandardizedTransformer(self.REPO, dispatch=True)
-        assert model.status()["self_attn.attention_probabilities"] is None
+        assert model.support()["self_attn.attention_probabilities"] is None
         with model.trace(PROMPT):
             pattern = model.layers[0].self_attn.attention_probabilities.save()
         torch.testing.assert_close(pattern.sum(-1), torch.ones_like(pattern.sum(-1)))

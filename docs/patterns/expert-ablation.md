@@ -29,7 +29,7 @@ if len(ids) > 1:                                                   # sentencepie
     ids = model.tokenizer("Paris", add_special_tokens=False).input_ids   # ['▁Paris']: it marks the word start itself
 assert len(ids) == 1, model.tokenizer.convert_ids_to_tokens(ids)   # one token, or target is not the word
 target = ids[0]
-blocks = [layer.mlp for i, layer in enumerate(model.layers) if model.status(layer=i).get("mlp.expert_weights", "absent") is None]
+blocks = [layer.mlp for i, layer in enumerate(model.layers) if model.support(layer=i).get("mlp.expert_weights", "absent") is None]
 
 with model.trace(prompt):
     clean = model.logits[0, -1].float().log_softmax(-1)[target].save()
@@ -42,7 +42,7 @@ for b, moe in enumerate(blocks):
             effects[b, e] = (model.logits[0, -1].float().log_softmax(-1)[target] - clean).save()
 ```
 
-`status()` picks the blocks with the routing pair: dense blocks beside mixture blocks
+`support()` picks the blocks with the routing pair: dense blocks beside mixture blocks
 (DeepSeek-V3, GLM-4-MoE, Llama 4, Jamba) have none, and Llama 4's `expert_weights` is
 unavailable. `add_special_tokens=False` keeps the BOS token out of the target. This
 checkpoint's sentencepiece tokenizer (Mistral's) splits `" Paris"` into `['▁', '▁Paris']`,

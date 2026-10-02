@@ -60,7 +60,7 @@ class TokenEProperty(EProperty):
     """An `EProperty` whose tensor the model may hold flat over tokens, ``[batch * seq, ...]``, one rank below its layout.
 
     The same descriptor in every other respect (path, ``select``,
-    ``unavailable``, layout, ``status``, the repr line). The preprocess,
+    ``unavailable``, layout, ``support``, the repr line). The preprocess,
     postprocess and transform see the model's own tensor; the user sees and
     writes this invoke's ``[batch, seq, ...]``:
 

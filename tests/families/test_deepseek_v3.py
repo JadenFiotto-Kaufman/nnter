@@ -63,7 +63,7 @@ class TestDeepseekV3(FamilySuite):
     def test_a_dense_block_then_a_mixture(self, model):
         assert type(model.layers[0].mlp) is deepseek_v3.Mlp and not isinstance(model.layers[0].mlp, Moe)
         assert type(model.layers[1].mlp) is deepseek_v3.Moe
-        assert model.status()["mlp.router_logits"] == {0: "no router_logits value on this block's mlp"}
+        assert model.support()["mlp.router_logits"] == {0: "no router_logits value on this block's mlp"}
 
     def test_router_logits_write_by_hand(self, model):
         """Sigmoid scoring, group-limited top-k, renormalized and times ``routed_scaling_factor``, from written logits."""

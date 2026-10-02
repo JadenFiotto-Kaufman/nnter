@@ -21,7 +21,7 @@ from nnter import StandardizedTransformer
 model = StandardizedTransformer("openai-community/gpt2", dispatch=True, attn_implementation="eager")
 
 print(model.family.__name__)                  # nnter.families.gpt2
-print(model.status())                         # {value: None | {layer: reason}}; nothing runs
+print(model.support())                         # {value: None | {layer: reason}}; nothing runs
 
 with model.trace("The Eiffel Tower is in"):
     x = model.layers[3].input.save()
@@ -46,7 +46,7 @@ Reads within one trace follow the forward: the pattern is produced inside block 
 | `StandardizedTransformer` | The model class: a `TransformersModel` renamed to the standard vocabulary and wrapped in the family's envoys. |
 | `Layer`, `Attention`, `Mlp`, `LinearAttention`, `StateSpace` | The base envoys a family subclasses; the hosts of the standard values. |
 | `RecurrentMixer` | The base of `LinearAttention` and `StateSpace`: how a recurrent mixer's values are reached at its kernel call, the per-token state and the kernel routing. |
-| `Standard` | The envoy base of them all, with `values()`, `status()` and the `sourced` flag. |
+| `Standard` | The envoy base of them all, with `values()`, `support()` and the `sourced` flag. |
 | `EProperty`, `DerivedEProperty` | The descriptors a value is made of: one keyed on a path from the host, one computed. |
 | `unavailable`, `route_kernels`, `route_delta_rule` | A value a family lacks; the recurrent kernel switch, and its DeltaNet spelling. |
 | `chunk_per_token` | A Mamba-2 model's chunk scan with a chunk size of 1, so `StateSpace.states` reads the state after every token. |
@@ -70,11 +70,11 @@ StandardizedTransformer(repo_id, *args, rename=None, envoys=None, tokenizer_kwar
 | `tokenizer_kwargs` | `dict \| None` | Attributes set on the loaded tokenizer: `{"padding_side": "left"}`, a `pad_token`. |
 | `**kwargs` | | Passed to `TransformersModel`: `dispatch=True`, `attn_implementation="eager"`, `dtype=`, `device=` (one device; `device_map="cpu"` does not keep a model off the GPU), `device_map=`, `revision=`, `trust_remote_code=`. `task` defaults to `"text-generation"`. |
 
-The constructor reads the checkpoint's config first (`AutoConfig`; a multimodal config's `text_config`), looks up `config.model_type` in `nnter.families`, and raises `UnsupportedFamily` before any weights load when no family covers it. `attn_implementation` is not forced: the checkpoint's own default (`sdpa` on most) stays, and the interior attention values then report unavailable in `status()`.
+The constructor reads the checkpoint's config first (`AutoConfig`; a multimodal config's `text_config`), looks up `config.model_type` in `nnter.families`, and raises `UnsupportedFamily` before any weights load when no family covers it. `attn_implementation` is not forced: the checkpoint's own default (`sdpa` on most) stays, and the interior attention values then report unavailable in `support()`.
 
 ### Root values, inside a trace
 
-Every row is an `EProperty` on the root, listed in `repr(model)` with its description and reported by `status()`.
+Every row is an `EProperty` on the root, listed in `repr(model)` with its description and reported by `support()`.
 
 | Value | Layout | Assignable | Description (as the repr shows it) |
 |---|---|---|---|
@@ -96,7 +96,7 @@ Every row is an `EProperty` on the root, listed in `repr(model)` with its descri
 | `project_on_vocab` | `project_on_vocab(hidden: Tensor) -> Tensor` | inside (on a live value) or outside (on a saved one) | The logit lens: `lm_head(norm(hidden))`, then what the model does to the head's output to make its logits: the text config's `final_logit_softcapping` if set (Gemma-2), else nothing; a family's `def project_on_vocab(model, hidden)` is bound in its place (Cohere's `* logit_scale`, Granite's `/ logits_scaling`). On the last block's `layer_output` it equals `logits`. |
 | `get_topk_closest_tokens` | `get_topk_closest_tokens(hidden: Tensor, k: int = 5) -> list[dict[str, float]]` | outside, on a saved `[..., hidden]` tensor | `project_on_vocab` then softmax; one `{token: probability}` per position, row-major over the leading axes. Takes a residual-stream tensor, not logits. |
 | `probs_to_dict` | `probs_to_dict(probs: Tensor, k: int = 5) -> dict[str, float]` | outside | The `k` most likely tokens of one `[vocab]` distribution. |
-| `status` | `status(layer: int \| None = None) -> dict[str, Any]` | outside; nothing runs | Without `layer`: every root value and every block value, `None` when available on every block, else `{layer: reason}`. With `layer`: that block's values by dotted name (`"self_attn.attention_probabilities"`), `None` or the reason, including `"no <module> module on this block"`. The keys come from the tree: every `Standard` child of any block, under its standard name, so a value added through `envoys=` is listed as `self_attn.<name>`, a module some blocks lack (a hybrid's `self_attn`) is reported missing on those, and a module no block has (OPT's `mlp`) has no key. |
+| `support` | `support(layer: int \| None = None) -> dict[str, Any]` | outside; nothing runs | Without `layer`: every root value and every block value, `None` when available on every block, else `{layer: reason}`. With `layer`: that block's values by dotted name (`"self_attn.attention_probabilities"`), `None` or the reason, including `"no <module> module on this block"`. The keys come from the tree: every `Standard` child of any block, under its standard name, so a value added through `envoys=` is listed as `self_attn.<name>`, a module some blocks lack (a hybrid's `self_attn`) is reported missing on those, and a module no block has (OPT's `mlp`) has no key. |
 
 ### Sizes, outside a trace
 
@@ -115,7 +115,7 @@ Each is a `StandardizedProperty`: it reads the config by the plain rule unless t
 
 | Name | Signature | What |
 |---|---|---|
-| `StandardizedProperty` | `nnter.standardized.StandardizedProperty(fget)` | The descriptor each size is. `__get__` calls `getattr(model.family, <name>)(model)` when the family defines it, else `fget(model)`; on the class it returns itself (`StandardizedTransformer.head_dim`). `__set__` raises `AttributeError("<name> is read off the config; a family defines `def <name>(model)` to say it otherwise")`. Not an `EProperty`: no location, nothing served inside a trace, no entry in the repr or `status()`. |
+| `StandardizedProperty` | `nnter.standardized.StandardizedProperty(fget)` | The descriptor each size is. `__get__` calls `getattr(model.family, <name>)(model)` when the family defines it, else `fget(model)`; on the class it returns itself (`StandardizedTransformer.head_dim`). `__set__` raises `AttributeError("<name> is read off the config; a family defines `def <name>(model)` to say it otherwise")`. Not an `EProperty`: no location, nothing served inside a trace, no entry in the repr or `support()`. |
 | `StandardizedCapability` | `nnter.standardized.StandardizedCapability(fget)` | `StandardizedProperty` for a method, and its subclass: on attribute access it binds `getattr(model.family, <name>)` to the model when the family defines it, else `fget`; on the class it returns itself (`StandardizedTransformer.project_on_vocab`). `project_on_vocab` is the one today. |
 
 ### Other attributes
@@ -175,7 +175,7 @@ The four sizes are plain read-only properties, read off the module outside or in
 
 | Value | Layout | Base location | Assignable | Availability |
 |---|---|---|---|---|
-| `mlp_output` | `Residual` | the module's `.output`, first tensor (a mixture of experts returns router scores beside it) | yes; in place reaches the model (Falcon: through a transform, on a copy) | always where the block has an MLP module; OPT has none, so `status()` lists no `mlp.*` key |
+| `mlp_output` | `Residual` | the module's `.output`, first tensor (a mixture of experts returns router scores beside it) | yes; in place reaches the model (Falcon: through a transform, on a copy) | always where the block has an MLP module; OPT has none, so `support()` lists no `mlp.*` key |
 
 `intermediate_size`, a plain read-only property, is this block's hidden width, one routed expert's on a mixture of experts: the module's `experts.intermediate_dim` / `expert_dim` / `intermediate_size` / `ffn_hidden_size`, else its own `intermediate_size` / `ffn_dim`, else the input width of `down_proj` / `c_proj` / `dense_4h_to_h` / `fc2` / `fc_out` / `w2`. JetMoE's `Mlp` overrides it (`hidden_size` on its module is the experts' width).
 
@@ -297,7 +297,7 @@ A Mamba-2 (SSD) mixer (`layers[i].linear_attn` on Mamba-2, Nemotron-H, Bamba and
 | `state_output` | `State` | the scan's return 1; inside the update, `UPDATED_STATE`; transposed | yes | `needs_torch_kernels`; `Unavailable` at the read on a prompt run with `use_cache=False` |
 | `states` | `States` | inside the scan, `CHUNK_STATES[:, 1:]`, transposed (a copy); on a decode step `state_output` with a sequence axis of 1; a `DerivedEProperty` | no (`AttributeError`) | `needs_per_token_chunks` |
 | `state` | | `unavailable(...)`: the scan has no per-token occurrence of the state | no | never: `"the chunk scan computes every token's state in one tensor per call, ..."` |
-| `set_state_after` | | `unavailable(...)` in place of the base's method, so `status()` lists it | no | never: `"the chunk scan computes every boundary state in one cumulative step from the initial state, ..."` |
+| `set_state_after` | | `unavailable(...)` in place of the base's method, so `support()` lists it | no | never: `"the chunk scan computes every boundary state in one cumulative step from the initial state, ..."` |
 
 `state_after(t)` is `states[:, t]`, and raises `Unavailable` with `needs_per_token_chunks`' reason without `chunk_per_token`. `KERNEL` is the base's: the update when the call is cached and one token long, the chunk scan otherwise. The kernel's arguments are read from the model once per call (`_arguments`, through `per_call`), on the call's first need, so any forward-order combination of values reads in one trace, and a value that needs another argument (`betas` needs `dt_bias`) finds it after the model has moved into the kernel.
 
@@ -310,7 +310,7 @@ The base of the four hosts.
 | Member | Signature | What |
 |---|---|---|
 | `values` | `classmethod values() -> dict[str, EProperty]` | This class's standard values by name, base classes first. |
-| `status` | `status() -> dict[str, str \| None]` | Each value here: `None` when available on this envoy, else the reason. |
+| `support` | `support() -> dict[str, str \| None]` | Each value here: `None` when available on this envoy, else the reason. |
 | `sourced` | `sourced: bool = False` (class attribute) | `True` on a subclass instruments the envoy's forward when it is built and again when real weights replace meta ones, for a value in that forward read after the call has started (Llama 4's `Layer`, whose `Mlp.mlp_output` follows `attention_output`). A path declares where a value is; this flag is what makes such a read serve rather than raise `OutOfOrderError`. |
 
 ## `nnter.families`
@@ -440,7 +440,7 @@ nnterp's activation helpers on the standard values. `GetActivations = Callable[[
 
 | Exception | Raised when |
 |---|---|
-| `nnter.Unavailable` (`RuntimeError`) | A standard value this checkpoint does not have is read or written: `"<path>.<name> is not available: <reason>"`, at that line, before the model runs. `status()` gives the same reason without raising. `hasattr(envoy, name)` also raises it. |
+| `nnter.Unavailable` (`RuntimeError`) | A standard value this checkpoint does not have is read or written: `"<path>.<name> is not available: <reason>"`, at that line, before the model runs. `support()` gives the same reason without raising. `hasattr(envoy, name)` also raises it. |
 | `nnter.UnsupportedFamily` (`ValueError`) | The checkpoint's `model_type` has no family module and nothing registered; the message lists the known types. |
 | `nnsight.intervention.source.SourceNotAvailable` | An `EProperty`'s path names an operation that is not under `.source` in this run: the forward took a path the family does not expect. |
 | `nnter.prompt_utils.TokenizationError` | A word has no standalone first token under the tokenizer. |
@@ -452,7 +452,7 @@ nnterp's activation helpers on the standard values. `GetActivations = Callable[[
 - Nothing assigned inside a trace survives it unless it is `.save()`d, and the save is bound to a name: `x = model.logits.save()`.
 - Reads follow forward order within one invoke: the model's input (`input_ids`, `attention_mask`, `input_size`) first, a block's interior (`attention_probabilities`, queries, scores) before that block's `attention_output`, block 3 before block 5. On Falcon read `attention_values` before `attention_queries` / `attention_keys`; on DeltaNet read `states` before any state write.
 - Decide which blocks have `self_attn` outside the trace: `[i for i, l in enumerate(model.layers) if getattr(l, "self_attn", None) is not None]`. Compare with `is not None`: an envoy has no truthiness (`getattr(layer, "self_attn", None) or layer.linear_attn` raises `TypeError: object of type 'LlamaAttention' has no len()`), and inside a trace `getattr(envoy, name, None)` can trip a served value.
-- `hasattr(envoy, "attention_probabilities")` raises `Unavailable` when the value is unavailable; ask `status()` instead.
+- `hasattr(envoy, "attention_probabilities")` raises `Unavailable` when the value is unavailable; ask `support()` instead.
 - The interior attention values need `attn_implementation="eager"`, which the constructor does not force; BLOOM and MPT are the exception (their pattern is their own dropout and carries no `attn_implementation` predicate).
 - `get_topk_closest_tokens(hidden)` takes a residual-stream tensor and projects it itself; passing `project_on_vocab`'s output fails inside `norm` with a shape error.
 - GPT-2's and MPT's queries, keys and values are views of one fused tensor: assign, do not edit in place. Falcon's `mlp_output` is a copy; assignment and in-place edits reach the model through a transform.

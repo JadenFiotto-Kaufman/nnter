@@ -64,7 +64,7 @@ with model.trace(prompt):
 
 A Mamba block's only contribution is the mixer's:
 `layers[i].input + linear_attn.attention_output == layer_output`, and
-`status()` lists no `self_attn` and no `mlp` values. On Jamba the blocks are
+`support()` lists no `self_attn` and no `mlp` values. On Jamba the blocks are
 Llama's (`input + attention_output + mlp_output == layer_output`), with
 `self_attn` on one block in `attn_layer_period` and `linear_attn` on the rest;
 decide which is which outside the trace, as on a DeltaNet hybrid.

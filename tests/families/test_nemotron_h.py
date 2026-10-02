@@ -65,13 +65,13 @@ class TestNemotronH(StateSpaceChecks, FamilySuite):
             assert all(getattr(layer, other, None) is None for other in set(KINDS.values()) - {name}), (layer.path, kind)
             assert layer._aliases == {name: "mixer"}
 
-    def test_status_is_per_block(self, model):
-        status = model.status()
+    def test_support_is_per_block(self, model):
+        support = model.support()
         kinds = model.config.layers_block_type
-        assert set(status["self_attn.attention_probabilities"]) == {i for i, k in enumerate(kinds) if k != "full_attention"}
-        assert set(status["linear_attn.state_output"]) == {i for i, k in enumerate(kinds) if k != "linear_attention"}
-        assert set(status["mlp.mlp_output"]) == {i for i, k in enumerate(kinds) if k not in ("moe", "mlp")}
-        assert status["layer_output"] is None
+        assert set(support["self_attn.attention_probabilities"]) == {i for i, k in enumerate(kinds) if k != "full_attention"}
+        assert set(support["linear_attn.state_output"]) == {i for i, k in enumerate(kinds) if k != "linear_attention"}
+        assert set(support["mlp.mlp_output"]) == {i for i, k in enumerate(kinds) if k not in ("moe", "mlp")}
+        assert support["layer_output"] is None
 
     def test_one_contribution_per_block(self, model):
         """``input + <the block's one sublayer> == layer_output`` on every block."""

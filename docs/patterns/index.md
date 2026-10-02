@@ -38,7 +38,7 @@ model = StandardizedTransformer("openai-community/gpt2", dispatch=True, attn_imp
 
 ## Across models and datasets
 
-- [cross-family-sweep](cross-family-sweep.md) — one experiment over several checkpoints, guarded by `status()`, hybrids handled.
+- [cross-family-sweep](cross-family-sweep.md) — one experiment over several checkpoints, guarded by `support()`, hybrids handled.
 - [probing](probing.md) — `get_token_activations` to build a dataset, a closed-form linear probe per layer.
 
 ## Hybrids

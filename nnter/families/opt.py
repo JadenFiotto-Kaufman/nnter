@@ -4,7 +4,7 @@
 self_attn_layer_norm, fc1, activation_fn, fc2, final_layer_norm},
 final_layer_norm}`` and ``lm_head``. There is no MLP module: ``fc1`` and
 ``fc2`` sit on the block, so ``mlp`` and ``mlp_output`` do not exist here
-and `StandardizedTransformer.status` says so. The block's own
+and `StandardizedTransformer.support` says so. The block's own
 ``final_layer_norm`` is the pre-MLP norm; it keeps its native name, since a
 single-component alias would also bind on the decoder's final norm.
 """

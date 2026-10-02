@@ -183,13 +183,13 @@ class StateSpaceChecks:
 
     def test_states_need_chunk_per_token(self, model):
         mix = self.ssd(model)
-        reason = model.status(layer=self.SSD_BLOCK)["linear_attn.states"]
+        reason = model.support(layer=self.SSD_BLOCK)["linear_attn.states"]
         assert f"chunk_size={mix._module.chunk_size}" in reason and "chunk_per_token" in reason
         with pytest.raises(Unavailable, match="chunk_per_token"):
             mix.state_after(0)
         chunk_per_token(model)
         try:
-            assert model.status(layer=self.SSD_BLOCK)["linear_attn.states"] is None
+            assert model.support(layer=self.SSD_BLOCK)["linear_attn.states"] is None
         finally:
             chunk_per_token(model, False)
 
@@ -207,9 +207,9 @@ class StateSpaceChecks:
         mix = self.ssd(model)
         chunk_per_token(model)
         try:
-            status = model.status(layer=self.SSD_BLOCK)
-            assert status["linear_attn.state"] == NO_STATE_OCCURRENCES
-            assert status["linear_attn.set_state_after"] == NO_STATE_WRITES
+            support = model.support(layer=self.SSD_BLOCK)
+            assert support["linear_attn.state"] == NO_STATE_OCCURRENCES
+            assert support["linear_attn.set_state_after"] == NO_STATE_WRITES
             with pytest.raises(Unavailable, match="one cumulative step"):
                 mix.set_state_after(0, torch.zeros(1))
             with pytest.raises(Unavailable, match="one tensor per call"):
@@ -295,9 +295,9 @@ class StateSpaceChecks:
         pytest.importorskip("mamba_ssm")
         route_kernels(self.FAMILY, "default")
         try:
-            reason = model.status(layer=self.SSD_BLOCK)["linear_attn.attention_queries"]
+            reason = model.support(layer=self.SSD_BLOCK)["linear_attn.attention_queries"]
             assert "mamba_ssm" in reason and "route_kernels" in reason
-            assert model.status(layer=self.SSD_BLOCK)["linear_attn.attention_output"] is None
+            assert model.support(layer=self.SSD_BLOCK)["linear_attn.attention_output"] is None
         finally:
             route_kernels(self.FAMILY, "torch")
 

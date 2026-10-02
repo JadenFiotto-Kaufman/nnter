@@ -82,7 +82,7 @@ class StandardizedTransformer(TransformersModel):
     (``attention_output``, ``attention_probabilities``) and its feed-forwards
     in its `Mlp` (``mlp_output``). The pattern is read inside the eager
     attention forward, so it is unavailable unless the model is loaded with
-    ``attn_implementation="eager"``; `status` says which values this
+    ``attn_implementation="eager"``; `support` says which values this
     checkpoint has. See `nnter.components`.
 
     Args:
@@ -302,7 +302,7 @@ class StandardizedTransformer(TransformersModel):
 
     # -- availability ----------------------------------------------------------
 
-    def status(self, layer: int | None = None) -> dict[str, Any]:
+    def support(self, layer: int | None = None) -> dict[str, Any]:
         """Which standard values this checkpoint has, without running anything.
 
         With ``layer``, that block's values by dotted name (``"layer_output"``,
@@ -317,18 +317,18 @@ class StandardizedTransformer(TransformersModel):
         The tree decides what is listed: every child of a block that carries
         standard values (a `Standard` envoy) is walked under its standard
         name, so a value added through ``envoys=`` or a registered family
-        appears here as it does in the envoy's own `Standard.status`, and a
+        appears here as it does in the envoy's own `Standard.support`, and a
         module no block has (OPT's ``mlp``) has no entry.
         """
         hosts = self._hosts()
         if layer is not None:
-            return self._layer_status(self.layers[layer], hosts)
-        status: dict[str, Any] = {name: value.reason(self) for name, value in values(type(self)).items()}
-        per_layer = [self._layer_status(block, hosts) for block in self.layers]
+            return self._layer_support(self.layers[layer], hosts)
+        support: dict[str, Any] = {name: value.reason(self) for name, value in values(type(self)).items()}
+        per_layer = [self._layer_support(block, hosts) for block in self.layers]
         for name in per_layer[0]:
             missing = {i: reasons[name] for i, reasons in enumerate(per_layer) if reasons[name]}
-            status[name] = missing or None
-        return status
+            support[name] = missing or None
+        return support
 
     @staticmethod
     def _standard_children(block: Envoy) -> dict[str, Standard]:
@@ -352,18 +352,18 @@ class StandardizedTransformer(TransformersModel):
                 hosts.setdefault(module, {}).update(dict.fromkeys(child.values()))
         return {module: list(names) for module, names in hosts.items()}
 
-    def _layer_status(self, block: Any, hosts: dict[str, list[str]]) -> dict[str, str | None]:
-        status: dict[str, str | None] = dict(block.status())
+    def _layer_support(self, block: Any, hosts: dict[str, list[str]]) -> dict[str, str | None]:
+        support: dict[str, str | None] = dict(block.support())
         present = self._standard_children(block)
         for module, names in hosts.items():
             envoy = present.get(module)
-            reasons = envoy.status() if envoy is not None else {}
+            reasons = envoy.support() if envoy is not None else {}
             for name in names:
                 if envoy is None:
-                    status[f"{module}.{name}"] = f"no {module} module on this block"
+                    support[f"{module}.{name}"] = f"no {module} module on this block"
                 else:
-                    status[f"{module}.{name}"] = reasons.get(name, f"no {name} value on this block's {module}")
-        return status
+                    support[f"{module}.{name}"] = reasons.get(name, f"no {name} value on this block's {module}")
+        return support
 
     # -- the input (inside a trace) ----------------------------------------------
 

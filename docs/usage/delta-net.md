@@ -61,13 +61,13 @@ Decide which blocks have which mixer *outside* the trace, as above.
 `"full_attention"`), and the tree follows it: a block has `self_attn` or
 `linear_attn`, never both.
 
-## Which blocks, and what `status()` says
+## Which blocks, and what `support()` says
 
-`model.status()` reports each `self_attn` value as `no self_attn module on
+`model.support()` reports each `self_attn` value as `no self_attn module on
 this block` on the linear blocks and each `linear_attn` value as `no
 linear_attn module on this block` on the attention blocks, so a hybrid's
-status reads as a short dict per value: `{3: 'no linear_attn module on this
-block', 7: ..., ...}`. `model.status(layer=i)` is flat for one block.
+`support()` reads as a short dict per value: `{3: 'no linear_attn module on this
+block', 7: ..., ...}`. `model.support(layer=i)` is flat for one block.
 
 ## The values
 
@@ -270,7 +270,7 @@ was never reached: the loop asked for a step the run did not make, so it was
 cut short`), keeps what was saved before it, and skips every statement after
 it, so a name bound later is undefined when the block exits.
 
-### `status()` reasons
+### `support()` reasons
 
 Without the switch, `state` and `states` report `the state after each token
 is materialized only by the token-by-token kernel; the chunked kernel a prompt
@@ -308,7 +308,7 @@ this block`.
 ## Related
 
 - [vocabulary.md](vocabulary.md), where `linear_attn` sits in the standard names.
-- [availability.md](availability.md), per-block `status()` on a hybrid.
+- [availability.md](availability.md), per-block `support()` on a hybrid.
 - [layouts.md](layouts.md), the `linear_attn` layouts beside the softmax ones.
 - [attention-interior.md](attention-interior.md), the same names on the softmax blocks, with a pattern and scores.
 - [generation.md](generation.md), values per decode step, and the loop rules under `generate`.

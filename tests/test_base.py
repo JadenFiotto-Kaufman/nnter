@@ -44,8 +44,8 @@ def test_unavailable_marker_is_listed_and_raises():
     attn = model.layers[0].self_attn
     assert type(attn) is Linear
     assert "(attention_probabilities): Unavailable: no softmax" in repr(attn)
-    assert attn.status()["attention_probabilities"] == "no softmax: the attention is linear"
-    assert model.status()["self_attn.attention_probabilities"] == {i: "no softmax: the attention is linear" for i in range(model.num_layers)}
+    assert attn.support()["attention_probabilities"] == "no softmax: the attention is linear"
+    assert model.support()["self_attn.attention_probabilities"] == {i: "no softmax: the attention is linear" for i in range(model.num_layers)}
     with pytest.raises(Unavailable, match="the attention is linear"):
         attn.attention_probabilities
     with pytest.raises(Unavailable):  # TODO in nnter.components.Unavailable: hasattr should be False instead
@@ -93,7 +93,7 @@ def test_eproperty_paths_resolve_and_write(gpt2_paths):
     model, Paths = gpt2_paths
     attn = model.layers[0].self_attn
     assert Paths.softmax.inside_forward() and Paths.scaling.inside_forward() and not Paths.sibling.inside_forward()
-    assert model.status()["self_attn.sibling"] is None and model.status()["self_attn.softmax"] is None
+    assert model.support()["self_attn.sibling"] is None and model.support()["self_attn.softmax"] is None
     with model.trace("Hello world"):  # forward order: the call's arguments, then the ops inside it, then the sibling norm
         scaling = attn.scaling.save()
         scores = attn.scores.save()
@@ -185,9 +185,9 @@ def test_recurrent_mixer_without_a_state_op_reports_the_state_unavailable():
     assert type(mix) is NoState
     reason = "this mixer's kernels do not materialize the state per token"
     for name in ("state", "states"):
-        assert mix.status()[name] == reason
-        assert model.status()[f"linear_attn.{name}"][0] == reason
-    assert mix.status()["state_output"] is None
+        assert mix.support()[name] == reason
+        assert model.support()[f"linear_attn.{name}"][0] == reason
+    assert mix.support()["state_output"] is None
     with pytest.raises(Unavailable, match="do not materialize the state per token"):
         mix.state_after(0)
     with pytest.raises(Unavailable, match="do not materialize the state per token"):
@@ -340,7 +340,7 @@ def test_cached_call_with_several_tokens_reads_the_prompts_kernel():
     assert queries.shape[1] == 2 and carried is not None
 
 
-def test_status_with_a_module_another_block_owns():
+def test_support_with_a_module_another_block_owns():
     """A block holding a module owned by another block (shared weights): its aliases are read off their own bindings."""
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -348,9 +348,9 @@ def test_status_with_a_module_another_block_owns():
     raw = AutoModelForCausalLM.from_pretrained(repo)
     raw.transformer.h[1].shared_mlp = raw.transformer.h[0].mlp
     model = StandardizedTransformer(raw, tokenizer=AutoTokenizer.from_pretrained(repo))
-    status = model.status(layer=1)
-    assert status["mlp.mlp_output"] is None and status["layer_output"] is None
-    assert model.status()["mlp.mlp_output"] is None
+    support = model.support(layer=1)
+    assert support["mlp.mlp_output"] is None and support["layer_output"] is None
+    assert model.support()["mlp.mlp_output"] is None
 
 
 def test_value_repr_line_names_the_layout():

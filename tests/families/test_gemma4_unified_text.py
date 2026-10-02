@@ -10,5 +10,5 @@ class TestGemma4Unified(Gemma4Suite):
     FAMILY = gemma4_unified_text
 
     def test_no_per_layer_output(self, model):
-        assert "per_layer_output" not in model.status()
+        assert "per_layer_output" not in model.support()
         assert not hasattr(gemma4_unified_text.Layer, "per_layer_output")

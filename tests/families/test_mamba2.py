@@ -25,10 +25,10 @@ class TestMamba2(StateSpaceChecks, FamilySuite):
     }
 
     def test_block_is_the_mixer_alone(self, model):
-        """No attention, no MLP: the status lists neither, and the mixer is the block's one contribution."""
-        status = model.status()
-        assert not any(name.startswith(("self_attn.", "mlp.")) for name in status)
-        assert {f"linear_attn.{name}" for name in LINEAR} <= set(status)
+        """No attention, no MLP: ``support()`` lists neither, and the mixer is the block's one contribution."""
+        support = model.support()
+        assert not any(name.startswith(("self_attn.", "mlp.")) for name in support)
+        assert {f"linear_attn.{name}" for name in LINEAR} <= set(support)
         parts = {}
         with model.trace(PROMPT):
             for i, layer in enumerate(model.layers):

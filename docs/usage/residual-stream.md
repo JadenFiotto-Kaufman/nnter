@@ -325,7 +325,7 @@ token or exactly `hc_mult` tokens long.
 - **A tuple block's `.output` is a tuple; `layer_output` is the tensor.** Skip a block with
   `Layer.skip_with` ([methods](methods.md)) rather than `.skip(tensor)`, which would hand a
   bare tensor where a tuple is expected.
-- **`mlp_output` does not exist on OPT or XGLM** (no MLP module; `layers[i].fc2.output` is what the block adds); `status()` says so
+- **`mlp_output` does not exist on OPT or XGLM** (no MLP module; `layers[i].fc2.output` is what the block adds); `support()` says so
   ([availability](availability.md)).
 - **The identity is exact in float32 on a sequential block** (GPT-2: difference 0.0). A
   parallel block sums `x + attn + mlp` in another order, so there it holds to rounding even

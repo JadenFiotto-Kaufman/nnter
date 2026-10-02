@@ -37,7 +37,7 @@ class TestAfmoe(FamilySuite):
 
     def test_shared_expert_has_no_contribution(self, model):
         shared = model.layers[model.config.num_dense_layers].mlp.shared_experts
-        assert "shared expert" in shared.status()["mlp_output"]
+        assert "shared expert" in shared.support()["mlp_output"]
         with pytest.raises(Unavailable, match="shared expert"):
             with model.trace(PROMPT):
                 shared.mlp_output.save()

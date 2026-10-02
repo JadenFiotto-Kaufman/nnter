@@ -95,7 +95,7 @@ the ones that matter most here:
 - **Descriptions on eproperties are capitalized sentences** without a
   trailing period, naming the layout: `"The attention pattern the values are
   mixed with, [batch, heads, query, key]"`. They are what `repr(model)` and
-  `status()` show.
+  `support()` show.
 - **One family per module, named after `model_type`**
   (`gemma3_text.py` covers `gemma3_text`); `MODEL_TYPES` is that one name.
   The module *is* the registry entry (`nnter/families/__init__.py:18-22`).
@@ -117,7 +117,7 @@ the ones that matter most here:
   `nnter.components`. Axis names are the shared set in those comments and in
   `suite.py:448-454`.
 - **Every source-located value has an `unavailable=` predicate** (`needs_eager`,
-  `interface_reason`, `needs_torch_kernels`, or a family's own), so `status()`
+  `interface_reason`, `needs_torch_kernels`, or a family's own), so `support()`
   can answer before a trace runs and a read raises `Unavailable` rather than
   `SourceNotAvailable` when the reason is known in advance.
 - **A missing value is declared, not omitted**: `attention_probabilities =
@@ -203,7 +203,7 @@ deliberately does not do the way nnterp does, and things that remain open.
   the reference kernels at load and re-pins on `dispatch()` (§2a "Hybrid
   Gated DeltaNet", §4 item 6).
 - **A `model.require(...)` / `model.available(...)` helper** that answers
-  for a set of values at once, instead of reading `status()` by hand and
+  for a set of values at once, instead of reading `support()` by hand and
   meeting `Unavailable` from `hasattr` (§2a "Availability before any
   trace"; the note under `Unavailable` in `nnter/components/eproperty.py:28-32`).
 - **Sequence-first normalization of softmax q/k/v**: the sequence axis is 2

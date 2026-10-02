@@ -125,7 +125,7 @@ for token, norm in zip(tokens, norms):
 The two kernels compute the same rule; `probs` equals the chunked run's to float
 error. The cost is the slower kernel, the same trade as `attn_implementation="eager"`.
 `route_kernels(model.family, "default")` restores the default. Without the
-routing, `states` raises `nnter.Unavailable` with that instruction and `status()`
+routing, `states` raises `nnter.Unavailable` with that instruction and `support()`
 reports it under `linear_attn.states`.
 
 `state` is the same value one token at a time, walked with nnsight's own iteration:
@@ -202,7 +202,7 @@ prompt within a few tokens, and its state norm curve above stays flat.
   `tracer.iter[:n]` on step 0 and `state_output` on each later step.
 - The kernels must be transformers' pure-torch ones. With `flash-linear-attention`
   or `causal-conv1d` installed the kernel has no Python source, every interior value
-  is unavailable, and `status()` says so; `attention_output` stays available.
+  is unavailable, and `support()` says so; `attention_output` stays available.
 - A block has either `self_attn` or `linear_attn`; on the attention block
   (`config.layer_types`) the `linear_attn` values are reported missing. Decide the
   blocks outside the trace.
@@ -217,7 +217,7 @@ prompt within a few tokens, and its state norm curve above stays flat.
 - [cross-family-sweep](cross-family-sweep.md): hybrids inside a multi-checkpoint
   loop.
 - [../usage/availability.md](../usage/availability.md): the `route_kernels` and
-  kernel reasons in `status()`.
+  kernel reasons in `support()`.
 - [../usage/generation.md](../usage/generation.md): `generate`, `tracer.iter`, the
   prefill and decode steps.
 - nnsight `docs/usage/iter-all-next.md`, `docs/usage/source.md`.

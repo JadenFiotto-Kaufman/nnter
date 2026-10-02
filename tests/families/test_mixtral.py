@@ -12,19 +12,19 @@ class TestMixtral(FamilySuite):
     NATIVE = LLAMA_ROWS
 
 
-def test_status_reports_the_experts_implementation_a_load_runs():
-    """``status`` says what ``experts_implementation=`` gives the model: loaded, always; before the weights load, where nnsight's meta build forwards the kwarg."""
+def test_support_reports_the_experts_implementation_a_load_runs():
+    """``support`` says what ``experts_implementation=`` gives the model: loaded, always; before the weights load, where nnsight's meta build forwards the kwarg."""
     import pytest
 
     from nnter import StandardizedTransformer
 
     loaded = StandardizedTransformer(TestMixtral.REPO, dispatch=True, experts_implementation="eager")
-    assert "experts_implementation=" in loaded.status(layer=0)["mlp.expert_outputs"]
-    assert StandardizedTransformer(TestMixtral.REPO).status(layer=0)["mlp.expert_outputs"] is None
+    assert "experts_implementation=" in loaded.support(layer=0)["mlp.expert_outputs"]
+    assert StandardizedTransformer(TestMixtral.REPO).support(layer=0)["mlp.expert_outputs"] is None
     lazy = StandardizedTransformer(TestMixtral.REPO, experts_implementation="eager")
     if lazy.config._experts_implementation != "eager":
         pytest.skip("this nnsight builds the meta model without experts_implementation=")
-    assert "experts_implementation=" in lazy.status(layer=0)["mlp.expert_outputs"]
+    assert "experts_implementation=" in lazy.support(layer=0)["mlp.expert_outputs"]
 
 
 def routed_by_hand(moe, x, idx, w):

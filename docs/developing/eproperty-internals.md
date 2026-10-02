@@ -121,7 +121,7 @@ is stored as nnsight's `key`; a callable one is stored as `locate` and the
 they are still `None`: a bare marker `attention_probabilities =
 unavailable("...")` (`:262-269`) is never called on a stub, so nnsight's
 `__call__` never ran to set them; without this the marker would have no
-name in the repr and `status()`.
+name in the repr and `support()`.
 
 ### The path grammar
 
@@ -302,7 +302,7 @@ block.
   `Unavailable`, since Python's default only swallows `AttributeError`
   (`tests/test_base.py:49-52`). The reason this is not turned into an
   `AttributeError` is fact 2 again: the reason text would be lost. Use
-  `status()`.
+  `support()`.
 
 ## `Standard`: the `sourced` flag
 
@@ -342,7 +342,7 @@ is instrumented.
 
 `values()` (`:62-65`) collects a class's `EProperty`s by name, base classes
 first, through the module-level `values(cls)` (`:24-31`) the root's
-`status()` uses for its own class, and `status()` (`:67-69`) maps each to
+`support()` uses for its own class, and `support()` (`:67-69`) maps each to
 its reason on this instance.
 
 ## `DerivedEProperty`: computed, read-only
@@ -378,7 +378,7 @@ One thing on the root is none of these. A size (`num_layers`, `hidden_size`,
 `vocab_size`, `num_heads`, `num_kv_heads`, `head_dim`, `qk_head_dim`,
 `intermediate_size`) is a `StandardizedProperty` (`nnter/standardized.py:26-50`),
 a bare descriptor with no `eproperty` underneath: no location, nothing served
-during a trace, no `description`, `layout` or `status()` entry.
+during a trace, no `description`, `layout` or `support()` entry.
 Its `__get__` (`:43-47`) does one lookup, `getattr(obj.family, name)`, and calls
 that function with the model when the family module defines it, else the
 wrapped plain rule (`:399-433`); its `__set__` (`:49-50`) raises

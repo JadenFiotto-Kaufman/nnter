@@ -6,7 +6,7 @@ scaled embedding (times ``sqrt(d_model)`` under ``scale_embedding``), so
 ``token_embeddings`` is the scaled lookup; the sinusoidal positions are added
 after it, outside any module with a standard name. As on OPT there is no MLP
 module: ``fc1`` and ``fc2`` sit on the block, so ``mlp`` and ``mlp_output`` do not
-exist here and `StandardizedTransformer.status` says so. The block's own
+exist here and `StandardizedTransformer.support` says so. The block's own
 ``final_layer_norm`` is the pre-MLP norm and keeps its native name. The block
 returns a bare tensor. The attention does its own arithmetic whatever
 ``attn_implementation`` says (the model has no other): queries scaled by

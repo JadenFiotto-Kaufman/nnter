@@ -100,14 +100,14 @@ next(model._module.parameters()).device          # device(type='cpu')
 ## `dispatch` and `attn_implementation`
 
 Without `dispatch=True` the model is built on the meta device and the weights load at the
-first trace, as with any `TransformersModel`; `model.status()` and the sizes work either
+first trace, as with any `TransformersModel`; `model.support()` and the sizes work either
 way, since they read the config.
 
 `attn_implementation` is transformers' argument and it keeps transformers' default
 (`sdpa` where available). The attention interior (`attention_probabilities`,
 `attention_scores`, `attention_queries`, `attention_keys`, `attention_values`,
 `attention_head_outputs`) is read inside the eager attention forward, so under any other
-implementation those values are unavailable and `status()` says so:
+implementation those values are unavailable and `support()` says so:
 
 ```
 "read inside the eager attention forward, but this model runs 'sdpa'; load with attn_implementation='eager'"
@@ -214,7 +214,7 @@ GPT2Block(
 The root's own values (`logits`, `token_embeddings`, `next_token_probs`, `input_ids`,
 `attention_mask`, `input_size`) print the same way at the end of `print(model)`; see
 [root-values](root-values.md). A value is listed whether or not this checkpoint has it;
-`status()` is what says.
+`support()` is what says.
 
 ## Gotchas
 
@@ -238,7 +238,7 @@ The root's own values (`logits`, `token_embeddings`, `next_token_probs`, `input_
 ## Related
 
 - [vocabulary](vocabulary.md): the standard names and how they map per family.
-- [availability](availability.md): `status()` and what a checkpoint lacks.
+- [availability](availability.md): `support()` and what a checkpoint lacks.
 - [root-values](root-values.md): `logits`, `token_embeddings`, sizes.
 - [residual-stream](residual-stream.md): the three contribution values.
 - nnsight docs/usage/rename-modules.md: the `rename=` key forms.

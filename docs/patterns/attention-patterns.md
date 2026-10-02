@@ -44,12 +44,12 @@ assert torch.equal(pattern.tril(), pattern)                      # causal: nothi
 assert torch.allclose(pattern.sum(-1), torch.ones_like(pattern.sum(-1)), atol=1e-4)   # rows sum to one (see the sink caveat)
 ```
 
-Without `attn_implementation="eager"` the value is unavailable and `status()` says
+Without `attn_implementation="eager"` the value is unavailable and `support()` says
 why, before anything runs:
 
 ```python
 sdpa = StandardizedTransformer("openai-community/gpt2", dispatch=True)         # the checkpoint's default is sdpa
-sdpa.status()["self_attn.attention_probabilities"]
+sdpa.support()["self_attn.attention_probabilities"]
 # {0: "read inside the eager attention forward, but this model runs 'sdpa'; load with attn_implementation='eager'", 1: ...}
 ```
 
@@ -163,7 +163,7 @@ one block of granite-swash-2b). So `attention_probabilities` there is not what r
 ## Gotchas
 
 - Eager is required and is not the default: a checkpoint loads `sdpa` unless you
-  pass `attn_implementation="eager"`. Check `status()` rather than `hasattr`, which
+  pass `attn_implementation="eager"`. Check `support()` rather than `hasattr`, which
   raises `Unavailable` when the value is unavailable.
 - Reads follow the forward. In one trace read the pattern before `model.logits`;
   after a write to the pattern, do not read it back once the model has moved on
@@ -181,7 +181,7 @@ one block of granite-swash-2b). So `attention_probabilities` there is not what r
 - The pattern is in the model's dtype: on a bf16 checkpoint rows sum to one within
   a few ulps, not exactly.
 - A GPT-2 checkpoint with `reorder_and_upcast_attn` set takes GPT-2's own upcast
-  path, off the shared interface; `status()` reports the pattern unavailable there.
+  path, off the shared interface; `support()` reports the pattern unavailable there.
 - GPT-J, GPT-Neo, BLOOM, MPT and Falcon compute attention themselves; their families map
   the pattern onto their own softmax (Falcon's onto the softmax without alibi and
   onto the dropout after the second softmax with it, by `config.alibi`).
@@ -192,6 +192,6 @@ one block of granite-swash-2b). So `attention_probabilities` there is not what r
 - [contribution-decomposition](contribution-decomposition.md): what each head
   writes, from `attention_head_outputs`.
 - [logit-lens](logit-lens.md).
-- [../usage/availability.md](../usage/availability.md): `status()` and the reasons.
+- [../usage/availability.md](../usage/availability.md): `support()` and the reasons.
 - [../usage/loading.md](../usage/loading.md): `attn_implementation` at load.
 - nnsight `docs/usage/source.md`: how `.source` reaches operations inside a forward.

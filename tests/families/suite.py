@@ -143,7 +143,7 @@ class FamilySuite:
     FAMILY = None
     #: Standard path -> native path (see `rows`).
     NATIVE: dict
-    #: Values this checkpoint lacks: status key -> a substring of the reason.
+    #: Values this checkpoint lacks: `support()` key -> a substring of the reason.
     EXPECTED_UNAVAILABLE: dict = {}
     #: torch refuses in-place edits on q/k/v that come out of a multi-view op (split, chunk).
     REFUSES_IN_PLACE_QKV = False
@@ -183,7 +183,7 @@ class FamilySuite:
 
     def has_mlp(self, model):
         """Every block has an MLP."""
-        return model.status().get("mlp.mlp_output", "absent") is None
+        return model.support().get("mlp.mlp_output", "absent") is None
 
     def any_mlp(self, model):
         """Some block has an MLP (Nemotron-H's MLP blocks are their own blocks)."""
@@ -264,26 +264,26 @@ class FamilySuite:
 
     # -- availability -----------------------------------------------------------
 
-    def test_status_lists_every_standard_value(self, model):
-        status = model.status()
+    def test_support_lists_every_standard_value(self, model):
+        support = model.support()
         expected = self.expected_values(model)
-        assert set(status) == expected
-        assert set(model.status(layer=0)) == expected - {"logits", "token_embeddings", "next_token_probs", "input_ids", "attention_mask", "input_size"}
+        assert set(support) == expected
+        assert set(model.support(layer=0)) == expected - {"logits", "token_embeddings", "next_token_probs", "input_ids", "attention_mask", "input_size"}
 
-    def test_status_is_what_this_family_expects(self, model):
-        for name, reason in model.status().items():
+    def test_support_is_what_this_family_expects(self, model):
+        for name, reason in model.support().items():
             if name.removeprefix("mlp.") in MOE:
-                continue  # test_moe_status_is_what_this_family_expects
+                continue  # test_moe_support_is_what_this_family_expects
             if name in self.EXPECTED_UNAVAILABLE:
                 assert isinstance(reason, dict) and reason, name
                 assert all(self.EXPECTED_UNAVAILABLE[name] in r for r in reason.values()), name
             else:
                 assert reason is None, (name, reason)
 
-    def test_status_matches_what_reads(self, model):
+    def test_support_matches_what_reads(self, model):
         """Every value reported available reads; every one reported unavailable raises with that reason."""
         layer = model.layers[0]
-        for name, reason in model.status(layer=0).items():
+        for name, reason in model.support(layer=0).items():
             module, _, value = name.rpartition(".")
             host = getattr(layer, module, None) if module else layer
             if reason is None:
@@ -438,10 +438,10 @@ class FamilySuite:
     def test_every_source_value_resolves_on_every_layer(self, model):
         """The op names inside a forward are what releases rename; every one must resolve."""
         blocks = self.attn_blocks(model)
-        status = model.status(layer=int(self.attn_block(model).path.rsplit(".", 1)[1]))
+        support = model.support(layer=int(self.attn_block(model).path.rsplit(".", 1)[1]))
         names = [
             name for name, attr in self.FAMILY.Attention.values().items()
-            if attr.inside_forward() and status[f"self_attn.{name}"] is None
+            if attr.inside_forward() and support[f"self_attn.{name}"] is None
         ]
         assert "attention_probabilities" in names
         read = {}
@@ -601,10 +601,10 @@ class FamilySuite:
         linear = next((layer.linear_attn for layer in model.layers if getattr(layer, "linear_attn", None) is not None), None)
         if linear is not None:
             hosts.append(linear)
-        root_status = {k: v for k, v in model.status().items() if "." not in k}
+        root_support = {k: v for k, v in model.support().items() if "." not in k}
         checked = 0
         for host in hosts:
-            unavailable = root_status if host is model else host.status()
+            unavailable = root_support if host is model else host.support()
             for name, value in Standard.values.__func__(type(host)).items():
                 if value.layout is None or unavailable.get(name):
                     continue
@@ -740,7 +740,7 @@ class FamilySuite:
             kinds.setdefault((type(module), tuple(tuple(p.shape) for p in module.parameters())), layer)
         for layer in kinds.values():
             attn = layer.self_attn
-            status = attn.status()
+            support = attn.support()
             kv = attn.num_heads if self.KV_HEADS_EXPANDED else attn.num_kv_heads
             widths = (attn.head_dim, attn.qk_head_dim) if self.KV_HEADS_EXPANDED else (attn.head_dim,)  # latent attention may pad values
             expected = {
@@ -751,7 +751,7 @@ class FamilySuite:
                 "attention_head_outputs": lambda t: t.shape[2] == attn.num_heads and t.shape[3] in widths,
             }
             for name, check in expected.items():
-                if status[name] is not None:
+                if support[name] is not None:
                     continue
                 with model.trace(PROMPT):  # one trace each: families bind these at different points of the forward
                     tensor = getattr(attn, name).save()
@@ -802,7 +802,7 @@ class FamilySuite:
         return got
 
     def available(self, host, name):
-        return host.status()[name] is None
+        return host.support()[name] is None
 
     def routed_scale(self, host) -> float:
         """What ``routed_output`` is times the experts' sum (Laguna scales it in the mixture)."""
@@ -815,12 +815,12 @@ class FamilySuite:
         out = first_tensor(out)
         return out.reshape(1, -1, out.shape[-1])
 
-    def test_moe_status_is_what_this_family_expects(self, model):
+    def test_moe_support_is_what_this_family_expects(self, model):
         """On the mixture every value is available but those the family lists; a dense block's `Moe` says why it has none."""
         host = self.moe(model)
-        status = host.status()
+        support = host.support()
         for name in MOE:
-            reason = status[name]
+            reason = support[name]
             if name in self.MOE_UNAVAILABLE:
                 assert reason and self.MOE_UNAVAILABLE[name] in reason, (name, reason)
             elif name == "shared_expert_output" and reason == "this mixture has no shared expert":
@@ -830,7 +830,7 @@ class FamilySuite:
         for layer in model.layers:
             mlp = getattr(layer, "mlp", None)
             if isinstance(mlp, Moe) and mlp.no_mixture():
-                assert all(mlp.status()[name] == mlp.no_mixture() for name in MOE if name not in self.MOE_UNAVAILABLE), layer.path
+                assert all(mlp.support()[name] == mlp.no_mixture() for name in MOE if name not in self.MOE_UNAVAILABLE), layer.path
 
     def test_moe_sizes_are_the_modules(self, model):
         host = self.moe(model)
@@ -844,7 +844,7 @@ class FamilySuite:
     def test_expert_outputs_sum_to_the_routed_output(self, model):
         host = self.moe(model)
         if not self.available(host, "expert_outputs"):
-            pytest.skip(host.status()["expert_outputs"])
+            pytest.skip(host.support()["expert_outputs"])
         got = self.moe_read(model, host, "expert_outputs", "routed_output")
         slots, routed = got["expert_outputs"], got["routed_output"]
         assert slots.shape[:3] == (*routed.shape[:2], host.top_k) and slots.shape[3] == routed.shape[2]
@@ -853,7 +853,7 @@ class FamilySuite:
     def test_routed_plus_shared_is_the_mixture(self, model):
         host = self.moe(model)
         if not self.available(host, "routed_output"):
-            pytest.skip(host.status()["routed_output"])
+            pytest.skip(host.support()["routed_output"])
         routed = self.moe_read(model, host, "routed_output")["routed_output"]
         shared = self.moe_read(model, host, "shared_expert_output")["shared_expert_output"] if self.available(host, "shared_expert_output") else 0
         near(routed + shared, self.mixture_output(model, host), routed)
@@ -861,7 +861,7 @@ class FamilySuite:
     def test_writes_to_the_shared_expert_output_land(self, model):
         host = self.moe(model)
         if not self.available(host, "shared_expert_output"):
-            pytest.skip(host.status()["shared_expert_output"])
+            pytest.skip(host.support()["shared_expert_output"])
         with model.trace(PROMPT):
             clean = host.mlp_output.save()
         with model.trace(PROMPT):
@@ -885,7 +885,7 @@ class FamilySuite:
         """``expert_weights[0, t, j] = 0`` moves ``routed_output`` at token ``t`` only, by that slot's weighted output."""
         host = self.moe(model)
         if not self.available(host, "expert_weights"):
-            pytest.skip(host.status()["expert_weights"])
+            pytest.skip(host.support()["expert_weights"])
         got = self.moe_read(model, host, "expert_weights", "routed_output")
         w, routed = got["expert_weights"], got["routed_output"]
         t, j = self._ablatable_slot(host, w)
@@ -904,7 +904,7 @@ class FamilySuite:
         """``expert_weights = w.masked_fill(expert_indices == e, 0)`` removes exactly expert ``e``'s slots."""
         host = self.moe(model)
         if not self.available(host, "expert_weights"):
-            pytest.skip(host.status()["expert_weights"])
+            pytest.skip(host.support()["expert_weights"])
         got = self.moe_read(model, host, "expert_weights", "expert_indices", "routed_output")
         w, idx, routed = got["expert_weights"], got["expert_indices"], got["routed_output"]
         chosen = idx[w != 0]
@@ -1036,8 +1036,8 @@ class FamilySuite:
         model = StandardizedTransformer(cls.REPO, dispatch=True, attn_implementation="eager", experts_implementation="eager", **cls.LOAD_KWARGS)
         host = self.moe(model)
         if "expert_outputs" in self.MOE_UNAVAILABLE:
-            pytest.skip(host.status()["expert_outputs"])
-        reason = host.status()["expert_outputs"]
+            pytest.skip(host.support()["expert_outputs"])
+        reason = host.support()["expert_outputs"]
         assert reason and "experts_implementation=" in reason and "'eager'" in reason
         with pytest.raises(Unavailable, match="experts_implementation="):
             with model.trace(PROMPT):

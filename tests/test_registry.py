@@ -89,23 +89,23 @@ def test_remote_key_names_the_plain_transformers_model():
 def test_default_load_keeps_the_checkpoints_attention():
     model = StandardizedTransformer("hf-internal-testing/tiny-random-LlamaForCausalLM")
     assert model.config._attn_implementation != "eager"
-    assert "eager" in model.status()["self_attn.attention_probabilities"][0]
-    assert model.status()["self_attn.attention_output"] is None
+    assert "eager" in model.support()["self_attn.attention_probabilities"][0]
+    assert model.support()["self_attn.attention_output"] is None
 
 
-def test_register_needs_only_names_and_envoys_for_status():
-    """`status()` walks the tree, so a family without `Attention`/`Mlp` classes still reports every block value."""
+def test_register_needs_only_names_and_envoys_for_support():
+    """`support()` walks the tree, so a family without `Attention`/`Mlp` classes still reports every block value."""
     custom = types.SimpleNamespace(MODEL_TYPES=("gpt2",), RENAME=gpt2.RENAME, ENVOYS=gpt2.ENVOYS)
     try:
         families.register(custom)
-        status = StandardizedTransformer(GPT2).status()
+        support = StandardizedTransformer(GPT2).support()
     finally:
         del families.REGISTRY["gpt2"]
-    assert "self_attn.attention_output" in status and "mlp.mlp_output" in status
+    assert "self_attn.attention_output" in support and "mlp.mlp_output" in support
 
 
-def test_custom_value_through_envoys_is_in_status():
-    """A value added on an envoy subclass passed through ``envoys=`` is listed by `status()` like the family's own."""
+def test_custom_value_through_envoys_is_in_support():
+    """A value added on an envoy subclass passed through ``envoys=`` is listed by `support()` like the family's own."""
     from transformers.models.gpt2.modeling_gpt2 import GPT2Attention
 
     from nnter.components import DerivedEProperty
@@ -114,9 +114,9 @@ def test_custom_value_through_envoys_is_in_status():
         heads = DerivedEProperty(lambda self: self._module.num_heads, description="The head count")
 
     model = StandardizedTransformer(GPT2, envoys={GPT2Attention: Attention})
-    assert model.status()["self_attn.heads"] is None
-    assert model.status(layer=0)["self_attn.heads"] is None
-    assert "self_attn.heads" not in StandardizedTransformer(GPT2).status()
+    assert model.support()["self_attn.heads"] is None
+    assert model.support(layer=0)["self_attn.heads"] is None
+    assert "self_attn.heads" not in StandardizedTransformer(GPT2).support()
 
 
 def test_family_defines_a_size_instead_of_the_root():

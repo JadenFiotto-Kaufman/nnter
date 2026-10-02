@@ -139,7 +139,7 @@ interface `num_heads` key/value heads, so the root also publishes
 Both are nnsight `eproperty` descriptors, so they show up in the model's repr
 with their description. `attention_probabilities` reaches into the forward
 through nnsight's `.source`, so it needs the eager attention path: load with
-`attn_implementation="eager"`, or the value is unavailable (`status()` says so,
+`attn_implementation="eager"`, or the value is unavailable (`support()` says so,
 and a read raises `Unavailable` naming the implementation the model runs).
 
 Its key is a path into the forward,
@@ -177,12 +177,12 @@ Falcon's block adds the attention into the MLP's output tensor in place, so its
 residual streams: `layer_output` is the block's own `[batch, seq, streams, hidden]`,
 the contributions are the sublayers' own outputs, and the block's stream weights are
 four values on its `Layer` (docs/reference/families.md, "Hyper-connection residual"). OPT has no MLP module, and
-`status()` lists no `mlp` value for it.
+`support()` lists no `mlp` value for it.
 
 Pass `envoys=` to `StandardizedTransformer` to add your own; yours replace the
 family's on the same key. nnsight tries type keys before path keys, so to
 displace a family's type-keyed envoy, key yours on the type too. A value on a
-class installed this way is listed by `model.status()` like the family's own.
+class installed this way is listed by `model.support()` like the family's own.
 
 ## Hybrids: gated DeltaNet
 
@@ -202,7 +202,7 @@ gives such a block:
 | `state_input` / `state_output` | the recurrent state entering and leaving the layer, `[batch, heads, key_dim, value_dim]` (`None` entering on a fresh prompt) |
 | `attention_head_outputs` | each head's read of the state, `[batch, seq, heads, value_dim]` |
 
-A block has either `self_attn` or `linear_attn`, so `status()` reports each
+A block has either `self_attn` or `linear_attn`, so `support()` reports each
 `self_attn` value as missing on the linear blocks and vice versa, per block.
 The values are read at the delta-rule kernel call. A prompt runs the chunked
 kernel and each decode step of `generate` the recurrent one, two different
@@ -212,7 +212,7 @@ the call that fires on this step (`RecurrentMixer.KERNEL`), so the same value
 works in a `trace` and at every step of `tracer.iter`, and the state hands
 off from one step to the next. They need transformers' pure-torch kernels: with
 `flash-linear-attention` or `causal-conv1d` installed the kernel has no Python
-source, and `status()` says so.
+source, and `support()` says so.
 
 The state *after every token* of a prompt is a further step, and like eager
 attention it is a choice made at load. The chunked kernel a prompt normally
@@ -264,7 +264,7 @@ own first token on every step (occurrences are per location over the whole
 run, so they offset by what earlier steps put through the op).
 
 Without the switch, reading any of them raises `Unavailable` with that
-instruction, and `status()` reports it. The results are the same to float error: the two kernels compute
+instruction, and `support()` reports it. The results are the same to float error: the two kernels compute
 the same rule. Reads follow the forward: in one trace, positions before a
 write come before it and positions after it come after; `states` reads every
 position, so it goes in a trace of its own.
@@ -359,14 +359,14 @@ answers that before any trace runs:
 
 ```python
 model = StandardizedTransformer("facebook/opt-125m")
-model.status()
+model.support()
 # {'logits': None, 'token_embeddings': None, 'next_token_probs': None,
 #  'layer_output': None,
 #  'self_attn.attention_output': None,
 #  'self_attn.attention_probabilities': {0: "read inside the eager attention forward, but this model runs 'sdpa'; ...", ...},
 #  ...}                       # no 'mlp.*' key: no block has an mlp module
-model.status(layer=3)        # one block, flat
-model.layers[3].self_attn.status()   # one envoy
+model.support(layer=3)        # one block, flat
+model.layers[3].self_attn.support()   # one envoy
 ```
 
 `None` means available; otherwise the reason, per block where it differs. The
@@ -417,7 +417,7 @@ One file per family under `tests/families/` (92 families, 96 checkpoints), each 
 (`tests/families/suite.py`) with its pinned tiny checkpoint, native paths and
 quirks, plus the tests that are specific to it. The suite is every end-to-end
 statement a family must satisfy: aliases reach the native modules; every
-standard value reads, writes, and appears in `status()` exactly as the family
+standard value reads, writes, and appears in `support()` exactly as the family
 expects; the contribution identity holds; a standardized model's activations
 and logits equal a raw one's; the pattern's shape and row sums; every
 source-located value resolves on every layer and a written pattern moves the

@@ -14,7 +14,7 @@ The nnter docs use each of these words in exactly one sense. This page gives tha
 
 ## Canonical pattern
 
-The terms in one block: a *family* resolved from the checkpoint, a *standard name* aliasing a *native name*, *availability* reported by `status()` and enforced by `Unavailable`.
+The terms in one block: a *family* resolved from the checkpoint, a *standard name* aliasing a *native name*, *availability* reported by `support()` and enforced by `Unavailable`.
 
 ```python
 from nnter import StandardizedTransformer, Unavailable
@@ -23,7 +23,7 @@ model = StandardizedTransformer("meta-llama/Llama-3.1-8B", dispatch=True)   # th
 
 print(model.family.__name__)                                                # nnter.families.llama
 print(model.layers[0].self_attn is model.model.layers[0].self_attn)         # True: the standard name is an alias of the native one
-print(model.status()["self_attn.attention_probabilities"][0])              # read inside the eager attention forward, but this model runs 'sdpa'; ...
+print(model.support()["self_attn.attention_probabilities"][0])              # read inside the eager attention forward, but this model runs 'sdpa'; ...
 
 try:
     with model.trace("Hello"):
@@ -42,7 +42,7 @@ A learned per-head logit that joins the softmax as one extra key column and is d
 
 ## Availability, `Unavailable`
 
-Whether this checkpoint has a standard value. `status()` returns `None` (available) or a reason string; reading or writing an unavailable value raises `nnter.Unavailable` with the same reason, at that line, before the model runs. Decided per envoy by the descriptor's `unavailable=` (a string, or a predicate of the envoy), so a config flag or a hybrid's block type can decide. See [../usage/availability.md](../usage/availability.md).
+Whether this checkpoint has a standard value. `support()` returns `None` (available) or a reason string; reading or writing an unavailable value raises `nnter.Unavailable` with the same reason, at that line, before the model runs. Decided per envoy by the descriptor's `unavailable=` (a string, or a predicate of the envoy), so a config flag or a hybrid's block type can decide. See [../usage/availability.md](../usage/availability.md).
 
 ## Chunked kernel, recurrent kernel
 
@@ -78,7 +78,7 @@ The linear-attention mixer of Qwen3-Next and Qwen3.5 (`linear_attn`): queries, k
 
 ## Hybrid
 
-A family whose blocks are of two kinds: Qwen3-Next, Qwen3.5 (text) and Qwen3.5-MoE (text) have `linear_attn` (gated DeltaNet, a `LinearAttention`, a `RecurrentMixer`) on three blocks in four and `self_attn` on the fourth, per `config.layer_types`; never both on one block. `status()` reads per block there. See [families.md](families.md#hybrids).
+A family whose blocks are of two kinds: Qwen3-Next, Qwen3.5 (text) and Qwen3.5-MoE (text) have `linear_attn` (gated DeltaNet, a `LinearAttention`, a `RecurrentMixer`) on three blocks in four and `self_attn` on the fourth, per `config.layer_types`; never both on one block. `support()` reads per block there. See [families.md](families.md#hybrids).
 
 ## Interface (`attention_interface_1`)
 
@@ -162,15 +162,15 @@ An alias from Llama's vocabulary that every family answers to: `embed_tokens`, `
 
 ## Standard value
 
-An `EProperty` on a `Layer`, `Attention`, `Mlp` or `LinearAttention` envoy or on the root, meaning the same thing on every family: `layer_output`, `attention_output`, `mlp_output`, `attention_probabilities`, `logits`, `states`, and the rest of [api-quick-reference.md](api-quick-reference.md). Listed in the repr, reported by `status()`, checked by the suite. See [../usage/root-values.md](../usage/root-values.md).
+An `EProperty` on a `Layer`, `Attention`, `Mlp` or `LinearAttention` envoy or on the root, meaning the same thing on every family: `layer_output`, `attention_output`, `mlp_output`, `attention_probabilities`, `logits`, `states`, and the rest of [api-quick-reference.md](api-quick-reference.md). Listed in the repr, reported by `support()`, checked by the suite. See [../usage/root-values.md](../usage/root-values.md).
 
 ## `StandardizedProperty`
 
-The descriptor each root size is (`num_layers`, `hidden_size`, `vocab_size`, `num_heads`, `num_kv_heads`, `head_dim`, `qk_head_dim`, `intermediate_size`): outside a trace, a plain rule over the config, unless the model's family module defines a function of the same name, which then answers (`falcon.num_kv_heads`, `deepseek_v2.head_dim`, `gpt2.intermediate_size`). Read-only: assigning one raises `AttributeError`. Not an eproperty: no location, nothing in the repr or `status()`. See [../usage/root-values.md](../usage/root-values.md#sizes).
+The descriptor each root size is (`num_layers`, `hidden_size`, `vocab_size`, `num_heads`, `num_kv_heads`, `head_dim`, `qk_head_dim`, `intermediate_size`): outside a trace, a plain rule over the config, unless the model's family module defines a function of the same name, which then answers (`falcon.num_kv_heads`, `deepseek_v2.head_dim`, `gpt2.intermediate_size`). Read-only: assigning one raises `AttributeError`. Not an eproperty: no location, nothing in the repr or `support()`. See [../usage/root-values.md](../usage/root-values.md#sizes).
 
-## `status()`
+## `support()`
 
-`model.status()` (every value, `None` or `{layer: reason}`), `model.status(layer=i)` (one block, flat) and `envoy.status()` (one envoy): what this checkpoint has, computed from the tree and the config without running anything. See [../usage/availability.md](../usage/availability.md).
+`model.support()` (every value, `None` or `{layer: reason}`), `model.support(layer=i)` (one block, flat) and `envoy.support()` (one envoy): what this checkpoint has, computed from the tree and the config without running anything. See [../usage/availability.md](../usage/availability.md).
 
 ## Step (`tracer.iter`)
 
@@ -193,7 +193,7 @@ A decoder block whose forward returns `(hidden_states, ...)` rather than the ten
 - "Standard name" is a name; "standard value" is a served tensor. `model.layers[3].self_attn` is a name; `model.layers[3].self_attn.attention_output` is a value.
 - `post_attention_layernorm` is a standard *name* but not a standard *meaning*: on a sandwich block it follows the attention. What enters a sublayer is `self_attn.input` / `mlp.input`.
 - "Available" is per envoy: on a hybrid the same value is available on some blocks and `"no self_attn module on this block"` on others.
-- `hasattr(envoy, value)` raises `Unavailable` rather than returning `False`; `status()` is the question to ask.
+- `hasattr(envoy, value)` raises `Unavailable` rather than returning `False`; `support()` is the question to ask.
 - "Occurrence" counts over the whole run, "step" counts `tracer.iter` iterations; `states`, `state_after` and `set_state_after` translate between the two by counting from the current call's first token.
 
 ## Related

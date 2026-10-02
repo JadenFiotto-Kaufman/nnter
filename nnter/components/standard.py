@@ -91,6 +91,6 @@ class Standard(Envoy):
         """This class's standard values by name, base classes first."""
         return values(cls)
 
-    def status(self) -> dict[str, str | None]:
+    def support(self) -> dict[str, str | None]:
         """Each standard value here -> ``None`` when available, else the reason."""
         return {name: value.reason(self) for name, value in self.values().items()}

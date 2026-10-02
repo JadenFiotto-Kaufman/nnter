@@ -57,7 +57,7 @@ Status legend: **same** (name and semantics), **renamed** (same semantics, new s
 | `block_structure: str` (`ru.py:1515-1532`) | none | missing | `contributing.md:217-218` marks trivial. |
 | `is_vllm: bool` | none | missing | No vLLM path. |
 | `remote: bool` | none | missing | |
-| `internals: Internals` (`internals.py:14`) | `model.status()` (`S.py:287-313`), `Standard.values()` (`comp/standard.py:62-65`) | changed | No forward-order `rank` (`internals.py:59-70`); `contributing.md:181-184` open. |
+| `internals: Internals` (`internals.py:14`) | `model.support()` (`S.py:287-313`), `Standard.values()` (`comp/standard.py:62-65`) | changed | No forward-order `rank` (`internals.py:59-70`); `contributing.md:181-184` open. |
 | — | `model.family: ModuleType` (`S.py:122`, `:142`) | new | |
 | — | `model.embed_tokens`, `model.norm`, `model.lm_head` typed attrs (`S.py:124-126`) | renamed | nnterp: `model.embed_tokens`, `model.ln_final`, `model.lm_head`; nnterp containers stay under `model.model` (`ru.py:159`), nnter lifts them to the root (`README.md:23-24`). |
 
@@ -107,7 +107,7 @@ nnterp spelling is `model.<row>[i]` (read) / `model.<row>[i] = v` (write); whole
 
 | nnterp (`st.py`) | nnter (`S.py`) | status | note |
 |---|---|---|---|
-| `attn_probs_available` (`:370-375`) | `model.status()["self_attn.attention_probabilities"] is None` (`:260-286`) | changed | Bool → reason dict. |
+| `attn_probs_available` (`:370-375`) | `model.support()["self_attn.attention_probabilities"] is None` (`:260-286`) | changed | Bool → reason dict. |
 | `input_ids` (`:377-384`, read-only property) | `input_ids` (`:328-336`, assignable EProperty) | same + | nnter can assign: the model then runs on the new ids. |
 | `input_size` (`:386-393`) | `input_size` (`:348-355`) | same | Both `torch.Size`; nnter refuses assignment with `AttributeError`. |
 | `attention_mask` (`:395-402`) | `attention_mask` (`:338-346`, assignable) | same + | |
@@ -124,7 +124,7 @@ nnterp spelling is `model.<row>[i]` (read) / `model.<row>[i] = v` (write); whole
 | `logits` property (`:738-743`) | `logits` EProperty (`:151-165`) | same | |
 | `dispatch()` re-pins kernels (`:732-736`) | inherited nnsight `dispatch()` | changed | nnter needs no re-pin: `route_delta_rule` rebinds module globals (§3.9). |
 | `_remoteable_class()` → `TransformersModel` (`:729-730`) | same (`:413-422`) | same | |
-| — | `status(layer=None)` (`:260-286`) | new | |
+| — | `support(layer=None)` (`:260-286`) | new | |
 | — | `family`, sizes as `StandardizedProperty` (`:25-49`) | new | |
 
 ### 1f. `StandardizedVLM` (`st.py:746-824`) and `StandardizedVLLM` (`standardized_vllm.py`)
@@ -180,7 +180,7 @@ nnterp spelling is `model.<row>[i]` (read) / `model.<row>[i] = v` (write); whole
 | `get_attention_layers(layers)` (`:428-439`), `linear_attention_error` (`:442-447`) | none | missing | |
 | `Selection`, `Index(*steps)`, `Copied()`, `FirstIfTuple()` (`:450-513`) | `select: int \| str` (one step only, `comp/eproperty.py:195-223`); `first_tensor`/`rewrap` (`comp/standard.py:13-21`); a `preprocess` that clones (`linear_attention.py:76-85`) | changed | No multi-step `Index(0, 1)`; nnter uses `"source.attention_interface_1.inputs", select=1`. |
 | `Address(module, io, op, select, order, unavailable, tags, per_layer, seq_axis, width, heads, keys, needs, scan)` (`:516-631`) | `EProperty(key, description, unavailable, select)` with a path for a key (`"output"`, `"../norm.output"`, `"source.<op>.inputs"`), `DerivedEProperty(compute, ...)` (`comp/eproperty.py`) | changed | Lost: `order`, `tags`, `seq_axis`, `width`, `heads`, `keys`, `needs`, `scan`. Gained: `.layout`/`.dims` (`:122-145`), `description` in the repr. |
-| `LayerAccessor.unavailable_on(layer)` (`:700-723`) | `EProperty.reason(envoy)` (`:103-105`), `Standard.status()` | renamed | |
+| `LayerAccessor.unavailable_on(layer)` (`:700-723`) | `EProperty.reason(envoy)` (`:103-105`), `Standard.support()` | renamed | |
 | `LayerAccessor.num_heads`, `.width` (`:734-752`) | none; `.dims` names axes but not sizes | missing | |
 | `LayerAccessor.scan(layer, cuts, edit)` (`:754-778`) | `LinearAttention.states/state_after/set_state_after` (§3.9) | changed | |
 | `LayerAccessor.disable(reason)` (`:780-786`) | none; `unavailable=` is declared on the class | missing | No runtime disabling. |
@@ -201,7 +201,7 @@ nnterp spelling is `model.<row>[i]` (read) / `model.<row>[i] = v` (write); whole
 | `get_ignores`, `check_io`, `_check_has_module`, `_check_attention_layers`, `_warn_heterogeneous_types`, `_check_output_source`, `check_model_renaming` (`:1609-1943`) | none (suite) | dropped | `contributing.md:174-175`, `:185-189`. |
 | `HF_TO_VLLM_KWARGS_MAP`, `hf_kwargs_to_vllm_kwargs` (`:1946-1964`) | none | missing | |
 | `Internals[name]` (`internals.py:34-40`) | `type(envoy).<name>` / `Standard.values()[name]` | changed | |
-| `Internals.status(layer=None)` (`:42-57`): a per-layer row is available if **any** layer has it | `model.status(layer=None)` (`S.py:287-313`): `None` only if available on **every** block, else `{layer: reason}` | changed | Opposite aggregation; keys are dotted (`"self_attn.attention_probabilities"`). |
+| `Internals.status(layer=None)` (`:42-57`): a per-layer row is available if **any** layer has it | `model.support(layer=None)` (`S.py:287-313`): `None` only if available on **every** block, else `{layer: reason}` | changed | Opposite aggregation; keys are dotted (`"self_attn.attention_probabilities"`). |
 | `Internals.rank(name, layer)` (`:59-70`) | none | missing | `contributing.md:181-184` open. |
 
 ### 1j. `interventions.py`, `display.py`, `utils.py`, `logging.py`, `__main__.py`
@@ -248,7 +248,7 @@ nnterp spelling is `model.<row>[i]` (read) / `model.<row>[i] = v` (write); whole
 - `steer(..., positions=)` deprecated alias (`st.py:471`, `:486-496`), vLLM clone path (`:505-524`), and the ascending sort (`:500`). Not listed.
 - `get_topk_closest_tokens` shape check and dict-for-1-D return (`st.py:577-586`). Not listed.
 - `probs_to_dict(tokens, probs)` (`st.py:553-560`): nnter's is `(probs, k)`. Not listed.
-- `attn_probs_available` bool (`st.py:370-375`). Not listed; `status()` covers it.
+- `attn_probs_available` bool (`st.py:370-375`). Not listed; `support()` covers it.
 - `detect_layer_output_type()` (`st.py:330-353`). Deliberately unnecessary.
 - `dispatch()` re-pin (`st.py:732-736`). Unnecessary under `route_delta_rule`.
 - `intermediate_size` on DBRX (`ru.py:399-400`): **a bug, not a design choice** — `fam/dbrx.py` has no `intermediate_size(model)` and `DbrxConfig` has no `intermediate_size`, so the root property raises *(ran)*. Porting: `def intermediate_size(model): return model.config.ffn_config.ffn_hidden_size` in `fam/dbrx.py`. Not listed.
@@ -284,13 +284,13 @@ nnterp spelling is `model.<row>[i]` (read) / `model.<row>[i] = v` (write); whole
 
 2. **Attention pattern gating.** nnterp: `enable_attention_probs=True` forces eager and runs the causal check; without the flag the row is `disable`d even if you passed `attn_implementation="eager"` yourself (`st.py:277-295`, `:318-324`). nnter: the constructor forces nothing; `needs_eager` (`comp/attention.py:18-23`) reports `sdpa` as the reason, and BLOOM/MPT need no eager at all (`fam/bloom.py:8-9`, `mpt.py:6-8`). Migration: replace `enable_attention_probs=True` with `attn_implementation="eager"`; drop `check_attn_probs_with_trace`.
 
-3. **No load-time validation.** nnterp runs `check_model_renaming` + `check_io` (and the pattern write) on a dummy input at construction (`st.py:264-282`, `ru.py:1892-1943`), so a mis-renamed model fails at load with the fixing argument. nnter runs nothing (`S.py:128-155`); an unknown `model_type` raises `UnsupportedFamily` before any weights load (`fam/__init__.py:58-62`), but a wrong op name surfaces as `SourceNotAvailable` inside the first trace (`comp/eproperty.py:186-190`). Migration: run `model.status()` and one trace of the values you need before an experiment.
+3. **No load-time validation.** nnterp runs `check_model_renaming` + `check_io` (and the pattern write) on a dummy input at construction (`st.py:264-282`, `ru.py:1892-1943`), so a mis-renamed model fails at load with the fixing argument. nnter runs nothing (`S.py:128-155`); an unknown `model_type` raises `UnsupportedFamily` before any weights load (`fam/__init__.py:58-62`), but a wrong op name surfaces as `SourceNotAvailable` inside the first trace (`comp/eproperty.py:186-190`). Migration: run `model.support()` and one trace of the values you need before an experiment.
 
-4. **`status()` shape and aggregation.** nnterp `model.internals.status()` keys are row names and a per-layer row is `None` if *any* layer has it (`internals.py:42-57`). nnter `model.status()` keys are dotted (`"self_attn.attention_probabilities"`), a value is `None` only if available on *every* block, else `{layer: reason}`; `status(layer=i)` is flat (`S.py:287-313`). Migration: `internals.status()["attention_probabilities"] is None` → `model.status()["self_attn.attention_probabilities"] is None`, and expect a dict on hybrids.
+4. **`support()` shape and aggregation.** nnterp `model.internals.status()` keys are row names and a per-layer row is `None` if *any* layer has it (`internals.py:42-57`). nnter `model.support()` keys are dotted (`"self_attn.attention_probabilities"`), a value is `None` only if available on *every* block, else `{layer: reason}`; `support(layer=i)` is flat (`S.py:287-313`). Migration: `internals.status()["attention_probabilities"] is None` → `model.support()["self_attn.attention_probabilities"] is None`, and expect a dict on hybrids.
 
-5. **`hasattr` raises.** nnterp: an accessor is a plain attribute; `hasattr(model, "attention_probabilities")` is `True` and the read raises `RenamingError` (`ru.py:788-791`). nnter: `hasattr(envoy, "attention_probabilities")` raises `Unavailable` *(ran)* (`comp/eproperty.py:28-32`, `:122-123`; `test_base.py:51-52`). Migration: ask `status()`; never `hasattr`/`getattr(..., None)` on a value.
+5. **`hasattr` raises.** nnterp: an accessor is a plain attribute; `hasattr(model, "attention_probabilities")` is `True` and the read raises `RenamingError` (`ru.py:788-791`). nnter: `hasattr(envoy, "attention_probabilities")` raises `Unavailable` *(ran)* (`comp/eproperty.py:28-32`, `:122-123`; `test_base.py:51-52`). Migration: ask `support()`; never `hasattr`/`getattr(..., None)` on a value.
 
-6. **`attn_probs_available` is gone.** `st.py:370-375` → `model.status()["self_attn.attention_probabilities"] is None`.
+6. **`attn_probs_available` is gone.** `st.py:370-375` → `model.support()["self_attn.attention_probabilities"] is None`.
 
 7. **Remote contract.** nnterp: `remote=True` at construction sets `allow_dispatch=False`, runs the checks with `scan()` on meta, ships nothing, server needs nnterp at the same version (`st.py:168-176`, CHANGELOG `:160-178`). nnter: `remote=True` on `trace()`; the constructor kwarg is accepted only because nnsight accepts it *(ran)*; the block re-runs against the client's envoy tree, families by reference, server needs nnter at the same version (`S.py:437-446`, `docs/usage/remote.md`). Neither has been exercised against a live NDIF (`contributing.md:197-199`). Migration: drop the constructor `remote=` (harmless) and keep it on `trace()`.
 
@@ -329,7 +329,7 @@ nnterp spelling is `model.<row>[i]` (read) / `model.<row>[i] = v` (write); whole
 ## 4. New in nnter (no nnterp counterpart)
 
 - Families registry: one module per `model_type`, lazy import, `nnter.families.{lookup, register, known, all_families, REGISTRY}`, `UnsupportedFamily` (`fam/__init__.py`).
-- `model.status(layer=None)`, `Standard.values()`, `Standard.status()`, per-block dotted keys (`S.py:287-348`, `comp/standard.py`).
+- `model.support(layer=None)`, `Standard.values()`, `Standard.support()`, per-block dotted keys (`S.py:287-348`, `comp/standard.py`).
 - `Unavailable` and the `unavailable=` predicate on every descriptor; `unavailable("reason")` class-body marker; `needs_eager`, `interface_reason`, `needs_torch_kernels`, `needs_recurrent_routing`, `Attention.off_interface()` (`comp/eproperty.py:21-123`, `attention.py:18-89`, `recurrent.py:146-187`).
 - Layouts: fourteen `jaxtyping` aliases (`Residual`, `Logits`, `NextTokenProbs`, `Tokens`, `Queries`, `Keys`, `Values`, `Pattern`, `HeadOutputs`, `LinearQK`, `LinearV`, `Gates`, `State`, `States`), `value.layout`, `value.dims`, `isinstance(tensor, Pattern)` (`comp/eproperty.py:127-150`; `api-quick-reference.md:239-260`).
 - `StandardizedProperty` sizes a family may define (`S.py:26-50`; `fam/gpt2.py:63`, `falcon.py:157-167`, `deepseek_v2.py:44-51`, `opt.py:49`, `mpt.py:98`, `bloom.py:107`, `gptj.py:90`).
@@ -340,7 +340,7 @@ nnterp spelling is `model.<row>[i]` (read) / `model.<row>[i] = v` (write); whole
 - Falcon alibi branch (`by_alibi`, `fam/falcon.py:51-58`) covering queries/keys/values/scores/head outputs; nnterp covered only the pattern on alibi (`ru.py:1491-1494`).
 - DeltaNet per-token state: `state`, `states`, `state_after`, `set_state_after`, `route_kernels` / `route_delta_rule` (`comp/recurrent.py:95-143`, `:352-446`); decode-step kernel chosen by the forward's own test (`use_precomputed_states and seq_len == 1`).
 - Assignable `input_ids`, `attention_mask`, `logits` (`S.py:170-184`, `:352-370`).
-- `envoys=` extension point; a user `EProperty` appears in `status()` (`test_registry.py:106-118`).
+- `envoys=` extension point; a user `EProperty` appears in `support()` (`test_registry.py:106-118`).
 - `Layer.skip_with(hidden)` (`comp/layer.py:47-56`); `Layer.returns_tuple` declared per family.
 - Falcon `mlp_output` transform-backed copy (`fam/falcon.py:144-148`).
 - Per-family test suite `FamilySuite` (`tests/families/suite.py`, ~35 methods × 32 checkpoints) including contribution identity, renamed-vs-raw equality, causal writes, in-place edits, layout/annotation checks, repr checks; `test_registry.py` (lazy import, refusal, register/override, remote key, sizes read-only); `test_base.py`.
@@ -372,7 +372,7 @@ nnterp spelling is `model.<row>[i]` (read) / `model.<row>[i] = v` (write); whole
 
 6. **`reorder_and_upcast_attn`** is detected in nnter (`fam/gpt2.py:46-50`) — an improvement over nnterp, which did not detect it. Constraint: it is the only config flag that switches an attention path that nnter checks; `scale_attn_by_inverse_layer_idx` and similar do not change the op path but change what the scores mean.
 
-7. **Layer-0-only assumptions.** `status()` builds its key set from every block (`S.py:324-335`), better than nnterp's probe-layer checks (`ru.py:1682`, `:1931`). But `_hosts` keys on `_standard_children`, which maps by alias/native name; a family whose first block is a different class from the rest (Mllama cross-attention, DeepSeek dense-vs-MoE MLP is handled by keying both classes to `Mlp`, `fam/deepseek_v2.py:39`) would show a `Standard`-less block silently missing values. Constraint: heterogeneous block classes need both classes in `ENVOYS`; nothing refuses a block that is not a `Layer` (`contributing.md:185-189`).
+7. **Layer-0-only assumptions.** `support()` builds its key set from every block (`S.py:324-335`), better than nnterp's probe-layer checks (`ru.py:1682`, `:1931`). But `_hosts` keys on `_standard_children`, which maps by alias/native name; a family whose first block is a different class from the rest (Mllama cross-attention, DeepSeek dense-vs-MoE MLP is handled by keying both classes to `Mlp`, `fam/deepseek_v2.py:39`) would show a `Standard`-less block silently missing values. Constraint: heterogeneous block classes need both classes in `ENVOYS`; nothing refuses a block that is not a `Layer` (`contributing.md:185-189`).
 
 8. **Sizes on non-Llama configs.** `hidden_size`/`num_attention_heads`/`vocab_size` rely on transformers' `attribute_map` aliases (GPT-2 `n_embd`, BLOOM `n_head`, MPT `d_model`, DBRX `d_model`/`n_heads`) *(ran: all resolve)*, but `intermediate_size` does not exist on `DbrxConfig` and raises *(ran)*. Constraint: every family whose config lacks a plain key needs a `def <size>(model)`; the suite's `test_sizes_match_the_model` (`suite.py:557-575`) reads `MLP_WIDTH_KEY` for DBRX/Qwen3-MoE instead of `model.intermediate_size`, so it does not catch this.
 

@@ -93,12 +93,12 @@ occurrence `k - 1` of the recurrent op on step `k`, so `states`,
 counts as absence, and `Unavailable` is a `RuntimeError` on purpose: an
 `AttributeError` from a descriptor is rewritten by `Envoy.__getattr__` and
 the reason is lost (`components/eproperty.py:28-32`, `:112-123`; nnsight
-`envoy.py:802-810`). Use `status()`.
+`envoy.py:802-810`). Use `support()`.
 
 **`getattr(envoy, name, None)` inside a trace.** The default only covers
 `AttributeError`, so `Unavailable` passes through, and reading an available
 value parks the worker and spends the read. Decide structure outside the
-trace; inside, ask `status()`.
+trace; inside, ask `support()`.
 
 **`if envoy:` falls to `__len__`.** `Envoy.__len__` is `len(self._module)`
 (nnsight `envoy.py:950-952`): truthy for `model.layers` (a `ModuleList`),

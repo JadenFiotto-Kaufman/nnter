@@ -1,7 +1,7 @@
 ---
 title: Availability
-one_liner: "`model.status()` says which standard values this checkpoint has and why not, before any trace; reading an unavailable one raises `nnter.Unavailable` at that line."
-tags: [usage, status, Unavailable, SourceNotAvailable, eager, hybrids]
+one_liner: "`model.support()` says which standard values this checkpoint has and why not, before any trace; reading an unavailable one raises `nnter.Unavailable` at that line."
+tags: [usage, support, Unavailable, SourceNotAvailable, eager, hybrids]
 related: [docs/usage/loading.md, docs/usage/vocabulary.md, docs/usage/residual-stream.md, docs/usage/layouts.md]
 sources: [nnter/standardized.py, nnter/components/standard.py, nnter/components/eproperty.py, nnter/components/attention.py, nnter/components/linear_attention.py, nnter/components/recurrent.py, nnter/families/gpt2.py, nnter/families/falcon.py, nnter/families/opt.py]
 ---
@@ -13,7 +13,7 @@ sources: [nnter/standardized.py, nnter/components/standard.py, nnter/components/
 Not every checkpoint has every standard value. OPT has no MLP module; a model loaded with
 `sdpa` never builds the attention pattern; a GPT-2 checkpoint with `reorder_and_upcast_attn`
 leaves the shared attention path; a hybrid's linear blocks have no softmax and its per-token
-state needs a kernel switch. Every nnter value can say when it is not there and why, and `status()`
+state needs a kernel switch. Every nnter value can say when it is not there and why, and `support()`
 collects those reasons from the config alone, so a script can decide what to read before
 running anything.
 
@@ -26,34 +26,34 @@ from nnter import StandardizedTransformer
 
 model = StandardizedTransformer("facebook/opt-125m", dispatch=True)
 
-status = model.status()
-status["layer_output"]                       # None: available on every block
-status["self_attn.attention_probabilities"]  # {0: "read inside the eager attention forward, but this model runs 'sdpa'; ...", ...}
-"mlp.mlp_output" in status                   # False: no block has an mlp module, so there is no key
+support = model.support()
+support["layer_output"]                       # None: available on every block
+support["self_attn.attention_probabilities"]  # {0: "read inside the eager attention forward, but this model runs 'sdpa'; ...", ...}
+"mlp.mlp_output" in support                   # False: no block has an mlp module, so there is no key
 
-if status["self_attn.attention_probabilities"] is None:
+if support["self_attn.attention_probabilities"] is None:
     with model.trace(prompt):
         pattern = model.layers[3].self_attn.attention_probabilities.save()
 ```
 
 ## The three forms
 
-`model.status()` is the root's values plus every block value, by dotted name. A block value
+`model.support()` is the root's values plus every block value, by dotted name. A block value
 is `None` when every block has it, else `{layer: reason}` for the blocks that do not, so a
-hybrid reads as a short dict. `model.status(layer=i)` is one block, flat.
-`envoy.status()` is one envoy's own values.
+hybrid reads as a short dict. `model.support(layer=i)` is one block, flat.
+`envoy.support()` is one envoy's own values.
 
 The keys come from the tree. Every child of a block that carries standard values (a
 `Standard` envoy) is walked under its standard name, so a value added through `envoys=`
 is listed as `self_attn.<name>` or `mlp.<name>`, exactly as in that envoy's own
-`status()`; a module some blocks lack (a hybrid's `self_attn`) is reported as
+`support()`; a module some blocks lack (a hybrid's `self_attn`) is reported as
 `no self_attn module on this block` on those; a module no block has (OPT's `mlp`) has no
 key at all.
 
 OPT, loaded without `attn_implementation`, trimmed to the interesting keys:
 
 ```python
->>> model.status()
+>>> model.support()
 {'logits': None, 'token_embeddings': None, 'next_token_probs': None,
  'input_ids': None, 'attention_mask': None, 'input_size': None,
  'layer_output': None,
@@ -64,13 +64,13 @@ OPT, loaded without `attn_implementation`, trimmed to the interesting keys:
  'self_attn.attention_queries': {0: "read inside the eager attention forward, but this model runs 'sdpa'; load with attn_implementation='eager'", ...},
  ...}  # attention_keys, attention_values, attention_scores, attention_head_outputs: the same reason; no 'mlp.mlp_output' key
 
->>> model.status(layer=0)
+>>> model.support(layer=0)
 {'layer_output': None,
  'self_attn.attention_output': None,
  'self_attn.attention_probabilities': "read inside the eager attention forward, but this model runs 'sdpa'; load with attn_implementation='eager'",
  ...}
 
->>> model.layers[0].self_attn.status()
+>>> model.layers[0].self_attn.support()
 {'attention_queries': "read inside the eager attention forward, but this model runs 'sdpa'; load with attn_implementation='eager'",
  ...
  'attention_output': None,
@@ -84,7 +84,7 @@ A hybrid (`"Qwen/Qwen3.5-9B"`, `attn_implementation="eager"`; on the tiny checkp
 blocks 0-2 are linear and block 3 is attention):
 
 ```python
->>> model.status()
+>>> model.support()
 {...,
  'self_attn.attention_output': {0: 'no self_attn module on this block', 1: 'no self_attn module on this block', 2: 'no self_attn module on this block'},
  'self_attn.attention_probabilities': {0: 'no self_attn module on this block', 1: ..., 2: ...},
@@ -142,7 +142,7 @@ entries to `None` on the linear blocks.
 
 ## `SourceNotAvailable`: the forward took another path
 
-`status()` predicts from the config. A source-located value is then read at a named
+`support()` predicts from the config. A source-located value is then read at a named
 operation inside the forward, and if this run's forward does not contain that operation
 (a code path the family does not expect), the read raises nnsight's `SourceNotAvailable`
 naming the value, the operation and what the forward does have:
@@ -161,15 +161,15 @@ how operations are named.
 
 ## Guarding code
 
-Check `status()` outside the trace and branch there; the trace body then reads only what
+Check `support()` outside the trace and branch there; the trace body then reads only what
 exists:
 
 ```python
 model = StandardizedTransformer(repo, dispatch=True, attn_implementation="eager")
-status = model.status()
-has_pattern = status["self_attn.attention_probabilities"] is None
+support = model.support()
+has_pattern = support["self_attn.attention_probabilities"] is None
 attn_blocks = [i for i, layer in enumerate(model.layers) if getattr(layer, "self_attn", None) is not None]
-has_mlp = status.get("mlp.mlp_output", "absent") is None   # .get: OPT has no key at all
+has_mlp = support.get("mlp.mlp_output", "absent") is None   # .get: OPT has no key at all
 
 with model.trace(prompt):
     for i in attn_blocks:
@@ -179,7 +179,7 @@ with model.trace(prompt):
         mlp = model.layers[0].mlp.mlp_output.save()
 ```
 
-For one block, `model.status(layer=i)["self_attn.attention_probabilities"]` is the flat
+For one block, `model.support(layer=i)["self_attn.attention_probabilities"]` is the flat
 form of the same check.
 
 ## Gotchas
@@ -187,19 +187,19 @@ form of the same check.
 - **`hasattr(envoy, "attention_probabilities")` raises.** Python's `hasattr` treats only
   `AttributeError` as absence; an unavailable value raises `Unavailable` through it, and an
   *available* source-located value read outside a trace raises `ValueError` (`Cannot access
-  ... outside of interleaving`). This is a documented limitation; use `status()`.
+  ... outside of interleaving`). This is a documented limitation; use `support()`.
 - **`getattr(envoy, name, None)` inside a trace can trip a served value.** Decide which
   blocks have `self_attn` or `mlp` before the trace.
-- **`status()` predicts; the forward decides.** A `SourceNotAvailable` at read time means
+- **`support()` predicts; the forward decides.** A `SourceNotAvailable` at read time means
   the forward differs from what the family expects, not that the value is unavailable by
   configuration.
 - **`attn_implementation` is transformers' default unless you pass it.** The most common
-  reason in `status()` is the `'sdpa'` one, and the fix is in the message.
+  reason in `support()` is the `'sdpa'` one, and the fix is in the message.
 - **The repr lists a value whether or not this checkpoint has it.** Only a value a family
   marks `unavailable("...")` in its class body prints as `Unavailable: <reason>`; a
-  config-dependent reason (eager, `reorder_and_upcast_attn`) shows only in `status()`.
-- **A hybrid's `status()` is a long dict by design.** Each value is reported per block on
-  the blocks that lack its module; read `status(layer=i)` for one block.
+  config-dependent reason (eager, `reorder_and_upcast_attn`) shows only in `support()`.
+- **A hybrid's `support()` is a long dict by design.** Each value is reported per block on
+  the blocks that lack its module; read `support(layer=i)` for one block.
 
 ## Related
 

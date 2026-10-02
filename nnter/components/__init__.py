@@ -14,7 +14,7 @@ in its ``ENVOYS``.
 A value a checkpoint does not have says so: every descriptor here takes
 ``unavailable=`` (a reason, or a function of the envoy returning one), reading
 it raises `Unavailable` with the reason before the model runs, and
-`Standard.status` / `StandardizedTransformer.status` report the reasons
+`Standard.support` / `StandardizedTransformer.support` report the reasons
 without raising. A family without a value assigns `unavailable("...")`.
 
 The three boundary values mean the same thing on every family:

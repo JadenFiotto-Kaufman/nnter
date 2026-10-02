@@ -39,7 +39,7 @@ variant = types.SimpleNamespace(
     MODEL_TYPES=("gpt2",),
     RENAME={**gpt2.RENAME, "mlp": ["mlp", "ffn"]},
     ENVOYS={**gpt2.ENVOYS, GPT2Attention: Attention},
-    Layer=gpt2.Layer, Attention=Attention, Mlp=gpt2.Mlp,   # optional: status() walks the tree
+    Layer=gpt2.Layer, Attention=Attention, Mlp=gpt2.Mlp,   # optional: support() walks the tree
     intermediate_size=gpt2.intermediate_size,               # GPT-2's size spelling (n_inner), or the root's plain rule answers
 )
 families.register(variant)
@@ -48,7 +48,7 @@ model = StandardizedTransformer("openai-community/gpt2", attn_implementation="ea
 assert model.family is variant
 assert type(model.layers[0].self_attn) is Attention
 assert model.layers[0].ffn is model.layers[0].mlp is model.transformer.h[0].mlp
-model.status()["self_attn.attention_probabilities"]
+model.support()["self_attn.attention_probabilities"]
 # {0: 'disabled by the registered variant', 1: ..., ...}
 
 del families.REGISTRY["gpt2"]          # back to the shipped module
@@ -63,9 +63,9 @@ works as a decorator-style one-liner at the module's end or at import of your pa
 
 `register` takes any module or object with `MODEL_TYPES`, `RENAME` and `ENVOYS`, and
 those three are all a load needs: `types.SimpleNamespace(MODEL_TYPES=("gpt2",),
-RENAME=gpt2.RENAME, ENVOYS=gpt2.ENVOYS)` loads, traces, and answers `status()` with every
-block value (`tests/test_registry.py::test_register_needs_only_names_and_envoys_for_status`).
-`StandardizedTransformer.status()` walks the envoy tree the `ENVOYS` build, so the
+RENAME=gpt2.RENAME, ENVOYS=gpt2.ENVOYS)` loads, traces, and answers `support()` with every
+block value (`tests/test_registry.py::test_register_needs_only_names_and_envoys_for_support`).
+`StandardizedTransformer.support()` walks the envoy tree the `ENVOYS` build, so the
 `self_attn.*` / `mlp.*` / `linear_attn.*` names are whatever the blocks' `Standard`
 children carry; the family's `Attention`, `Mlp` and `LinearAttention` attributes are not
 read.
@@ -124,7 +124,7 @@ The list is `sorted(set(known()) | set(REGISTRY))`, so a registered type appears
 | scope | every load of those model types in this process | that one model |
 | what changes | the whole family: names, envoy classes and size functions, for every load | extra aliases merged over the family's `RENAME`; extra envoy classes merged over its `ENVOYS`; a key given wins |
 | `model.family` | the registered object | the shipped module |
-| `model.status()` | the values on the tree the registered `ENVOYS` build | the values on the tree, including any a class passed through `envoys=` adds |
+| `model.support()` | the values on the tree the registered `ENVOYS` build | the values on the tree, including any a class passed through `envoys=` adds |
 | undo | `del families.REGISTRY[model_type]` | load again without it |
 
 ```python
@@ -144,7 +144,7 @@ before path keys, so displacing a family's type-keyed envoy takes a type key of 
 - **`register` overrides silently.** Registering `("gpt2",)` makes every later GPT-2 load
   in the process yours; a test that registers cleans up with `del families.REGISTRY[...]`
   in a `finally`.
-- **`Layer`, `Attention`, `Mlp` on the namespace are optional.** `status()` walks the
+- **`Layer`, `Attention`, `Mlp` on the namespace are optional.** `support()` walks the
   tree and reads none of them; the `UnsupportedFamily` message names the three attributes
   the load path reads, and they are enough. The suite (`FamilySuite`) does read the classes.
 - **`known()` and `all_families()` are the shipped modules only.**
@@ -163,5 +163,5 @@ before path keys, so displacing a family's type-keyed envoy takes a type key of 
 ## Related
 
 - [adding-a-family.md](adding-a-family.md): the module `register` takes, and its test file.
-- [custom-values.md](custom-values.md): a value on one load through `envoys=`; `model.status()` lists it either way.
+- [custom-values.md](custom-values.md): a value on one load through `envoys=`; `model.support()` lists it either way.
 - [overriding-values.md](overriding-values.md): what to change in a variant's classes.

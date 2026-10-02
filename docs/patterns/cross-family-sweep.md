@@ -1,6 +1,6 @@
 ---
 title: Cross-Family Sweep
-one_liner: "Run one experiment over several checkpoints: loop over repo ids, `StandardizedTransformer(repo)`, guard on `model.status()`, decide `self_attn` versus `linear_attn` outside the trace, and collect a per-family table."
+one_liner: "Run one experiment over several checkpoints: loop over repo ids, `StandardizedTransformer(repo)`, guard on `model.support()`, decide `self_attn` versus `linear_attn` outside the trace, and collect a per-family table."
 tags: [patterns, sweep, families, hybrids, availability]
 related: [docs/usage/loading.md, docs/usage/availability.md, docs/usage/vocabulary.md, docs/patterns/ablation.md, docs/patterns/attention-patterns.md]
 sources: [nnter/standardized.py, nnter/families/__init__.py, nnter/components/standard.py, nnter/families/opt.py, nnter/families/qwen3_5_text.py]
@@ -49,8 +49,8 @@ def mixer(layer):
 table = {}
 for name, repo in REPOS.items():
     model = StandardizedTransformer(repo, dispatch=True, attn_implementation="eager")
-    status = model.status()                                   # before any trace: None means available on every block
-    has_mlp = status.get("mlp.mlp_output", "absent") is None   # .get: a module no block has (OPT) has no key
+    support = model.support()                                   # before any trace: None means available on every block
+    has_mlp = support.get("mlp.mlp_output", "absent") is None   # .get: a module no block has (OPT) has no key
     mixers = [mixer(layer) for layer in model.layers]         # decided outside the trace
     attention_blocks = [i for i, layer in enumerate(model.layers) if getattr(layer, "self_attn", None) is not None]
 
@@ -93,16 +93,16 @@ for name, row in table.items():
 ```
 
 The trace bodies are identical for all four; the loop body differs from a
-single-model script in exactly three lines: the `status()` read, the `has_mlp`
+single-model script in exactly three lines: the `support()` read, the `has_mlp`
 guard, and `mixers` decided outside the trace. On the hybrid the `kind` row reads
 `['linear', 'linear', 'linear', 'attn', ...]`, `entropy` has one entry per attention
 block, and `mixer_kl` has one per block because a DeltaNet mixer's contribution is
 `attention_output` too. On OPT `mlp_kl` is `None`: no block has an MLP module, so
-`status()` has no `mlp.mlp_output` key, which is why the guard uses `.get`.
+`support()` has no `mlp.mlp_output` key, which is why the guard uses `.get`.
 
 ## The three guards
 
-**Availability.** `model.status()` returns, for every standard value, `None` when
+**Availability.** `model.support()` returns, for every standard value, `None` when
 every block has it or `{block: reason}` where some do not. Guard on it rather than
 on `hasattr`, which raises `nnter.Unavailable` for an unavailable value. A module no
 block has (OPT's `mlp`) has no key, so read it with `.get`. The common reasons in a
@@ -156,7 +156,7 @@ top-1 grid, an [activation-patching](activation-patching.md) layer sweep, a
 - `attention_probabilities` needs `attn_implementation="eager"` on every load; a
   checkpoint's default is `sdpa`.
 - A DeltaNet mixer under `flash-linear-attention` or `causal-conv1d` has no Python
-  source to read; `status()` reports its interior values unavailable with that
+  source to read; `support()` reports its interior values unavailable with that
   reason. Its `attention_output` is a module boundary and stays available.
 - Names bound inside a trace do not survive it; every container above is made
   outside and every entry is a `.save()`.
@@ -168,7 +168,7 @@ top-1 grid, an [activation-patching](activation-patching.md) layer sweep, a
 - [ablation](ablation.md): the mixer/MLP ablation on one model.
 - [attention-patterns](attention-patterns.md): the entropy metric.
 - [../usage/loading.md](../usage/loading.md): load arguments, `dtype`, `device_map`.
-- [../usage/availability.md](../usage/availability.md): `status()` and every
+- [../usage/availability.md](../usage/availability.md): `support()` and every
   reason string.
 - [../usage/vocabulary.md](../usage/vocabulary.md): which native module each
   standard name reaches, per family.

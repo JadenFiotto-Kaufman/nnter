@@ -133,7 +133,7 @@ with model.trace(prompt):
 ```
 
 OPT has no MLP module: `fc1` and `fc2` sit on the block, so `model.layers[i].mlp` does not
-exist and `status()` lists no `mlp.*` key (a module no block has is not listed). See
+exist and `support()` lists no `mlp.*` key (a module no block has is not listed). See
 [availability](availability.md).
 
 ## Same name, different meaning

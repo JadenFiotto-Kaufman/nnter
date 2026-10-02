@@ -44,7 +44,7 @@ everywhere. Everything nnsight does (`trace`, `generate`, `.save()`, `tracer.ite
 - [docs/usage/root-values.md](docs/usage/root-values.md) — `logits`, `token_embeddings`, `next_token_probs`, `input_ids`, `attention_mask`, `input_size`, `num_layers`, `head_dim`, ... (each root size a `StandardizedProperty`: the config's value, by the plain rule or the family's spelling); a block's own sizes on `layers[i].self_attn` (`num_heads`, `num_kv_heads`, `head_dim`, `qk_head_dim`) and `layers[i].mlp` (`intermediate_size`), which differ from the root's on Gemma-4 and MiMo-V2-Flash
 
 ### "Does this checkpoint have that value?"
-- [docs/usage/availability.md](docs/usage/availability.md) — `model.status()` before the trace; `nnter.Unavailable` at the read; the reasons you will see
+- [docs/usage/availability.md](docs/usage/availability.md) — `model.support()` before the trace; `nnter.Unavailable` at the read; the reasons you will see
 
 ### "Skip layers, steer, logit lens, top-k tokens"
 - [docs/usage/methods.md](docs/usage/methods.md) — `skip_layers`, `steer`, `project_on_vocab`, `get_topk_closest_tokens`
@@ -108,7 +108,7 @@ everywhere. Everything nnsight does (`trace`, `generate`, `.save()`, `tracer.ite
 - **Everything nnsight's cheat-sheet says still holds**: `.save()` and bind the name, reads in forward order within an invoke, nothing assigned in a trace body survives it without a save.
 - **Load on one device with `device=`**: `device="cpu"` keeps a model on the CPU; `device_map="cpu"` does not (nnsight's pipeline passes its own `device`, and the model lands on `cuda:0`).
 - **Pass `attn_implementation="eager"` at load** if you will touch anything inside attention (`attention_probabilities`, queries, keys, values, scores, head outputs). The default is the checkpoint's, usually `sdpa`, and the values are then unavailable.
-- **Check `model.status()` outside the trace, not `hasattr` inside it.** `hasattr(envoy, "attention_probabilities")` never answers `False`: it raises `nnter.Unavailable` when the value is unavailable, and outside a trace raises nnsight's "Cannot access ... outside of interleaving" for an available one.
+- **Check `model.support()` outside the trace, not `hasattr` inside it.** `hasattr(envoy, "attention_probabilities")` never answers `False`: it raises `nnter.Unavailable` when the value is unavailable, and outside a trace raises nnsight's "Cannot access ... outside of interleaving" for an available one.
 - **Target tokens: `ids = model.tokenizer(" Paris", add_special_tokens=False).input_ids` and assert `len(ids) == 1`.** `tokenizer.encode(" Paris")[0]` is BOS on Llama and Gemma (every probability then reads 0.000); Mistral's tokenizer gives `['▁', '▁Paris']` (try `"Paris"`), Granite's `['ĠPar', 'is']` (pick another word).
 - **Take KLs on log-probabilities** (`model.logits[:, -1].float().log_softmax(-1)`, `F.kl_div(..., log_target=True)`): `next_token_probs` underflows to exact zeros and `p * (p.log() - q.log())` is NaN.
 - **Pick blocks from the module lists, not from `num_layers // 2`**: on a hybrid that index is usually a `linear_attn` block with no `self_attn`, and a pure state-space model has none. Decide which blocks have `self_attn` vs `linear_attn` outside the trace; `getattr(envoy, name, None)` inside a trace can trip served values, and `if envoy:` falls through to the module's `__len__`.
