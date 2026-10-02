@@ -20,6 +20,10 @@ from nnter.components import EProperty
 from nnter.components.vllm import Attention, Mlp
 
 PROMPT = "The Eiffel Tower is in the city of"
+#: Two prompts sharing a prefix several of vLLM's 16-token cache blocks long. `PROMPT` is shorter than one block, so
+#: vLLM never serves it from its prefix cache.
+PREFIX = "Once upon a time in a small village by the sea there lived an old fisherman who every morning " * 3
+SHARING = (PREFIX + "went to the market", PREFIX + "sang a song")
 ROOT = {"logits", "token_embeddings", "next_token_probs", "input_ids", "input_size", "attention_mask"}
 BOUNDARY = ("layer_input", "attention_output", "mlp_output", "layer_output")
 INTERIOR = ("attention_queries", "attention_keys", "attention_values", "attention_head_outputs")
@@ -92,6 +96,13 @@ def transformers_values(repo, skip):
             read = nnsight.save({i: getattr(hf.layers[i].self_attn, name).cpu() for i in picked})
         for i in picked:
             layers[i][name] = read[i]
+    sharing, shared = [hf.tokenizer(prompt)["input_ids"] for prompt in SHARING], None
+    if not status.get("self_attn.attention_probabilities"):
+        shared = []
+        for prompt in sharing:
+            with hf.trace(torch.tensor([prompt])):
+                pattern = hf.layers[middle].self_attn.attention_probabilities.cpu().save()
+            shared.append(pattern)
     scale = layers[middle]["layer_output"].norm(dim=-1).mean().item()
     with hf.trace(torch.tensor([ids])):
         hf.steer(middle, vector, factor=scale)
@@ -108,7 +119,7 @@ def transformers_values(repo, skip):
     return {
         "ids": ids, "picked": picked, "middle": middle, "vector": vector, "scale": scale, "embeddings": embeddings,
         "layers": layers, "logits": logits, "steered": steered, "headless": headless, "skipped": skipped,
-        "skip": skip or (middle, middle), "max_len": min(512, positions), "sizes": {name: getattr(hf, name) for name in SIZES},
+        "sharing": sharing, "shared": shared, "skip": skip or (middle, middle), "max_len": min(512, positions), "sizes": {name: getattr(hf, name) for name in SIZES},
     }
 
 
@@ -273,7 +284,7 @@ class VLLMFamilySuite:
         with model.trace(reference["ids"], temperature=0.0, max_tokens=3, ignore_eos=True):  # no iter: the block runs on the prefill
             prefill = attention.attention_probabilities.cpu().save()
         assert prefill.shape[-1] == len(reference["ids"])
-        with pytest.raises(RuntimeError, match="on a decode step"):
+        with pytest.raises(RuntimeError, match="in vLLM's KV cache"):  # a decode step
             with model.trace(reference["ids"], temperature=0.0, max_tokens=2, ignore_eos=True) as tracer:
                 for step in tracer.iter[:2]:
                     pattern = attention.attention_probabilities.cpu().save()
@@ -281,6 +292,47 @@ class VLLMFamilySuite:
             with self.run(model, reference):
                 attention.attention_probabilities = attention.attention_probabilities * 0
         assert torch.equal(self.clean(model, reference), self.clean(model, reference))  # the engine lives
+
+    def test_pattern_refuses_a_cached_prefix(self, model, reference):
+        """An edit's prompt whose prefix vLLM had cached is prefilled over its tail, and its pattern is refused, per request.
+
+        With prefix caching on (vLLM's default) the second of two prompts
+        sharing a prefix runs over its uncached tail only; a request batched
+        beside it that starts at position 0 still has its pattern. A trace
+        recomputes its whole prompt, so its pattern is there either way. With
+        prefix caching off, the edit's is too.
+        """
+        if not set(PATTERN) <= set(self.SERVED):
+            pytest.skip("no recomputed pattern on this family")
+        if reference["shared"] is None:
+            pytest.skip("transformers serves no pattern on this checkpoint to compare with")
+        caching = model.vllm_entrypoint.llm_engine.vllm_config.cache_config.enable_prefix_caching
+        attention = model.layers[reference["middle"]].self_attn
+        first, second = ({"prompt_token_ids": ids} for ids in reference["sharing"])
+        with model.edit():
+            pattern = attention.attention_probabilities.cpu().save()
+        try:
+            alone = model.generate(first, temperature=0.0, max_tokens=1)[0]
+            cached, beside = model.generate([second, {"prompt_token_ids": reference["ids"]}], temperature=0.0, max_tokens=1)
+        finally:
+            model.clear_edits()
+        whole = []
+        for ids in reference["sharing"]:  # after the edits: a trace fills the cache too
+            with model.trace(ids, temperature=0.0, max_tokens=1):
+                traced = attention.attention_probabilities.cpu().save()
+            whole.append(traced)
+        for i, traced in enumerate(whole):  # sixty tokens: the engines' differences grow along them (1.6e-2 on Qwen3)
+            close(traced, reference["shared"][i], max(self.KERNEL_TOLERANCE, 3e-2), f"prompt {i}'s pattern, in a trace")
+        for output in (alone, beside):
+            assert output.nnsight_error is None, output.nnsight_error
+        close(alone.saves["pattern"], whole[0], 1e-5, "the first prompt's pattern, in an edit")
+        close(beside.saves["pattern"], reference["layers"][reference["middle"]]["attention_probabilities"], self.KERNEL_TOLERANCE, "an uncached prompt's pattern, batched beside a cached one")
+        if caching:
+            assert cached.nnsight_error is not None and cached.nnsight_error["type_name"] == "Unavailable", cached.nnsight_error
+            assert "in vLLM's KV cache" in cached.nnsight_error["message"] and "pattern" not in cached.saves
+        else:
+            assert cached.nnsight_error is None, cached.nnsight_error
+            close(cached.saves["pattern"], whole[1], 1e-5, "the second prompt's pattern, in an edit")
 
     @pytest.mark.parametrize("name", INTERIOR)
     def test_interior_writes_land(self, model, reference, name):

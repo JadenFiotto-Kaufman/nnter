@@ -198,10 +198,12 @@ Two things follow from "recomputed":
 - **Read-only.** The kernel never takes a pattern, so an edit could not reach the model, and an
   assignment raises. To change what a head attends to, edit its queries or keys; to change what
   it wrote, edit its head outputs.
-- **The prefill only.** A decode step holds one token's keys; the rest are in vLLM's cache.
-  nnter knows which step a read would be served before reading anything, and raises
-  `nnter.Unavailable` there (it arrives as a `RuntimeError` naming it, like any error from the
-  engine's worker):
+- **A prefill from position 0 only.** The recomputation sees this step's keys, so it needs a
+  step that holds all of them. A decode step holds one token's keys, and a prompt whose prefix
+  vLLM had cached is prefilled over its uncached tail only; the rest are in vLLM's cache, which
+  only its kernel reads. nnter checks where this request's tokens start in the step that serves
+  the queries, and raises `nnter.Unavailable` when it is not position 0 (it arrives as a
+  `RuntimeError` naming it, like any error from the engine's worker):
 
 ```python
 try:
@@ -209,12 +211,17 @@ try:
         for step in tracer.iter[:2]:
             pattern = attention.attention_probabilities.save()
 except RuntimeError as error:
-    print("on a decode step" in str(error))
+    print("in vLLM's KV cache" in str(error))
 # True
 ```
 
 A trace with no `tracer.iter` runs its block on the prefill, so the pattern is there whatever
-`max_tokens` is. `status()`, which runs outside any step, lists both as available.
+`max_tokens` is. A trace also recomputes its whole prompt even where vLLM has its prefix cached
+(nnsight turns the cache read off for traced requests), so a cached prefix only reaches
+`model.edit()`: with prefix caching on, vLLM's default, an edit's request whose prompt shares a
+prefix with an earlier one raises for the pattern and the scores, and its other values cover the
+uncached tail only. Load with `enable_prefix_caching=False` to edit over whole prompts.
+`status()`, which runs outside any step, lists both as available.
 
 ### What is unavailable
 
@@ -305,7 +312,9 @@ every value with `StandardizedTransformer`'s.
   attention's queries, keys and values (and the scores and pattern, which are computed from
   them), then its head outputs, the contributions, then its `layer_output`.
 - **`model.edit()` needs `enable_prefix_caching=False`** at construction (nnsight's rule); a
-  trace forces its own recompute.
+  trace forces its own recompute. With the cache on, an edit sees only the tokens a step
+  computes: on a prompt whose prefix vLLM had cached, `layer_output` and the other values are
+  the uncached tail's rows, and the pattern and scores raise `Unavailable`.
 - **bf16 checkpoints differ from transformers by more than float32 ones**; the suite compares
   in float32 (`dtype="float32"`).
 - **The two engines' attention kernels are not bit-identical.** Given the same queries, keys and

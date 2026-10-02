@@ -24,16 +24,17 @@ layer (its ``attn`` child) and gets the per-head outputs back, each
 served in nnter's layouts with the heads split out. What the layer computes
 between them (the scores, the pattern) is inside its kernel, not Python on
 this engine, so those two are recomputed from the queries and keys:
-read-only, and there on the prefill only, where a step holds every key.
+read-only, and there only on a prefill from position 0, where a step holds
+every key (not on a decode step, nor on a prompt whose prefix is cached).
 """
 
-from .attention import DECODE_STEP, Attention, on_decode_step
+from .attention import IN_CACHE, Attention, cached
 from .flat import Flat, batched, unbatched
 from .layer import FusedLayer, Layer, argument, with_argument
 from .mlp import Mlp
 from .project import project
 
 __all__ = [
-    "Attention", "DECODE_STEP", "Flat", "FusedLayer", "Layer", "Mlp", "argument", "batched", "on_decode_step", "project", "unbatched",
+    "Attention", "Flat", "FusedLayer", "IN_CACHE", "Layer", "Mlp", "argument", "batched", "cached", "project", "unbatched",
     "with_argument",
 ]
