@@ -15,9 +15,9 @@ class TestXGLM(FamilySuite):
     MLP_NORM = "final_layer_norm"            # the block's own, native name
 
     def test_no_mlp_module(self, model):
-        """No block has an MLP module, so `status()` lists no ``mlp`` value at all."""
+        """No block has an MLP module, so `support()` lists no ``mlp`` value at all."""
         assert not hasattr(model.layers[0], "mlp")
-        assert not any(name.startswith("mlp.") for name in model.status())
+        assert not any(name.startswith("mlp.") for name in model.support())
 
     def test_contribution_identity(self, model):
         """No MLP module, but an MLP path on the block: ``fc2``'s output is what the block adds."""
@@ -53,7 +53,7 @@ class TestXGLM(FamilySuite):
         from nnter import StandardizedTransformer
 
         model = StandardizedTransformer(self.REPO, dispatch=True)
-        assert model.status()["self_attn.attention_probabilities"] is None
+        assert model.support()["self_attn.attention_probabilities"] is None
         with model.trace(PROMPT):
             pattern = model.layers[0].self_attn.attention_probabilities.save()
         torch.testing.assert_close(pattern.sum(-1), torch.ones_like(pattern.sum(-1)))

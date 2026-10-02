@@ -13,10 +13,10 @@ class TestOPT(FamilySuite):
     MLP_NORM = "final_layer_norm"            # the block's own, native name (the decoder's has the same name)
 
     def test_no_mlp_module(self, model):
-        """No block has an MLP module, so `status()` lists no ``mlp`` value at all."""
+        """No block has an MLP module, so `support()` lists no ``mlp`` value at all."""
         assert not hasattr(model.layers[0], "mlp")
-        assert not any(name.startswith("mlp.") for name in model.status())
-        assert not any(name.startswith("mlp.") for name in model.status(layer=0))
+        assert not any(name.startswith("mlp.") for name in model.support())
+        assert not any(name.startswith("mlp.") for name in model.support(layer=0))
 
     def test_contribution_identity(self, model):
         """No MLP module, but an MLP path on the block: ``fc2``'s output is what the block adds."""

@@ -43,11 +43,11 @@ class TestOlmoHybrid(FamilySuite):
         kinds = ["linear_attention" if hasattr(layer, "linear_attn") else "full_attention" for layer in model.layers]
         assert kinds == list(model.config.layer_types)
 
-    def test_status_is_per_block_on_a_hybrid(self, model):
-        status = model.status()
-        assert set(status["self_attn.attention_probabilities"]) == set(LINEAR_BLOCKS)
-        assert set(status["linear_attn.state_output"]) == {ATTENTION_BLOCK}
-        assert status["layer_output"] is None and status["mlp.mlp_output"] is None
+    def test_support_is_per_block_on_a_hybrid(self, model):
+        support = model.support()
+        assert set(support["self_attn.attention_probabilities"]) == set(LINEAR_BLOCKS)
+        assert set(support["linear_attn.state_output"]) == {ATTENTION_BLOCK}
+        assert support["layer_output"] is None and support["mlp.mlp_output"] is None
 
     def test_the_two_block_classes_share_one_mlp_class(self, model):
         classes = {type(layer._module).__name__ for layer in model.layers}
@@ -183,7 +183,7 @@ class TestOlmoHybrid(FamilySuite):
         assert all(not torch.equal(outs[k], outs[k - 1]) for k in range(1, 3))
 
     def test_per_token_state_needs_the_recurrent_kernel(self, model):
-        reason = model.status()["linear_attn.states"]
+        reason = model.support()["linear_attn.states"]
         assert all("route_kernels(model.family, 'torch')" in reason[i] for i in LINEAR_BLOCKS)
         assert "no linear_attn module" in reason[ATTENTION_BLOCK]
         with pytest.raises(Unavailable, match="route_kernels"):
@@ -195,7 +195,7 @@ class TestOlmoHybrid(FamilySuite):
         recurrent = StandardizedTransformer(self.REPO, dispatch=True, attn_implementation="eager")
         try:
             mix = recurrent.layers[0].linear_attn
-            assert recurrent.status()["linear_attn.states"] == {ATTENTION_BLOCK: "no linear_attn module on this block"}
+            assert recurrent.support()["linear_attn.states"] == {ATTENTION_BLOCK: "no linear_attn module on this block"}
             with recurrent.trace(PROMPT):
                 states = mix.states.save()
                 final = mix.state_output.save()

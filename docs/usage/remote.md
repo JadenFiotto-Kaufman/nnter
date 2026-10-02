@@ -95,7 +95,7 @@ out-of-order read is an `OutOfOrderError` from the server's run.
   can spell them differently; the read then fails server-side with
   `SourceNotAvailable` naming what is there, not with `Unavailable` on the
   client.
-- **Availability is checked against the client's config.** `status()` and the
+- **Availability is checked against the client's config.** `support()` and the
   `Unavailable` check run on your meta model: `attn_implementation="eager"` at
   load makes the interior *declared* available, but whether the eager forward
   runs is the deployment's choice. On a deployment running `sdpa` the read
@@ -127,7 +127,7 @@ with model.trace("The Eiffel Tower is in the city of", remote="local"):
 - **Load the client model with the same `attn_implementation` the deployment
   runs** if you read the interior; the client check cannot see the server.
 - **A name bound in the block is gone after it** unless `.save()`d, remotely as
-  locally; a `status()` call inside the block is a plain dict and needs no
+  locally; a `support()` call inside the block is a plain dict and needs no
   save, but it describes the client's model.
 - **The model key names `TransformersModel`**; a server that deploys a
   checkpoint under any other class does not match.
@@ -137,7 +137,7 @@ with model.trace("The Eiffel Tower is in the city of", remote="local"):
 
 ## Related
 
-- [availability.md](availability.md), `status()` and `Unavailable`, which are client-side checks.
+- [availability.md](availability.md), `support()` and `Unavailable`, which are client-side checks.
 - [loading.md](loading.md), `attn_implementation` and `tokenizer_kwargs` at load.
 - [attention-interior.md](attention-interior.md) and [delta-net.md](delta-net.md), the source-located values this page qualifies.
 - [activations.md](activations.md) and [prompt-utils.md](prompt-utils.md), helpers that take `remote=`.

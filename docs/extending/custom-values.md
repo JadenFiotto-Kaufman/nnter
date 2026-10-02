@@ -1,7 +1,7 @@
 ---
 title: Custom Values
 one_liner: Add a new value to an attention, block or MLP by subclassing the family's envoy with an `EProperty` (keyed on a path) or a `DerivedEProperty` and passing it through `envoys=`.
-tags: [extending, eproperty, envoys, source, status]
+tags: [extending, eproperty, envoys, source, support]
 related: [docs/extending/overriding-values.md, docs/extending/finding-source-ops.md, docs/extending/registering.md, docs/extending/adding-a-family.md]
 sources: [nnter/components/eproperty.py, nnter/components/layer.py, nnter/components/standard.py, nnter/components/attention.py, nnter/standardized.py, nnter/families/gpt2.py, tests/test_registry.py, tests/test_base.py]
 ---
@@ -15,7 +15,7 @@ nnter does not ship (the softmax before the dropout, the entropy of each attenti
 an MLP's output at the last position) is one descriptor on a subclass of the family's
 `Attention`, `Layer` or `Mlp`, installed with `envoys=` at load. It then reads, writes
 and saves like any standard value, appears in the repr with its description, and
-answers `status()` on its envoy and in `model.status()`. Nothing in nnter changes.
+answers `support()` on its envoy and in `model.support()`. Nothing in nnter changes.
 
 ## Canonical pattern
 
@@ -60,7 +60,7 @@ class Attention(gpt2.Attention):
 model = StandardizedTransformer("openai-community/gpt2", attn_implementation="eager", envoys={GPT2Attention: Attention})
 attn = model.layers[0].self_attn
 
-print(attn.status())
+print(attn.support())
 # {'attention_queries': None, ..., 'attention_softmax': None, 'attention_entropy': None}
 
 with model.trace("The Eiffel Tower is in"):
@@ -153,7 +153,7 @@ model = StandardizedTransformer("openai-community/gpt2", envoys={GPT2Attention: 
 Subclass the family's class (`gpt2.Mlp`) rather than `nnter.Mlp` so the family's own
 overrides stay; subclass `nnter.components.Standard` for a module that has no standard
 values at all (a norm, an embedding). `Standard.values()` lists the descriptors by name,
-base classes first, and `Standard.status()` their reasons. `Standard.sourced` (`False`
+base classes first, and `Standard.support()` their reasons. `Standard.sourced` (`False`
 by default) set to `True` on a subclass instruments that envoy's forward at build, for a
 value inside it that is read after the call has started (Llama 4's `Layer`, whose
 `Mlp.mlp_output` is read after `attention_output`); a path alone declares where a value
@@ -188,16 +188,16 @@ modeling module; import them after `import nnter`.
 ## Where it shows
 
 - **The repr** of the envoy: every descriptor with a `description`, as `(name): description`.
-- **`envoy.status()`**: every descriptor on the envoy's class, `None` or the reason.
-- **`model.status()` and `model.status(layer=i)`**: the tree decides. The block's own
+- **`envoy.support()`**: every descriptor on the envoy's class, `None` or the reason.
+- **`model.support()` and `model.support(layer=i)`**: the tree decides. The block's own
   values come from the block instance, and every child of a block that is a `Standard`
   envoy is walked under its standard name, so a custom `Attention` or `Mlp` value passed
   through `envoys=` appears as `self_attn.<name>` or `mlp.<name>`, exactly as in the
-  envoy's own `status()`. With the classes above, `model.status()` gains
+  envoy's own `support()`. With the classes above, `model.support()` gains
   `self_attn.attention_softmax`, `self_attn.attention_entropy` and `mlp.last_position`,
-  and `model.status(layer=i)` the same three; a load without your `envoys=` lists none of
+  and `model.support(layer=i)` the same three; a load without your `envoys=` lists none of
   them (verified on the tiny GPT-2;
-  `tests/test_registry.py::test_custom_value_through_envoys_is_in_status` pins it).
+  `tests/test_registry.py::test_custom_value_through_envoys_is_in_support` pins it).
 
 ## Gotchas
 
@@ -207,7 +207,7 @@ modeling module; import them after `import nnter`.
   path key loses to the family's type key.
 - **`unavailable=` is yours to state.** A value on an interface op without
   `unavailable=interface_reason` raises `SourceNotAvailable` at read time under `sdpa`
-  instead of reporting in `status()` and raising `Unavailable` before the model runs.
+  instead of reporting in `support()` and raising `Unavailable` before the model runs.
 - **`input` is the first argument.** A stub on an `input` path receives the tensor, not
   the pair; take an `inputs` path for a keyword argument.
 - **A `DerivedEProperty`'s function takes the envoy only** (`compute(self)`), not a served

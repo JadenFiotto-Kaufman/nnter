@@ -19,7 +19,7 @@ meanings, so the standard name is keyed on the mixer's class in ``RENAME``:
 ``linear_attn`` on a Mamba-2 block, ``self_attn`` on an attention block,
 ``mlp`` on an MoE or MLP block. The block's ``norm`` keeps its name (its output
 is the sublayer's ``.input``). A block has exactly one of the three, so
-`status` reports the other two missing on it, per block, and the
+`support` reports the other two missing on it, per block, and the
 contribution identity is ``input + <the one sublayer's output> ==
 layer_output``.
 

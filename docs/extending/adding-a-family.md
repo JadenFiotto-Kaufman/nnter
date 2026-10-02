@@ -160,10 +160,10 @@ BLOOM's `word_embeddings_layernorm`) stays under its native name.
 ### The three envoy subclasses
 
 Every family defines all three classes even when nothing changes: `test_envoy_classes`
-asserts the block envoys are exactly the family's classes. `status()` does not read them:
+asserts the block envoys are exactly the family's classes. `support()` does not read them:
 it walks each block's children that are `Standard` envoys, under their standard names, so
 what it lists is what the tree has. OPT has no MLP module and still defines `Mlp`,
-unkeyed, for the class convention; no block has one, so `status()` lists no `mlp.*` key.
+unkeyed, for the class convention; no block has one, so `support()` lists no `mlp.*` key.
 A docstring says what holds and why; the phrase for the common case is "so the base
 holds":
 
@@ -373,8 +373,8 @@ class TestGPT2(FamilySuite):
         config = model.layers[0].self_attn._module.config
         config.reorder_and_upcast_attn = True
         try:
-            status = model.status()
-            assert all("reorder_and_upcast_attn" in status[f"self_attn.{name}"][0] for name in ("attention_probabilities", "attention_queries"))
+            support = model.support()
+            assert all("reorder_and_upcast_attn" in support[f"self_attn.{name}"][0] for name in ("attention_probabilities", "attention_queries"))
         finally:
             config.reorder_and_upcast_attn = False
 ```
@@ -391,7 +391,7 @@ Every class attribute of `FamilySuite`:
 | `REPO` | The pinned tiny checkpoint, offline-cached. |
 | `FAMILY` | The family module the checkpoint must resolve to (`model.family is FAMILY`). |
 | `NATIVE` | Standard path to native path; each pair must be the same envoy, and every `layers.0.*` name must exist on every block. |
-| `EXPECTED_UNAVAILABLE` | Status key to a substring of the reason, for values this checkpoint lacks; every other value must report `None`. Default `{}`. |
+| `EXPECTED_UNAVAILABLE` | `support()` key to a substring of the reason, for values this checkpoint lacks; every other value must report `None`. Default `{}`. |
 | `REFUSES_IN_PLACE_QKV` | torch refuses in-place edits on q/k/v that are views out of a `split`/`chunk` (GPT-2); the suite expects a `RuntimeError` and skips the in-place query edit. |
 | `ATTENTION_SINK` | The pattern's rows sum to less than one (GPT-OSS). |
 | `KV_HEADS_EXPANDED` | Keys and values are read already expanded to `num_heads` (latent attention; Falcon's 40B layout). |
@@ -409,7 +409,7 @@ what the softmax makes of `attention_scores`; a sink family adds its column.
 
 The suite is every end-to-end statement a family must satisfy: aliases reach the native
 modules and nothing is bound at `model.model`; the envoys are the family's classes;
-`status()` lists every standard value and matches what reads and raises; `layer_output`
+`support()` lists every standard value and matches what reads and raises; `layer_output`
 is the block's tensor; the contribution identity `input + attention_output + mlp_output
 == layer_output` holds on every block; `self_attn.input` and `mlp.input` equal the
 family's own norms' outputs; the standardized model equals a raw `TransformersModel`;
@@ -451,7 +451,7 @@ into the package and the `register()` line removed.
   do this on their first line.
 - **Define `Layer`, `Attention` and `Mlp` even when a module type has no such module.**
   The convention is one family, three classes; OPT keys no `Mlp` in `ENVOYS` and still
-  defines one. `status()` walks the tree, so a module no block has is not listed.
+  defines one. `support()` walks the tree, so a module no block has is not listed.
 - **Every family test loads with `attn_implementation="eager"`** so the interior values
   are available. Values that are still unavailable on that checkpoint go in
   `EXPECTED_UNAVAILABLE` with a substring of the reason.

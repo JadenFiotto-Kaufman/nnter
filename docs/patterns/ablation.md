@@ -204,7 +204,7 @@ or for a position other than the last.
 - `next_token_probs` cannot be assigned; assign `logits`.
 - `[:, -1]` is the last token of every row only under left padding.
 - A checkpoint may lack the component: OPT has no `mlp` module, a hybrid's linear
-  blocks have no `self_attn`. `model.status()` says so per block before any trace;
+  blocks have no `self_attn`. `model.support()` says so per block before any trace;
   reading anyway raises `nnter.Unavailable`.
 - Decide `self_attn` versus `linear_attn` outside the trace, as above.
 - Head-level ablation needs `attn_implementation="eager"`; the boundary values
@@ -230,5 +230,5 @@ or for a position other than the last.
   checkpoints.
 - [../usage/residual-stream.md](../usage/residual-stream.md): the contribution
   identity behind `attention_output` and `mlp_output`.
-- [../usage/availability.md](../usage/availability.md): `status()`.
+- [../usage/availability.md](../usage/availability.md): `support()`.
 - nnsight `docs/usage/skip.md`, `docs/usage/invoke-and-batching.md`.

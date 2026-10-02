@@ -74,7 +74,7 @@ rest of this page says which.
    model                        StandardizedTransformer  ── logits, token_embeddings, next_token_probs,
    ├── embed_tokens ─┐ alias                                 input_ids, attention_mask, input_size,
    ├── layers ───────┤ alias of transformer.h                sizes, skip_layers/steer/project_on_vocab,
-   │   └── [i]       │ family.Layer      ── layer_output      status()
+   │   └── [i]       │ family.Layer      ── layer_output      support()
    │       ├── self_attn   family.Attention ── attention_output, attention_probabilities, queries, ...
    │       ├── linear_attn family.LinearAttention (hybrids) ── attention_output, decays, betas, state*, ...
    │       └── mlp         family.Mlp        ── mlp_output
@@ -156,15 +156,15 @@ Because an alias is the same object, `model.layers[0].self_attn` *is* the
 descriptors on that class serve values at that module's native location.
 nnsight's repr shows aliases as `alias/native` labels and lists every
 eproperty that carries a `description` (`envoy.py:1066-1095`), which is how
-`status()`-visible values show up in `print(model)`.
+`support()`-visible values show up in `print(model)`.
 
 ## Which layer owns what
 
 | layer | owns | must not know |
 |---|---|---|
 | `nnter/families/<model_type>.py` | `MODEL_TYPES`; `RENAME` (native name → standard name); `Layer`/`Attention`/`Mlp`/`Moe`/`LinearAttention` subclasses that point a value at *this family's* op or sibling; `ENVOYS` keyed on transformers types; a module-level `def <size>(model)` for each root size *this family's* config spells its own way (`falcon.py`: `num_kv_heads`, `intermediate_size`; `deepseek_v2.py`: `head_dim`, `qk_head_dim`) | what a value means, how nnsight serves it; the plain rule for a size |
-| `nnter/components/` | what each standard value **means** (`layer_output` is the residual stream leaving the block, `attention_output` the contribution, `attention_probabilities` the post-dropout pattern); how to read/write it (`EProperty` with a path for a key, `DerivedEProperty`); availability (`unavailable=`, `status`); the default op on transformers' shared interface (`INTERFACE`, `attention.py:28`) | any one family's module names or classes |
-| `nnter/standardized.py` | the root values (`logits`, `token_embeddings`, `next_token_probs`, `input_ids`, `attention_mask`, `input_size`); the methods (`skip_layers`, `steer`, `project_on_vocab`, `get_topk_closest_tokens`); the sizes (`num_layers` … `intermediate_size`, `standardized.py:398-438`), each a `StandardizedProperty` (`:26-50`) holding the plain rule over the config and yielding on read to a same-named function in `model.family`; `status()` over the tree (`:287-348`: `_hosts` unions each block's `Standard` children under their standard names, each alias read off its own binding on the block, a mounted alias such as DBRX's `norm_attn_norm.attn` and a module another block owns (shared weights) included, so a value installed through `envoys=` is listed and a module no block has is not); the remote key (`:440-451`) | op names inside a forward; any one family's config keys |
+| `nnter/components/` | what each standard value **means** (`layer_output` is the residual stream leaving the block, `attention_output` the contribution, `attention_probabilities` the post-dropout pattern); how to read/write it (`EProperty` with a path for a key, `DerivedEProperty`); availability (`unavailable=`, `support`); the default op on transformers' shared interface (`INTERFACE`, `attention.py:28`) | any one family's module names or classes |
+| `nnter/standardized.py` | the root values (`logits`, `token_embeddings`, `next_token_probs`, `input_ids`, `attention_mask`, `input_size`); the methods (`skip_layers`, `steer`, `project_on_vocab`, `get_topk_closest_tokens`); the sizes (`num_layers` … `intermediate_size`, `standardized.py:398-438`), each a `StandardizedProperty` (`:26-50`) holding the plain rule over the config and yielding on read to a same-named function in `model.family`; `support()` over the tree (`:287-348`: `_hosts` unions each block's `Standard` children under their standard names, each alias read off its own binding on the block, a mounted alias such as DBRX's `norm_attn_norm.attn` and a module another block owns (shared weights) included, so a value installed through `envoys=` is listed and a module no block has is not); the remote key (`:440-451`) | op names inside a forward; any one family's config keys |
 
 Two examples of the boundary. Gemma-2's contribution is the post-attention
 norm's output: the *family* says so with an `EProperty` keyed
@@ -195,7 +195,7 @@ family's subclass (`families/jetmoe.py`, `Mlp.intermediate_size`).
 
 `Standard` (`components/standard.py:61-96`) is the `Envoy` subclass every
 component derives from: `values()` collects the `EProperty`s of a class,
-base classes first (`:62-65`), `status()` maps each to its reason on
+base classes first (`:62-65`), `support()` maps each to its reason on
 this instance (`:67-69`), and `sourced` (`:50`, `False` here) is the flag a
 family sets to `True` on an envoy whose forward holds a value read after
 the call has started; `__init__` and `_update` (`:52-60`) then instrument
@@ -261,7 +261,7 @@ checkpoint of that type is looked up, and never earlier.
 
 | concern | file |
 |---|---|
-| load path, root values, methods, sizes and `StandardizedProperty`, `status()` | `nnter/standardized.py` |
+| load path, root values, methods, sizes and `StandardizedProperty`, `support()` | `nnter/standardized.py` |
 | registry, `lookup`, `register`, `UnsupportedFamily` | `nnter/families/__init__.py` |
 | one family | `nnter/families/<model_type>.py` |
 | descriptors | `nnter/components/eproperty.py` ([eproperty-internals.md](eproperty-internals.md)) |

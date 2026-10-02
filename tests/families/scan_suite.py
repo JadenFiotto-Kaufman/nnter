@@ -45,17 +45,17 @@ class SelectiveScanSuite:
         yield
         route_kernels(self.FAMILY, "default")
 
-    def test_status_before_routing(self, model):
+    def test_support_before_routing(self, model):
         """Unrouted, the per-token state and the values inside the kernels say how to reach them."""
         route_kernels(self.FAMILY, "default")
         try:
-            status = model.status()
+            support = model.support()
         finally:
             route_kernels(self.FAMILY, "torch")
         blocks = self.scan_blocks(model)
         for name in ("states", "state_output", "attention_head_outputs"):
-            assert all("route_kernels(model.family, 'torch')" in status[f"linear_attn.{name}"][i] for i in blocks), name
-        assert not set(blocks) & set(model.status()["linear_attn.states"] or {})
+            assert all("route_kernels(model.family, 'torch')" in support[f"linear_attn.{name}"][i] for i in blocks), name
+        assert not set(blocks) & set(model.support()["linear_attn.states"] or {})
 
     def test_linear_values_shapes(self, model):
         mix = self.scan_mixer(model)

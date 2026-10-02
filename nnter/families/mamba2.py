@@ -16,7 +16,7 @@ is `nnter.StateSpace` under the standard name ``linear_attn`` (the recurrent
 mixer's name on every hybrid). The block's
 ``norm`` keeps its name: a ``"norm"`` key would also match the mixer's own
 gated ``norm``, and its output is ``linear_attn.input``. There is no
-``self_attn`` and no ``mlp``, so `status` lists neither.
+``self_attn`` and no ``mlp``, so `support` lists neither.
 
 The sizes are the mixer's: ``num_heads`` and ``head_dim`` are the SSD heads
 (``config.num_heads``, ``config.head_dim``), and ``intermediate_size`` is the

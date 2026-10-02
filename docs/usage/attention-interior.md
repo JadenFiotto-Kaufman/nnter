@@ -79,7 +79,7 @@ or `flash_attention_2` never runs it, and each value says so:
 
 ```python
 model = StandardizedTransformer("openai-community/gpt2", attn_implementation="sdpa")
-model.status(layer=0)["self_attn.attention_probabilities"]
+model.support(layer=0)["self_attn.attention_probabilities"]
 # "read inside the eager attention forward, but this model runs 'sdpa'; load with attn_implementation='eager'"
 ```
 
@@ -360,7 +360,7 @@ values (and the pattern's key axis) are as long as the cache:
 ## Gotchas
 
 - **`attn_implementation="eager"` or nothing.** Under `sdpa` every interior
-  value is `Unavailable` with the reason above; `status()` says so per block
+  value is `Unavailable` with the reason above; `support()` says so per block
   before any trace.
 - **Reads follow the forward within one trace.** Queries, keys and values,
   then scores, then pattern, then head outputs; on Falcon without alibi the
@@ -369,7 +369,7 @@ values (and the pattern's key axis) are as long as the cache:
   you misplaced.
 - **GPT-2 and MPT queries, keys and values: assign, do not edit in place.**
 - **`hasattr(attn, "attention_probabilities")` raises `Unavailable`** when the
-  value is unavailable; use `attn.status()` or `model.status(layer=i)`.
+  value is unavailable; use `attn.support()` or `model.support(layer=i)`.
 - **A sink model's pattern rows sum to less than one**, and its
   `attention_scores` are one step before the softmax's own input.
 - **Overwriting or multiplying `attention_scores` lifts the causal mask.** Add to them,
@@ -391,7 +391,7 @@ values (and the pattern's key axis) are as long as the cache:
 
 - [residual-stream.md](residual-stream.md), `attention_output`: what these six add up to.
 - [layouts.md](layouts.md), every value's axes, and `value.dims`.
-- [availability.md](availability.md), `status()` and `Unavailable`.
+- [availability.md](availability.md), `support()` and `Unavailable`.
 - [loading.md](loading.md), `attn_implementation` at load.
 - [generation.md](generation.md), the same values per decode step.
 - [delta-net.md](delta-net.md), the `linear_attn` counterpart on hybrids: queries, keys, values, gates and a recurrent state, no pattern.

@@ -22,7 +22,7 @@ class Unavailable(RuntimeError):
     """A standard value this checkpoint does not have, and why.
 
     Raised on access, before anything runs, so a wrong assumption fails at the
-    line that makes it. `Standard.status` reports the same reasons without
+    line that makes it. `Standard.support` reports the same reasons without
     raising.
     """
     # TODO: make an unavailable value also answer False to ``hasattr``, with the
@@ -57,7 +57,7 @@ class EProperty(eproperty):
         unavailable: A reason string, or a function of the envoy returning a
             reason or ``None``. A reason makes every read and write raise
             `Unavailable` before the model runs, and shows up in
-            `Standard.status`. It is checked on the *instance*, so a
+            `Standard.support`. It is checked on the *instance*, so a
             checkpoint's config can decide (``attn_implementation``, an alibi
             variant), and a per-layer difference in a hybrid model too.
         select: One element of the served value: with ``inputs`` an int is a

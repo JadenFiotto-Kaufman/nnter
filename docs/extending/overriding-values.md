@@ -264,7 +264,7 @@ class Attention(Attention):
 ### `unavailable(...)`: a value the family does not have
 
 A marker in the class body takes the place of the inherited descriptor, keeps the name in
-the tree and the repr (`(attention_scores): Unavailable: <reason>`), makes `status()`
+the tree and the repr (`(attention_scores): Unavailable: <reason>`), makes `support()`
 report the reason, and makes any access raise `nnter.Unavailable` with it before the model
 runs:
 
@@ -406,7 +406,7 @@ an operation's) needs neither.
 The root's sizes are not value descriptors. Each is a `StandardizedProperty` on
 `StandardizedTransformer` (`num_layers`, `hidden_size`, `vocab_size`, `num_heads`,
 `num_kv_heads`, `head_dim`, `qk_head_dim`, `intermediate_size`): no location, nothing
-served inside a trace, no `status()` entry, only a plain rule over the config, and
+served inside a trace, no `support()` entry, only a plain rule over the config, and
 read-only (an assignment raises `AttributeError` pointing at `def <name>(model)`). A family
 whose config spells a size its own way overrides it with a module-level function of the
 same name taking the model, which the descriptor calls instead of its rule. DeepSeek-V2's
@@ -437,7 +437,7 @@ the root's: what the width is, and which config key says so.
 ## Gotchas
 
 - **Keep the name.** An override under another name adds a value instead of redefining
-  one; the inherited descriptor stays, and `status()` keeps reporting it.
+  one; the inherited descriptor stays, and `support()` keeps reporting it.
 - **Keep the layout name.** Annotate the redefinition with the base's name from
   `..components` (`-> Keys`, `-> Residual`), never an inline
   `Float[Tensor, "..."]`: `layout` and `dims` are read off the annotation, the name
@@ -452,7 +452,7 @@ the root's: what the width is, and which config key says so.
 - **An `unavailable=` predicate must not raise `AttributeError`.** A descriptor's
   `AttributeError` falls through to `Envoy.__getattr__` as "no attribute"; `EProperty`
   re-raises it as a `RuntimeError` naming the check, so a wrong config attribute in a
-  predicate reports itself on a read. `status()` calls the predicate directly and lets
+  predicate reports itself on a read. `support()` calls the predicate directly and lets
   the raw `AttributeError` through (`'GPT2MLP' object has no attribute 'config'`): an
   MLP module carries no `config`, so a per-checkpoint predicate on an `Mlp` reaches it
   another way.
@@ -460,7 +460,7 @@ the root's: what the width is, and which config key says so.
   the trace**, and only the envoy that owns the forward can say so: `sourced = True` on
   its class (Llama 4's `Layer`). A `../source.` path on a child declares the location and
   nothing about instrumentation; without the flag the read is an `OutOfOrderError`.
-- **A class attribute like `SINK` is for tooling**, not availability; `status()` reports
+- **A class attribute like `SINK` is for tooling**, not availability; `support()` reports
   only descriptors.
 - **A size override goes on the module, not on a class.** `StandardizedProperty` looks
   for `model.family.<name>`; a `head_dim` on the family's `Attention` class is an

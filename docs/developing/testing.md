@@ -64,7 +64,7 @@ once per class: `model` (`suite.py:88-92`), a `StandardizedTransformer` with
 | `REPO` | the pinned tiny checkpoint |
 | `FAMILY` | the family module the checkpoint must resolve to |
 | `NATIVE` | standard path → native path, usually built by `rows(container, layers, embed, norm, attn=, mlp=, ln1=, ln2=)` (`:58-73`); `LLAMA_ROWS` (`:76`) is the Llama layout |
-| `EXPECTED_UNAVAILABLE` | status key → a substring of the reason, for values this checkpoint lacks; a module no block has (OPT's `mlp`) is absent from `status()` rather than unavailable, so it is not listed here |
+| `EXPECTED_UNAVAILABLE` | `support()` key → a substring of the reason, for values this checkpoint lacks; a module no block has (OPT's `mlp`) is absent from `support()` rather than unavailable, so it is not listed here |
 | `REFUSES_IN_PLACE_QKV` | q/k/v come out of a multi-view op (`split`, `chunk`), so torch refuses an in-place edit (GPT-2, MPT) |
 | `ATTENTION_SINK` | the pattern's rows sum to less than one (GPT-OSS) |
 | `KV_HEADS_EXPANDED` | keys and values are read already expanded to `num_heads` (DeepSeek, Falcon 40B) |
@@ -78,7 +78,7 @@ once per class: `model` (`suite.py:88-92`), a `StandardizedTransformer` with
 | `ROUTER_EXTRA_CLASSES` | router classes beyond the experts: ZAYA's skip class is one more column of `router_logits` |
 
 Three helpers: `mixer(layer)` (`:40-43`) is `self_attn` or, on a linear
-block, `linear_attn`; `has_mlp(model)` (`:184-186`) reads `status()`;
+block, `linear_attn`; `has_mlp(model)` (`:184-186`) reads `support()`;
 `attn_blocks(model)` is the blocks with softmax attention and `attn_block(model)` the first of them, skipping the test when there is none;
 `recurrent_mixers(model)` is the family's `RecurrentMixer` classes from its `ENVOYS`;
 `expected_values(model)` (`:106-112`) adds the `linear_attn.*` names on a
@@ -101,9 +101,9 @@ hybrid and drops `mlp.mlp_output` when no block has an MLP module (OPT). `VALUES
 
 | method | asserts |
 |---|---|
-| `test_status_lists_every_standard_value` | `status()` keys equal `expected_values`; `status(layer=0)` drops the six root keys |
-| `test_status_is_what_this_family_expects` | every key in `EXPECTED_UNAVAILABLE` is a non-empty per-block dict whose reasons contain the substring; every other key is `None` |
-| `test_status_matches_what_reads` | on block 0, an available name is an `EProperty` on the host's class; a missing module says `no ... module`; an unavailable value raises `Unavailable` matching the reason |
+| `test_support_lists_every_standard_value` | `support()` keys equal `expected_values`; `support(layer=0)` drops the six root keys |
+| `test_support_is_what_this_family_expects` | every key in `EXPECTED_UNAVAILABLE` is a non-empty per-block dict whose reasons contain the substring; every other key is `None` |
+| `test_support_matches_what_reads` | on block 0, an available name is an `EProperty` on the host's class; a missing module says `no ... module`; an unavailable value raises `Unavailable` matching the reason |
 
 **Boundary values** (`:188-269`)
 
@@ -258,11 +258,11 @@ subprocess (`:23-36`); an unknown `model_type` raises `UnsupportedFamily`
 a preloaded `nn.Module` uses its own config (`:54-58`); a user `rename`
 merges over the family's (`:61-64`); a user `envoys` type key replaces the
 family's (`:67-77`); the remote key is `TransformersModel` (`:80-85`); a
-default load keeps the checkpoint's attention and `status()` names `eager`
+default load keeps the checkpoint's attention and `support()` names `eager`
 (`:88-92`); a family registered with only `MODEL_TYPES`, `RENAME` and `ENVOYS`
-answers `status()` with every block value (`:95-103`); a value on an
-`Attention` subclass passed through `envoys=` is listed by `status()` and
-`status(layer=0)` as `self_attn.<name>`, and a load without it does not list
+answers `support()` with every block value (`:95-103`); a value on an
+`Attention` subclass passed through `envoys=` is listed by `support()` and
+`support(layer=0)` as `self_attn.<name>`, and a load without it does not list
 it (`:106-118`); a family registered with `hidden_size=lambda model: 999`
 answers `model.hidden_size` with 999 while `num_heads` keeps the root's rule,
 and a plain load reads `config.hidden_size` (`:121-131`); assigning a size
@@ -272,7 +272,7 @@ and a plain load reads `config.hidden_size` (`:121-131`); assigning a size
 `tests/test_base.py` (2 tests): the base `Layer` on a plain
 `TransformersModel` over GPT-J unwraps and rewraps a tuple block output
 (`:13-36`); an `unavailable(...)` marker is listed in the repr with its
-reason, reported by `status()` at both levels, raises `Unavailable` on read,
+reason, reported by `support()` at both levels, raises `Unavailable` on read,
 and `hasattr` raises too (`:39-52`).
 
 `tests/test_prompt_utils.py` (7 tests, GPT-2 with `tokenizer_kwargs`

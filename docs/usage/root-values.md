@@ -251,4 +251,4 @@ same way: [adding-a-family](../extending/adding-a-family.md#sizes).
 - [residual-stream](residual-stream.md): the per-block values.
 - [methods](methods.md): `project_on_vocab`, which reproduces `logits` from a block's stream.
 - [layouts](layouts.md): the axes of each value against these sizes.
-- [availability](availability.md): the root values in `status()`.
+- [availability](availability.md): the root values in `support()`.

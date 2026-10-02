@@ -34,8 +34,8 @@ class TestBamba(StateSpaceChecks, FamilySuite):
             assert (getattr(layer, "self_attn", None) is not None) == (i in ATTENTION_BLOCKS)
             assert layer.mlp is layer.feed_forward and layer.post_attention_layernorm is layer.pre_ff_layernorm
 
-    def test_status_is_per_block(self, model):
-        status = model.status()
-        assert set(status["self_attn.attention_probabilities"]) == set(SSD_BLOCKS)
-        assert set(status["linear_attn.state_output"]) == set(ATTENTION_BLOCKS)
-        assert status["layer_output"] is None and status["mlp.mlp_output"] is None
+    def test_support_is_per_block(self, model):
+        support = model.support()
+        assert set(support["self_attn.attention_probabilities"]) == set(SSD_BLOCKS)
+        assert set(support["linear_attn.state_output"]) == set(ATTENTION_BLOCKS)
+        assert support["layer_output"] is None and support["mlp.mlp_output"] is None

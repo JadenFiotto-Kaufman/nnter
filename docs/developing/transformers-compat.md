@@ -207,7 +207,7 @@ exactly how.
   the binding at `modeling_gpt_oss.py:249` does not run and the name shifts.
 - Falcon's `attn_output_0` is a branch that does not execute under eager;
   nnsight numbers every call in the source, executed or not.
-- A `SourceNotAvailable` is only raised inside a trace; `status()` cannot
+- A `SourceNotAvailable` is only raised inside a trace; `support()` cannot
   know an op moved, since it does not run the forward. The suite is the
   guard.
 - Do not add version conditionals to family modules; one family module

@@ -144,12 +144,12 @@ the others, with a reason naming the kwarg:
 
 ```python
 eager = StandardizedTransformer("hf-internal-testing/tiny-random-MixtralForCausalLM", dispatch=True, experts_implementation="eager")
-eager.status(layer=1)["mlp.expert_outputs"]
+eager.support(layer=1)["mlp.expert_outputs"]
 # "read inside transformers' grouped_mm / batched_mm experts forward, but this model runs 'eager';
 #  load with experts_implementation='grouped_mm' (the default) or 'batched_mm'"
 ```
 
-`status()` reads the implementation off the model's config, so on a lazy load it is
+`support()` reads the implementation off the model's config, so on a lazy load it is
 right once the weights are in (`dispatch=True`, or after the first trace), or before
 that where nnsight's meta build forwards `experts_implementation=`.
 Everything else reads and writes the same under every implementation: the routing pair
@@ -199,7 +199,7 @@ without it, edit in place under several invokes.
 | GraniteMoE, -SWA, -Shared, -Hybrid | `mlp_output` is the scaled term the block adds, the mixture's output times `residual_multiplier` (0.22 on granite-3.0-1b-a400m); `expert_outputs`, `routed_output` and `shared_expert_output` are unscaled, about 4.5 times what reaches the stream there. Multiply by `model.config.residual_multiplier` to compare them with `mlp_output` or another family's experts. |
 | Doge | Its cross-domain mixture (`is_moe`) cannot run in transformers 5.17 (the block drops out its tuple output), so every mixture value is unavailable. |
 
-`model.status()` lists the six values under `mlp.`; on a family with dense blocks beside
+`model.support()` lists the six values under `mlp.`; on a family with dense blocks beside
 mixture blocks (DeepSeek-V3, GLM-4-MoE, Llama 4, Jamba, ...), a dense block reports
 `"no <value> value on this block's mlp"`.
 
@@ -207,6 +207,6 @@ mixture blocks (DeepSeek-V3, GLM-4-MoE, Llama 4, Jamba, ...), a dense block repo
 
 - [residual-stream](residual-stream.md) — `mlp_output` and the contribution identity.
 - [layouts](layouts.md) — `RouterLogits`, `ExpertWeights`, `ExpertIndices`, `ExpertOutputs`.
-- [availability](availability.md) — `status()` and the reasons.
+- [availability](availability.md) — `support()` and the reasons.
 - [expert-ablation](../patterns/expert-ablation.md) — every expert's effect on a prediction.
 - [families](../reference/families.md) — the mixture-of-experts families and their overrides.

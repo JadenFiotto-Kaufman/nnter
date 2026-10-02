@@ -66,7 +66,7 @@ with model.trace(prompt):
 
 Decide which blocks hold a Mamba-2 mixer *outside* the trace, as above.
 
-## Which blocks, and what `status()` says
+## Which blocks, and what `support()` says
 
 | family | blocks | `linear_attn` is | the rest of the block |
 | --- | --- | --- | --- |
@@ -75,10 +75,10 @@ Decide which blocks hold a Mamba-2 mixer *outside* the trace, as above.
 | `bamba` | all but `attn_layer_indices` | `mamba` | `self_attn` on the others; `feed_forward` as `mlp` on every block |
 | `falcon_h1` | every block, beside `self_attn` | `mamba` | both mixers in parallel, then `feed_forward` as `mlp` |
 
-On Mamba-2 the block is the mixer alone, so `status()` lists no `self_attn.*`
+On Mamba-2 the block is the mixer alone, so `support()` lists no `self_attn.*`
 and no `mlp.*` value, and `layers[i].input + linear_attn.attention_output ==
 layer_output`. On Nemotron-H each block has one of `linear_attn`, `self_attn`
-and `mlp`, and `status()` reports the other two `no ... module on this block`
+and `mlp`, and `support()` reports the other two `no ... module on this block`
 per block; the identity is the input plus that one sublayer's contribution.
 On Falcon-H1 it has four terms, both mixers and the MLP, each mixer's
 contribution scaled by its µP multiplier ([families.md](../reference/families.md)).
@@ -225,7 +225,7 @@ What stays unavailable, with or without it:
   not flow into later tokens' states; assign state_input to change where a
   call starts`.
 
-Both appear in `model.status()` under `linear_attn.state` and
+Both appear in `model.support()` under `linear_attn.state` and
 `linear_attn.set_state_after`, and reading `mix.state` or `mix.set_state_after`
 raises `Unavailable` with the reason.
 
@@ -306,7 +306,7 @@ them.
 
 - [delta-net.md](delta-net.md), the gated DeltaNet mixer with the same names, and a per-token state walked with `tracer.iter` and writable per token.
 - [vocabulary.md](vocabulary.md), where `linear_attn` sits in the standard names.
-- [availability.md](availability.md), per-block `status()` on a hybrid.
+- [availability.md](availability.md), per-block `support()` on a hybrid.
 - [layouts.md](layouts.md), the layouts beside the softmax ones.
 - [generation.md](generation.md), values per decode step.
 - [recurrent-mixer-internals.md](../developing/recurrent-mixer-internals.md), how `StateSpace` sits on `RecurrentMixer`.

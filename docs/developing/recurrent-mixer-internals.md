@@ -228,7 +228,7 @@ function when its package is installed, else `torch_function` again).
   `RECURRENT_KERNEL` it refuses when `implementation is not
   torch_function`. A compiled kernel has no Python source, so `.source`
   could not drill into it (nnsight `source.py:364-374`, `compiled` raises
-  `SourceNotAvailable` for a callable without `__code__`). The status text
+  `SourceNotAvailable` for a callable without `__code__`). The reason
   names the package and says to uninstall it or route to the torch kernels.
 
 ## Routing the kernels: `route_kernels`
@@ -268,7 +268,7 @@ copied into a new function object (nnsight `source.py:439-444`,
 `function_like`). A callee already instrumented keeps the binding it was
 compiled with, and the module-level `forward` body has already been
 compiled over its globals dict, so a rebinding made after the first drill is
-not what the instrumented copy calls. The status message and the docstring
+not what the instrumented copy calls. The reason and the docstring
 say so; the tests route, load, trace, and restore in a `finally`
 (`test_qwen3_5_text.py:118-148`), and `tests/test_base.py` checks that
 `"torch"` / `"default"` round-trip the bindings.
@@ -296,7 +296,7 @@ answers, in order:
    loop (or, with `STEP_STATE_OP`, `RECURRENT_KERNEL`'s is still the
    dispatcher, whose body has no state binding): the instruction to call
    `route_kernels(model.family, 'torch')`. Checked on the live binding, so
-   `status()` follows the routing.
+   `support()` follows the routing.
 
 ## Occurrence arithmetic
 
@@ -511,7 +511,7 @@ and cloned. On a decode step it is `state_output` unsqueezed. Its predicate
 is `needs_per_token_chunks` (the kernel reason, then the chunk size).
 `state_after(t)` is `states[:, t]`. `state` and `set_state_after` are
 `unavailable(...)` values (`NO_STATE_OCCURRENCES`, `NO_STATE_WRITES`), so
-both are listed by `status()`: there is no per-token occurrence to walk, and
+both are listed by `support()`: there is no per-token occurrence to walk, and
 a boundary state written at token `t` would not flow into later boundaries,
 which the same cumulative step computes from the chunk contributions and the
 initial state, not from each other.
@@ -521,14 +521,14 @@ shapes, the writes (`betas` and `decays` included, read back and checked
 against the recurrence), the hand-off under `generate` with SSD's recurrence
 checked on every decode step, the per-token `states` under `chunk_per_token`
 checked against the recurrence token by token, values read together in one
-trace, the `status()` reasons and the optimized-kernel reason.
+trace, the `support()` reasons and the optimized-kernel reason.
 
 Nemotron-H needs a block-level name choice, since each block holds one
 `mixer` of four classes. Its `RENAME` keys the standard name on the mixer's
 class (`{NemotronHMamba2Mixer: "linear_attn", NemotronHAttention:
 "self_attn", NemotronHMoE: "mlp", NemotronHMLP: "mlp"}`): nnsight binds a
 class key on every envoy that has exactly one direct child of that class, so
-each block gets the name for what it holds and `status()`'s `_standard_children`
+each block gets the name for what it holds and `support()`'s `_standard_children`
 reads it like any alias.
 
 ## Adding a recurrent mixer
@@ -556,7 +556,7 @@ tests in about 13 s on CPU. The methods that pin the claims above:
 |---|---|
 | the values follow the branch and the state hands off between steps | `test_values_follow_the_step_under_generate` (`:93-109`) |
 | `state_output` is the state the last token leaves | `test_state_output_is_the_state_the_last_token_leaves` (`:79-86`) |
-| `states` needs routing, and `status()` says so per block | `test_per_token_state_needs_the_recurrent_kernel` (`:111-116`) |
+| `states` needs routing, and `support()` says so per block | `test_per_token_state_needs_the_recurrent_kernel` (`:111-116`) |
 | `states[:, t] == state_after(t)`; a write flows into later tokens only | `test_per_token_state_with_the_recurrent_kernel` (`:118-148`) |
 | `state` walks with the user's own `tracer.iter`; a first read pinned past 0 resolves | `test_state_iterates_with_the_users_own_iter` (`:150-178`) |
 | under `generate`, the prompt is an inner loop on step 0 and each later step one token; a decode step's `states` is its own token | `test_per_token_state_within_a_generate` (`:180-205`) |
@@ -586,7 +586,7 @@ on `yujiepan/qwen3.5-tiny-random` with the printed `[0, 0, 1]`.
 - `states` reads every position: in a trace with a `set_state_after`, read
   it before the write.
 - With `flash-linear-attention` or `causal-conv1d` installed every kernel
-  value is unavailable; `status()` says so.
+  value is unavailable; `support()` says so.
 
 ## Related
 

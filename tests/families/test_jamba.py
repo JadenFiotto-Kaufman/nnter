@@ -39,12 +39,12 @@ class TestJamba(SelectiveScanSuite, FamilySuite):
         assert tuple(experts) == MOE_BLOCKS
         assert all(type(layer.mlp) is (jamba.Moe if i in MOE_BLOCKS else jamba.Mlp) for i, layer in enumerate(model.layers))
 
-    def test_status_is_per_block_on_a_hybrid(self, model):
-        status = model.status()
+    def test_support_is_per_block_on_a_hybrid(self, model):
+        support = model.support()
         scan = [i for i in range(len(model.layers)) if i not in ATTENTION_BLOCKS]
-        assert set(status["self_attn.attention_probabilities"]) == set(scan)
-        assert set(status["linear_attn.state_output"]) == set(ATTENTION_BLOCKS)
-        assert status["layer_output"] is None and status["mlp.mlp_output"] is None
+        assert set(support["self_attn.attention_probabilities"]) == set(scan)
+        assert set(support["linear_attn.state_output"]) == set(ATTENTION_BLOCKS)
+        assert support["layer_output"] is None and support["mlp.mlp_output"] is None
 
     def test_both_mixers_add_to_the_stream(self, model):
         """A Mamba block's scan and an attention block's attention are each the block's ``attention_output``, same layout."""

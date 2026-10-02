@@ -288,7 +288,7 @@ class RecurrentMixer(Standard):
     prompts through the token-by-token kernel, and then `state`, `states`,
     `state_after` and `set_state_after` read and write the state at any
     position; without it, or on a mixer with no `STATE_OP`, reading one
-    raises `Unavailable` with the reason and `status` reports it. A subclass
+    raises `Unavailable` with the reason and `support` reports it. A subclass
     whose kernels keep the state another way overrides them (`StateSpace`
     reads `states` off the chunk scan's boundaries).
     """

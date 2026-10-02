@@ -56,7 +56,7 @@ class Gemma4Suite(FamilySuite):
         return super().expected_values(model) | ({"per_layer_output"} if hasattr(self.FAMILY.Layer, "per_layer_output") else set())
 
     def has_ple(self, model):
-        return model.status().get("per_layer_output", "absent") is None
+        return model.support().get("per_layer_output", "absent") is None
 
     def test_routed_plus_shared_is_the_mixture(self, model):
         """``mlp_output == post_feedforward_layernorm(post_feedforward_layernorm_1(shared) + post_feedforward_layernorm_2(routed))``."""
