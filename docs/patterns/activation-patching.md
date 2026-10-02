@@ -204,10 +204,11 @@ is symmetric.
 - On a family whose block returns a tuple (GPT-J, GPT-Neo, BLOOM, MPT,
   Falcon), `layer_output` is still the tensor, and an assignment puts it back in the tuple.
   No `[0]` indexing and no tuple rebuild.
-- On Gemma-4 the KV-sharing blocks attend with an earlier block's keys and values,
-  the same tensor objects: an in-place patch of `attention_keys` / `attention_values`
-  on a block others borrow from also patches every later block of its kind. Assign
-  (`attn.attention_keys = patched`) to patch one block.
+- On Gemma-4 the KV-sharing blocks attend with an earlier block's keys and values.
+  A patch of `attention_keys` / `attention_values`, in place or by assignment, is
+  local to the block it is made on; to patch what every borrower attends with, patch
+  the source block's `k_proj` / `v_proj` output
+  ([Borrowed keys and values](../reference/families.md#borrowed-keys-and-values)).
 - On Granite (and GraniteMoE, Granite-SWA, HyperCLOVA X, ZAYA) a patch of
   `attention_output` or `mlp_output` at one position moves the other positions by
   rounding; in bf16 that can be a visible fraction of a small patch's effect, so load in

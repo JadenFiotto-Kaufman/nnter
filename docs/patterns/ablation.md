@@ -209,11 +209,11 @@ or for a position other than the last.
 - Decide `self_attn` versus `linear_attn` outside the trace, as above.
 - Head-level ablation needs `attn_implementation="eager"`; the boundary values
   (`attention_output`, `mlp_output`, `layer_output`) do not.
-- On Gemma-4 the KV-sharing blocks attend with an earlier block's keys and values,
-  the same tensor objects. An in-place edit (`attention_keys[:] = 0`) on a block
-  others borrow from reaches every later block of its kind (all 11 after block 20 on
-  E2B); assign (`attn.attention_keys = torch.zeros_like(attn.attention_keys)`) to
-  ablate one block alone.
+- On Gemma-4 the KV-sharing blocks attend with an earlier block's keys and values.
+  Zeroing `attention_keys` / `attention_values`, in place or by assignment, ablates
+  them on that block alone; to ablate what every borrower attends with, edit the
+  source block's `k_proj` / `v_proj` output
+  ([Borrowed keys and values](../reference/families.md#borrowed-keys-and-values)).
 - On Granite (and GraniteMoE, Granite-SWA, HyperCLOVA X, ZAYA) a write to
   `attention_output` or `mlp_output` changes the other positions by rounding;
   load in float32 for small edits ([families](../reference/families.md#scaled-residual-adds)).
