@@ -365,6 +365,34 @@ class VLLMFamilySuite:
         assert torch.equal(in_place, read_twice)
         close(assigned, in_place, self.TOLERANCE, name)
 
+    def test_logits_are_a_private_copy(self, model, reference):
+        """A saved `logits` is what the sampler was handed, in storage of its own; the sampler scales its buffer in place."""
+        with model.trace(reference["ids"], temperature=0.5, max_tokens=1, seed=0):
+            logits = model.logits.save()
+            copy = model.logits.clone().save()
+        assert torch.equal(logits, copy)
+        prompts = ["The capital of France is", "Two plus two is", "The sky is", "One, two, three,"]
+        with model.trace(temperature=0.0, max_tokens=1) as tracer:
+            for prompt in prompts:
+                with tracer.invoke(prompt):
+                    kept = model.logits.save()  # one name saved in every invoke: a list, the invokes' in order
+        assert [k.untyped_storage().nbytes() for k in kept] == [k.numel() * k.element_size() for k in kept]
+
+    def test_logits_writes_steer_the_sampler(self, model, reference):
+        """An in-place edit of `logits` and an assignment both reach the sampler, under sampling too."""
+        token = self.clean(model, reference).argmin().item()
+        with model.trace(reference["ids"], temperature=0.5, max_tokens=1, seed=0):
+            model.logits[:, -1, token] = 1e4
+            probs = model.next_token_probs.cpu().save()
+            in_place = model.samples.cpu().save()
+        with model.trace(reference["ids"], temperature=0.5, max_tokens=1, seed=0):
+            logits = model.logits.clone()
+            logits[:, -1, token] = 1e4
+            model.logits = logits
+            assigned = model.samples.cpu().save()
+        assert in_place.flatten().tolist() == assigned.flatten().tolist() == [token]
+        assert probs[0, token].item() > 0.99
+
     def test_a_value_of_other_rows_is_refused(self, model, reference):
         layer = model.layers[reference["middle"]]
         with pytest.raises(RuntimeError, match="cannot be replaced by a value of shape"):

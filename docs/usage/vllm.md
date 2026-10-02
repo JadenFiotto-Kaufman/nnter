@@ -136,6 +136,19 @@ The engine computes logits for the last position only: `model.logits` is `[1, 1,
 prompt's last token on the prefill and the newest token on each decode step.
 `model.samples` (nnsight's) is the token drawn from it.
 
+It is a copy like every other value: the sampler goes on to scale its own buffer in place (the
+temperature, the top-k and top-p cuts), and that buffer holds every request of the step. An
+edit is handed back before the sampler runs, so it steers the draw:
+
+```python
+token = model.tokenizer(" London", add_special_tokens=False).input_ids[0]
+with model.trace("The Eiffel Tower is in the city of", temperature=0.8, max_tokens=1):
+    model.logits[:, -1, token] = 1e4
+    drawn = model.samples.cpu().save()
+
+assert drawn.item() == token
+```
+
 ### A written value must keep its rows
 
 An assignment is spliced into the step the engine is running among other requests' rows. nnter

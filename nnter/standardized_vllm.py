@@ -90,14 +90,21 @@ class StandardizedVLLM(Standardized, VLLM):
 
         The engine computes logits for the last position only: the prompt's
         on the prefill, the newest token's on each decode step. Softcapping
-        is applied (vLLM's logits processor does it). Assigning, or editing in
-        place, changes what the sampler sees.
+        is applied (vLLM's logits processor does it). The value is a private
+        copy: the sampler goes on to scale its own buffer in place, by the
+        temperature and the top-k and top-p cuts, and that buffer holds every
+        request of the step. Assigning, or editing in place, changes what the
+        sampler sees.
         """
-        return value.unsqueeze(1)
+        return value.clone().unsqueeze(1)
 
     @logits.postprocess
     def logits(self, value: torch.Tensor) -> torch.Tensor:
         return value.squeeze(1)
+
+    @logits.transform
+    def logits(self, view: torch.Tensor, raw: torch.Tensor) -> torch.Tensor:
+        return view.squeeze(1).to(raw.dtype)
 
     @EProperty("logits", description="The next-token distribution, [1, vocab]; derived, read-only")
     def next_token_probs(self, value: torch.Tensor) -> NextTokenProbs:
