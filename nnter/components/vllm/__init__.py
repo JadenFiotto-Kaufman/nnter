@@ -15,7 +15,8 @@ transformers' in three ways a value has to absorb:
 * **The residual stream in two halves.** Most blocks fuse the residual add
   into the next norm and are called with, and return, ``(hidden_states,
   residual)``: the stream is their sum. `FusedLayer` is that block, `Layer`
-  one that is called with the stream and returns it.
+  one that is called with the stream (alone, or after the positions) and
+  returns it (alone, or with something beside it).
 
 The attention module hands its queries, keys and values to vLLM's attention
 layer (its ``attn`` child) and gets the per-head outputs back, each
@@ -30,8 +31,9 @@ from .attention import DECODE_STEP, Attention, on_decode_step
 from .flat import Flat, batched, unbatched
 from .layer import FusedLayer, Layer, argument, with_argument
 from .mlp import Mlp
+from .project import project
 
 __all__ = [
-    "Attention", "DECODE_STEP", "Flat", "FusedLayer", "Layer", "Mlp", "argument", "batched", "on_decode_step", "unbatched",
+    "Attention", "DECODE_STEP", "Flat", "FusedLayer", "Layer", "Mlp", "argument", "batched", "on_decode_step", "project", "unbatched",
     "with_argument",
 ]

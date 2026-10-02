@@ -21,7 +21,7 @@ import torch
 from vllm.model_executor.models.gemma2 import Gemma2Attention, Gemma2DecoderLayer, Gemma2MLP
 
 from ...components import Residual
-from ...components.vllm import Attention, Flat, FusedLayer, Mlp
+from ...components.vllm import Attention, Flat, FusedLayer, Mlp, project
 
 if TYPE_CHECKING:
     from ...standardized_vllm import StandardizedVLLM
@@ -69,5 +69,4 @@ ENVOYS = {Gemma2DecoderLayer: Layer, Gemma2Attention: Attention, Gemma2MLP: Mlp}
 
 def project_on_vocab(model: "StandardizedVLLM", hidden: torch.Tensor) -> torch.Tensor:
     """The final norm, then vLLM's logits processor over ``embed_tokens``, which is the unembedding here."""
-    rows = hidden.reshape(-1, hidden.shape[-1]).contiguous()
-    return model.logits_processor(model.embed_tokens, model.norm(rows)).reshape(*hidden.shape[:-1], -1)
+    return project(model, hidden, model.embed_tokens)
