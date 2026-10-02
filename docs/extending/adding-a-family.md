@@ -252,11 +252,13 @@ def intermediate_size(model: "StandardizedTransformer") -> int:
 ```
 
 The function may read other sizes off the model (`model.num_heads`, `model.hidden_size`),
-which resolve the same way. The shipped ones: Falcon (`num_kv_heads`, `intermediate_size`),
-DeepSeek-V2 (`head_dim` = `v_head_dim`, `qk_head_dim` = `qk_nope_head_dim +
-qk_rope_head_dim`; DeepSeek-V3 imports both from `deepseek_v2`), GPT-2 and GPT-J
-(`intermediate_size` = `n_inner`, `4 * hidden_size` when `None`), OPT (`ffn_dim`), MPT
-(`expansion_ratio * hidden_size`), BLOOM (`4 * hidden_size`). The suite's
+which resolve the same way. Twenty-five shipped families define one or more, for example
+Falcon (`num_kv_heads`, `intermediate_size`), DeepSeek-V2 (`head_dim` = `v_head_dim`,
+`qk_head_dim` = `qk_nope_head_dim + qk_rope_head_dim`; DeepSeek-V3, -V3.2, GLM-5,
+GLM-4.7-Flash and Youtu import both from `deepseek_v2`), GPT-2 (`intermediate_size` =
+`n_inner`, `4 * hidden_size` when `None`) and Mamba-2 (`num_heads`, the SSD heads); the
+full list with what each reads is in
+[families.md](../reference/families.md#logits-scales-and-sizes). The suite's
 `test_sizes_match_the_model` checks each size against the weights, so a wrong spelling
 fails there; `MLP_WIDTH_KEY` is for a family whose `intermediate_size` is right but
 unused by the model (an all-MoE family's experts).
@@ -399,6 +401,8 @@ Every class attribute of `FamilySuite`:
 | `ATTENTION_NORM` | The block's own module whose output enters the attention; `None` when the block input enters directly (OLMo-2/3). Default `"input_layernorm"`. |
 | `MLP_NORM` | The block's own module whose output enters the MLP, whatever the family calls it. Default `"post_attention_layernorm"`; `"input_layernorm"` on a parallel block. |
 | `MLP_NORM_BEFORE_ATTENTION` | The MLP's norm runs before the attention does (Falcon's 40B layout takes both norms from the block input up front). |
+| `MOE_UNAVAILABLE` | Mixture value to a substring of the reason, for the mixture values this checkpoint lacks on its mixture; a mixture without a shared expert needs no entry for `shared_expert_output`. Default `{}`. |
+| `ROUTER_EXTRA_CLASSES` | Router classes beyond the experts (ZAYA's skip class is one more column of `router_logits`). Default `0`. |
 
 `pattern_from_scores(self, model, scores)` is the one method a subclass may override:
 what the softmax makes of `attention_scores`; a sink family adds its column.

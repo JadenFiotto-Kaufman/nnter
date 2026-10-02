@@ -32,17 +32,29 @@ each token keeps (`decays`). It is a `RecurrentMixer`, like `LinearAttention`
 ([delta-net.md](delta-net.md)), so the kernel switch and the per-token state
 are the base's.
 
+> **How this mixer differs from a gated DeltaNet and Mamba-2.** The state is per
+> *channel*, `[channels, state_dim]`, value side first (`ScanState`), not per head. The
+> update is a plain decay-and-add, with no delta-rule correction, and the decay
+> `decays` has a `state_dim` axis (`A` is per channel and state dimension). `betas` and
+> `decays` are derived from the kernel's arguments and read-only. The per-token state is
+> readable and writable (`state`, `set_state_after`) once routed, because the pure-torch
+> scan is itself a token loop. A short convolution before the scan (width 4) also
+> carries the last few tokens. [vocabulary.md](vocabulary.md#same-name-different-meaning)
+> puts the three mixers side by side.
+
 ## Canonical pattern
 
 ```python
+import torch
 import nnter
 from nnter import StandardizedTransformer, route_kernels
 
 route_kernels(nnter.families.mamba, "torch")    # before the first trace; see "The kernels"
 model = StandardizedTransformer("state-spaces/mamba-130m-hf", dispatch=True)
 mix = model.layers[0].linear_attn
+prompt = "The Eiffel Tower is in the city of"
 
-with model.trace("The Eiffel Tower is in the city of"):
+with model.trace(prompt):
     x = mix.attention_values.save()           # [batch, seq, channels]
     b = mix.betas.save()                      # [batch, seq, channels]: the step size dt, > 0
     y = mix.attention_head_outputs.save()     # [batch, seq, channels]: C.h + D x, before the gate
@@ -85,7 +97,10 @@ Each is a view of the kernel's argument laid out tokens first: the kernel's
 tensors are channel-first (`x` and `dt` `[batch, channels, seq]`, `B` and `C`
 `[batch, state_dim, seq]`; a decode step has no sequence axis), so a read
 transposes, an assignment is laid back out, and an in-place edit
-(`mix.attention_values[:, -1] = 0`) reaches the kernel.
+(`mix.attention_values[:, -1] = 0`) reaches the kernel. `attention_queries` and
+`attention_keys` (`C`, `B`) are views torch refuses to edit in place while autograd is
+on (`RuntimeError: Output 0 of Select is a view and is being modified inplace`):
+assign them, or edit in place under `torch.no_grad()`.
 
 | value | what it is | layout |
 | --- | --- | --- |
@@ -156,6 +171,14 @@ with model.trace(prompt) as tracer:
 On a decode step the per-token state is the single update's, one token:
 `states` is `[batch, 1, channels, state_dim]`.
 
+A write of the state after token `t` changes token `t`'s own output as well (`y_t` reads
+`h_t`), and it is not everything the block carries forward: the short convolution
+before the scan mixes each token's input with the three before it. On mamba-130m,
+zeroing every block's state after token 4 of a ten-token prompt and running the last
+five tokens alone give logits that differ by up to 87 and different top tokens at three
+of the five positions; `set_state_after(t, zeros)` is not a clean "forget everything
+before `t`".
+
 ## Gotchas
 
 - **Route before the first trace.** With `mamba_ssm` installed nothing runs on
@@ -166,8 +189,16 @@ On a decode step the per-token state is the single update's, one token:
   (`state_output`); in the decode step the state is updated first and `y`
   read from it. Under `generate`, read `attention_head_outputs` before
   `state_output` on step 0 and after it on later steps, or read them in
-  separate runs; the wrong order cuts the block short with nnsight's `was never
+  separate runs. The wrong order on a decode step does not raise: `state_output`
+  silently binds the *next* step's state (on mamba-130m, step 1's read returns step 2's
+  state), and only on the last step is the loop cut short, with nnsight's `was never
   reached` warning.
+- **Comparing with transformers' `output_hidden_states`**: a Mamba model's
+  `hidden_states` has no embedding entry. `hidden_states[i]` is block `i`'s
+  `layer_output` (not `hidden_states[i + 1]`, as on a transformer), and the last entry is
+  the stream after `norm_f`.
+- **In-place edits on `attention_queries` and `attention_keys` need `torch.no_grad()`**;
+  assignment always works.
 - **`use_mambapy`.** A checkpoint loaded with `use_mambapy=True`, with
   `mambapy` installed, runs a parallel scan that binds no per-token state:
   `state` and `states` say so.

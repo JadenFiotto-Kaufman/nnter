@@ -32,14 +32,16 @@ from nnter import StandardizedTransformer
 
 model = StandardizedTransformer("openai-community/gpt2", dispatch=True)
 prompt = "The Eiffel Tower is in"
+direction = torch.randn(model.hidden_size)                         # any [hidden] vector; steering.md derives a real one
 
 with model.trace(prompt):
     model.skip_layers(4, 7)                                        # blocks 4..7 do not run
+    lens = model.project_on_vocab(model.layers[8].layer_output).save()   # logit lens at block 8
     model.steer(10, direction, factor=3.0, token_positions=-1)     # add to the stream leaving block 10
-    lens = model.project_on_vocab(model.layers[5].layer_output).save()   # logit lens at block 5
+    resid = model.layers[10].layer_output.save()                   # read after the steer: the steered stream
     logits = model.logits.save()
 
-model.get_topk_closest_tokens(lens[0, -1], k=5)   # [{token: probability, ...}] for that position
+model.get_topk_closest_tokens(resid[0, -1], k=5)  # [{token: probability, ...}] for that position
 ```
 
 ## `skip_layers(start, end, skip_with=None)`
@@ -102,7 +104,8 @@ with model.trace(prompt):
 
 `vector` is moved to the stream's dtype and device (`vector.to(out)`), so a CPU float32
 direction works on a bf16 GPU model. Scale the factor against the stream's norm at that
-block; nnsight docs/patterns/steering.md is the pattern.
+block, which differs by orders of magnitude between models and changes with depth;
+[steering](../patterns/steering.md#choosing-the-factor) is the pattern.
 
 ## `project_on_vocab(hidden)`
 

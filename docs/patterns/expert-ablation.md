@@ -24,7 +24,11 @@ from nnter import StandardizedTransformer
 
 model = StandardizedTransformer("hf-internal-testing/tiny-random-MixtralForCausalLM", dispatch=True)
 prompt = "The Eiffel Tower is in the city of"
-target = model.tokenizer(" Paris").input_ids[-1]
+ids = model.tokenizer(" Paris", add_special_tokens=False).input_ids
+if len(ids) > 1:                                                   # sentencepiece: ['▁', '▁Paris']
+    ids = model.tokenizer("Paris", add_special_tokens=False).input_ids   # ['▁Paris']: it marks the word start itself
+assert len(ids) == 1, model.tokenizer.convert_ids_to_tokens(ids)   # one token, or target is not the word
+target = ids[0]
 blocks = [layer.mlp for i, layer in enumerate(model.layers) if model.status(layer=i).get("mlp.expert_weights", "absent") is None]
 
 with model.trace(prompt):
@@ -40,25 +44,44 @@ for b, moe in enumerate(blocks):
 
 `status()` picks the blocks with the routing pair: dense blocks beside mixture blocks
 (DeepSeek-V3, GLM-4-MoE, Llama 4, Jamba) have none, and Llama 4's `expert_weights` is
-unavailable. Compare log-probabilities in float32: on a bf16 checkpoint the change from
-one expert can be below the logits' resolution.
+unavailable. `add_special_tokens=False` keeps the BOS token out of the target. This
+checkpoint's sentencepiece tokenizer (Mistral's) splits `" Paris"` into `['▁', '▁Paris']`,
+so the recipe falls back to the word without its space; a tokenizer with no single token
+for the word fails the assertion (`tokenizer(" Paris").input_ids[-1]` would silently be
+`'is'` on Granite, which splits it into `['ĠPar', 'is']`), and then another word is the
+target to pick.
+
+Compare log-probabilities in float32, and for a sweep over single experts load the model
+in float32 too. One expert's effect is small (a few hundredths of a nat on
+granite-3.0-1b-a400m), and in bf16 the rounding of the rest of the forward is the same
+size: on that checkpoint on a GPU the clean run alone and the same prompt as one invoke
+of a batch already differ by 0.003 in log p, comparable to most experts' effects, and the
+bf16 effects differ from the float32 ones by as much as the effects themselves. In float32 the per-trace and
+per-invoke sweeps below agree to about 1e-5.
 
 ## One invoke per expert
 
-The sweep of one block fits in one trace, one invoke per expert. Under several invokes,
-edit in place: each invoke is served its own rows of the flat routing tensors, and an
-in-place edit reaches that invoke alone on every nnsight.
+The sweep of one block fits in one trace, one invoke per expert, with the clean baseline
+as an unedited invoke of the same batch. Under several invokes, edit in place: each
+invoke is served its own rows of the flat routing tensors, and an in-place edit reaches
+that invoke alone, to rounding.
 
 ```python
 moe = blocks[1]
 rows = []  # bound outside: a name bound inside the block does not survive it
 with model.trace() as tracer:
+    with tracer.invoke(prompt):                    # unedited: the baseline, rounded the way the edited rows are
+        base = model.logits[0, -1].float().log_softmax(-1)[target].save()
     for e in range(moe.num_experts):
         with tracer.invoke(prompt):
             moe.expert_weights[:] = moe.expert_weights.masked_fill(moe.expert_indices == e, 0)
             rows.append(model.logits[0, -1].float().log_softmax(-1)[target].save())
-torch.stack([row - clean for row in rows])        # == effects[1]
+torch.stack([row - base for row in rows])         # == effects[1] in float32
 ```
+
+The baseline comes from the batch, not from the single-prompt `clean` above, because a
+batch is computed with other kernels and rounding than one prompt: in bf16 that difference
+alone can exceed one expert's effect.
 
 An assignment (`moe.expert_weights = ...`) under two or more invokes needs nnsight's
 widen of an edit to a tensor whose leading axis is not the batch (nnsight PR #738).

@@ -107,7 +107,9 @@ does, through `interface_reason`.
   that rebuilds the served shape (`rewrap`). See [overriding-values.md](overriding-values.md).
   `key="input"` is the call's first argument, `key="inputs"` the raw `(args, kwargs)` pair.
 - **A module named relative to the host.** A leading `../` steps to the parent, any other
-  segment to a child, aliases included. On GPT-2's attention,
+  segment to a child. A path that goes up takes native names only after the `../`
+  (`"../post_attention_layernorm.output"` fails on GPT-2 with `OutOfOrderError`; its native
+  name is `ln_2`); one that stays at or below the host resolves aliases. On GPT-2's attention,
   `EProperty("../ln_2.output", description="The stream entering the MLP")` is the block's
   second norm; on the block, `EProperty("post_attention_layernorm.input", ...)` is the
   residual stream after the attention sublayer (verified: equal to
@@ -161,8 +163,9 @@ is, not when its forward is instrumented.
 
 A `jaxtyping` return annotation is the value's declared shape, and the standard shapes have
 names exported by `nnter.components`: `Residual`, `Pattern`, `Keys`, ... (each defined
-beside the envoy that serves it; [../usage/layouts.md](../usage/layouts.md) lists the
-fourteen, and the root's `Logits`, `NextTokenProbs`, `Tokens` come from `nnter.standardized`).
+beside the envoy that serves it; [../usage/layouts.md](../usage/layouts.md) lists all
+thirty-one: twenty-eight from `nnter.components`, and the root's `Logits`, `NextTokenProbs`,
+`Tokens` from `nnter.standardized`).
 Annotate with the name where one fits: `attention_softmax` above is `-> Pattern`, so
 `Attention.attention_softmax.layout is Pattern`, the same object the base's
 `attention_probabilities` carries, and `.dims` is `("batch", "heads", "query", "key")`.

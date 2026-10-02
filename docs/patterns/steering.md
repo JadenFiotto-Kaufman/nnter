@@ -44,16 +44,21 @@ vector = vector / vector.norm()                                      # unit norm
 ```
 
 Apply it in a new trace and compare with the unsteered run, again as two invokes so
-both rows come from one forward:
+both rows come from one forward. The factor is a fraction of the stream's norm at the
+layer you steer ([Choosing the factor](#choosing-the-factor)):
 
 ```python
 prompt = "I went to the bakery and"
+
+with model.trace(prompt):
+    scale = model.layers[LAYER].layer_output[0, -1].norm().save()   # the stream's norm where you steer
+factor = 0.25 * float(scale)                                         # a fraction of it; sweep the fraction
 
 with model.trace() as tracer:
     with tracer.invoke(prompt):
         baseline = model.next_token_probs.save()
     with tracer.invoke(prompt):
-        model.steer(LAYER, vector, factor=4.0, token_positions=-1)
+        model.steer(LAYER, vector, factor=factor, token_positions=-1)
         steered = model.next_token_probs.save()
 
 print(model.probs_to_dict(baseline[0], k=3))     # {token: probability}
@@ -74,7 +79,7 @@ same probabilities:
 ```python
 with model.trace(prompt):
     out = model.layers[LAYER].layer_output
-    out[:, -1] += 4.0 * vector.to(out)
+    out[:, -1] += factor * vector.to(out)
     by_hand = model.next_token_probs.save()
 ```
 
@@ -84,18 +89,20 @@ different vector per position.
 
 ## Choosing the factor
 
-The stream's norm grows with depth, so a factor that is a nudge late is a demolition
-early. Measure it where you steer and read the factor as a fraction of it:
+A raw factor means nothing across models or layers: the stream's norm differs by orders
+of magnitude between checkpoints and changes with depth. On GPT-2 the stream leaving
+block 6 has norm 92 at the last position, so `factor=4.0` with a unit vector leaves the
+greedy continuation of the canonical prompt unchanged; on gemma-3-270m the same block's
+norm is 7264. On Gemma-4 the norm also rises and falls with depth (24 to 92 across
+gemma-4-E2B's blocks), so a factor measured at one layer is wrong at another. Measure the
+norm at the layer you steer, as the canonical pattern does, and sweep the *fraction*.
 
-```python
-with model.trace(prompt):
-    scale = model.layers[LAYER].layer_output[0, -1].norm().save()
-
-factor = 0.1 * float(scale)          # a light nudge; sweep the fraction, not the raw number
-```
-
-Behavior usually shifts in a band of fractions below about one, and fluency breaks
-above it. Sweep layer and fraction together, since the band moves with the layer.
+Where the band lies is a property of the model, not a constant. With the canonical
+direction and prompt, steered at every step of a 15-token greedy generation: GPT-2 changes
+its continuation at 0.25 of the norm, stays fluent at 0.5 and repeats itself from 1.0;
+gemma-3-270m drifts at 0.25 and repeats one token from 0.5. Start well below the norm
+(0.05 to 0.1) and sweep layer and fraction together, reading generations, since the band
+moves with the layer.
 
 ## Variations
 

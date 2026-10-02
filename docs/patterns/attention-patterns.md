@@ -30,7 +30,8 @@ from nnter import StandardizedTransformer
 
 model = StandardizedTransformer("openai-community/gpt2", dispatch=True, attn_implementation="eager")
 prompt = "The cat sat on the mat because the cat"
-LAYER = model.num_layers // 2
+attention_blocks = [i for i, layer in enumerate(model.layers) if getattr(layer, "self_attn", None) is not None]
+LAYER = attention_blocks[len(attention_blocks) // 2]      # num_layers // 2 can be a linear block on a hybrid
 
 with model.trace(prompt):
     pattern = model.layers[LAYER].self_attn.attention_probabilities.save()   # [batch, heads, query, key]
@@ -73,11 +74,10 @@ and take the same mean.
 ### Every attention block at once
 
 A hybrid (Qwen3.5) has `self_attn` on one block in four and `linear_attn` on the
-rest, with no pattern. Decide which blocks have one *outside* the trace, then stack:
+rest, with no pattern, and a pure state-space model (Mamba) has none at all. Decide which
+blocks have one *outside* the trace, as `attention_blocks` above does, then stack:
 
 ```python
-attention_blocks = [i for i, layer in enumerate(model.layers) if getattr(layer, "self_attn", None) is not None]
-
 with model.trace(prompt):
     patterns = torch.stack([model.layers[i].self_attn.attention_probabilities
                             for i in attention_blocks]).save()      # [blocks, batch, heads, query, key]
@@ -130,6 +130,19 @@ the same logits; see [ablation](ablation.md) for the head-level recipes.
 dtype. Edit the scores to change *relative* attention without breaking
 normalization: adding a constant to one key column shifts mass toward it.
 
+The causal mask is already in the scores (the masked entries hold the dtype's minimum,
+`-inf` on GPT-Neo), so an edit that overwrites them lifts it: `scores[:] = 0` or
+`scores * 0` makes every query attend to future tokens, and on GPT-Neo `scores * 0` is
+NaN. Additive edits keep the mask. To set the real entries, keep the masked ones:
+
+```python
+with model.trace(prompt):
+    scores = model.layers[LAYER].self_attn.attention_scores
+    masked = scores <= torch.finfo(scores.dtype).min                  # the causal (and padding) mask
+    model.layers[LAYER].self_attn.attention_scores = torch.where(masked, scores, torch.zeros_like(scores))
+    logits = model.logits.save()                                      # uniform over the past, nothing above the diagonal
+```
+
 ## The sink caveat
 
 On GPT-OSS each head carries a learned sink logit that joins the softmax as an
@@ -139,6 +152,13 @@ marks this with `SINK = True`. Entropy and the row-sum assertion above have to
 account for it, and `attention_scores` on that family is read one step earlier,
 at the masked scores before the sink column joins. The pattern's meaning, mass on
 real keys, is unchanged.
+
+Granite-SWA (`granite_swa`, `granitemoe_swa`) carries a learned sink too, but outside
+the softmax: the pattern's rows sum to one, and the sink scales each head's *output* by
+`sigmoid(logsumexp(scores) - sink)` after the values are mixed (between 0.009 and 0.95 on
+one block of granite-swash-2b). So `attention_probabilities` there is not what reaches
+`attention_head_outputs`, and forcing the pattern does not control a head's output; edit
+`attention_head_outputs` instead. `SINK` is `False` on those families.
 
 ## Gotchas
 
@@ -151,7 +171,13 @@ real keys, is unchanged.
 - A pattern is `heads * seq * seq` per block. Save the blocks and heads you need,
   index inside the trace, and wrap read-only capture in `torch.no_grad()`.
 - On a batch of prompts the rows are left-padded; a padded row's pattern has zero
-  columns at its pad positions and its real tokens start later.
+  columns at its pad positions and its real tokens start later. The pad *query* rows are
+  not attention at all (uniform over every key on GPT-2, all on key 0 on GPT-Neo), so
+  mask them with `model.attention_mask` before a per-row metric such as entropy.
+- A pattern or scores read in two invokes of one trace raises `TypeError: 'NoneType'
+  object is not subscriptable` today (an nnsight bug with values nnter reads inside a
+  nested `.source` call). Read one prompt's pattern per trace, or the whole batch in one
+  invoke; `attention_head_outputs` works across invokes.
 - The pattern is in the model's dtype: on a bf16 checkpoint rows sum to one within
   a few ulps, not exactly.
 - A GPT-2 checkpoint with `reorder_and_upcast_attn` set takes GPT-2's own upcast

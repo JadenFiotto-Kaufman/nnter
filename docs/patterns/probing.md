@@ -24,15 +24,16 @@ uses; the controls are what make the result mean something.
 ## Canonical pattern
 
 Build the dataset from one batched forward. The last position of every prompt
-needs left padding, so set the tokenizer's side at load:
+needs left padding, which nnsight sets at load for a causal model (with the EOS as pad
+token where the tokenizer has none):
 
 ```python
 import torch
 from nnter import StandardizedTransformer
 from nnter.nnsight_utils import get_token_activations
 
-model = StandardizedTransformer("openai-community/gpt2", dispatch=True,
-                                tokenizer_kwargs={"padding_side": "left", "pad_token": "<|endoftext|>"})
+model = StandardizedTransformer("openai-community/gpt2", dispatch=True)
+assert model.tokenizer.padding_side == "left"
 
 positive = ["wonderful", "fantastic", "delightful", "excellent", "brilliant", "joyful", "superb", "lovely"]
 negative = ["terrible", "awful", "dreadful", "disgusting", "horrible", "miserable", "dismal", "boring"]
@@ -134,7 +135,9 @@ norm does not:
 
 ```python
 LAYER = 2
-good, bad = model.tokenizer.encode(" great")[0], model.tokenizer.encode(" bad")[0]
+ids = [model.tokenizer(word, add_special_tokens=False).input_ids for word in (" great", " bad")]
+assert all(len(i) == 1 for i in ids), [model.tokenizer.convert_ids_to_tokens(i) for i in ids]
+good, bad = ids[0][0], ids[1][0]
 
 def logit_gap(vector, factor):
     with model.trace("The movie was"):
@@ -152,6 +155,11 @@ probe = logit_gap(direction, factor)
 negated = logit_gap(-direction, factor)
 random = [logit_gap(torch.nn.functional.normalize(torch.randn_like(direction), dim=0), factor) for _ in range(8)]
 ```
+
+`add_special_tokens=False` keeps the BOS token out of the ids (`tokenizer.encode(" great")[0]`
+is the BOS id on Llama and Gemma); the assertion catches a word that is more than one token
+(Mistral's sentencepiece tokenizer splits `" Paris"` into `['▁', '▁Paris']`), in which case try
+it without the leading space or pick another word.
 
 A direction that decodes and steers nothing is also a result: a feature the model
 does not read. Report it rather than raising the factor until something moves; the
@@ -182,8 +190,9 @@ behavioral dataset; see [prompt-utils](../usage/prompt-utils.md).
 - Wrap collection in `torch.no_grad()`: a trace runs with autograd on, and a saved
   activation otherwise pins the whole forward graph for every layer.
 - A negative `idx` with a right-padding tokenizer raises
-  `ValueError: a negative token index needs left padding`; set `padding_side` at load
-  (and a `pad_token` where the tokenizer has none).
+  `ValueError: a negative token index needs left padding`. nnsight left-pads a causal
+  model by default, so this only fires after `tokenizer_kwargs={"padding_side": "right"}`
+  or a tokenizer you set yourself.
 - Fit on training rows only, including the standardization statistics.
 - Keep the ridge (or weight decay) on and report it: with `hidden` far above the
   number of examples, an unregularized probe fits anything.

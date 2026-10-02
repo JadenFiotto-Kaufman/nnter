@@ -28,23 +28,34 @@ measured on the next-token distribution:
 
 ```python
 import torch
+import torch.nn.functional as F
 from nnter import StandardizedTransformer
 
 model = StandardizedTransformer("openai-community/gpt2", dispatch=True, attn_implementation="eager")
 prompt = "The Eiffel Tower is in the city of"
 LAYER = model.num_layers // 2
-target = model.tokenizer.encode(" Paris")[0]
+ids = model.tokenizer(" Paris", add_special_tokens=False).input_ids
+assert len(ids) == 1, model.tokenizer.convert_ids_to_tokens(ids)   # one token, or target is not the word
+target = ids[0]
 
 with model.trace() as tracer:
     with tracer.invoke(prompt):
-        clean = model.next_token_probs.save()                 # [1, vocab]
+        clean = model.logits[:, -1].float().log_softmax(-1).save()     # [1, vocab], log-probabilities
     with tracer.invoke(prompt):
-        model.layers[LAYER].mlp.mlp_output[:] = 0             # this invoke's rows only
-        ablated = model.next_token_probs.save()
+        model.layers[LAYER].mlp.mlp_output[:] = 0                      # this invoke's rows only
+        ablated = model.logits[:, -1].float().log_softmax(-1).save()
 
-print(f"P(Paris)  clean {clean[0, target]:.3f}   ablated {ablated[0, target]:.3f}")
-kl = (clean * (clean.log() - ablated.log())).sum(-1)          # the whole distribution's move
+print(f"P(Paris)  clean {clean[0, target].exp():.3f}   ablated {ablated[0, target].exp():.3f}")
+kl = F.kl_div(ablated, clean, log_target=True, reduction="none").sum(-1)   # KL(clean || ablated): the whole distribution's move
 ```
+
+`add_special_tokens=False` keeps the BOS token out of the target (`tokenizer.encode(" Paris")[0]`
+is the BOS id on Llama and Gemma, and every probability then reads 0.000). The assertion
+catches a word that is more than one token: Mistral's sentencepiece tokenizer gives
+`['▁', '▁Paris']` and Granite's `['ĠPar', 'is']`. Then try the word without the leading
+space (`"Paris"` is `['▁Paris']` on Mistral), or pick a target word that is one token. The KL is taken on log-probabilities: `next_token_probs` underflows to exact zeros
+(Pythia's float16 checkpoint has thousands per row), and `p * (p.log() - q.log())` is then
+NaN.
 
 `mlp_output` is a tensor, so `[:] = 0` writes in place and reaches the model. An
 in-place write in one invoke touches only that invoke's rows; the clean row equals the
@@ -132,6 +143,11 @@ with model.trace() as tracer:
 print([round(float(p), 4) for p in rows])
 ```
 
+Do this through `attention_head_outputs`, not the pattern. A value nnter reads inside a
+nested `.source` call (`attention_probabilities`, `attention_scores`) cannot be touched in
+two invokes of one trace today: the second invoke raises `TypeError: 'NoneType' object is
+not subscriptable` (an nnsight bug). For per-head pattern edits, use one trace per head.
+
 ### A DeltaNet mixer on a hybrid
 
 On Qwen3.5 three blocks in four carry `linear_attn` instead of `self_attn`. Its
@@ -150,14 +166,14 @@ mixers = [mixer(layer) for layer in model.layers]      # outside: getattr on a s
 outs = []
 with model.trace() as tracer:
     with tracer.invoke(prompt):
-        base = model.next_token_probs.save()
+        base = model.logits[:, -1].float().log_softmax(-1).save()
     for i in range(model.num_layers):
         with tracer.invoke(prompt):
             mixers[i].attention_output[:] = 0
-            outs.append(model.next_token_probs.save())
+            outs.append(model.logits[:, -1].float().log_softmax(-1).save())
 
-for i, probs in enumerate(outs):
-    print(f"block {i:2d} mixer KL {(base * (base.log() - probs.log())).sum():.4f}")
+for i, logprobs in enumerate(outs):
+    print(f"block {i:2d} mixer KL {F.kl_div(logprobs, base, log_target=True, reduction='sum'):.4f}")
 ```
 
 The same loop runs on a non-hybrid, where every `mixer(layer)` is `self_attn`; the
@@ -193,6 +209,14 @@ or for a position other than the last.
 - Decide `self_attn` versus `linear_attn` outside the trace, as above.
 - Head-level ablation needs `attn_implementation="eager"`; the boundary values
   (`attention_output`, `mlp_output`, `layer_output`) do not.
+- On Gemma-4 the KV-sharing blocks attend with an earlier block's keys and values.
+  Zeroing `attention_keys` / `attention_values`, in place or by assignment, ablates
+  them on that block alone; to ablate what every borrower attends with, edit the
+  source block's `k_proj` / `v_proj` output
+  ([Borrowed keys and values](../reference/families.md#borrowed-keys-and-values)).
+- On Granite (and GraniteMoE, Granite-SWA, HyperCLOVA X, ZAYA) a write to
+  `attention_output` or `mlp_output` changes the other positions by rounding;
+  load in float32 for small edits ([families](../reference/families.md#scaled-residual-adds)).
 - A name bound inside the trace does not survive it; make `rows`/`outs` outside.
 
 ## Related

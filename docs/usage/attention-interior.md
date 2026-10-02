@@ -24,6 +24,7 @@ arithmetic, and presents them with one layout on every family.
 ## Canonical pattern
 
 ```python
+import torch
 from nnter import StandardizedTransformer
 
 model = StandardizedTransformer("meta-llama/Llama-3.1-8B", attn_implementation="eager")
@@ -116,6 +117,45 @@ A written pattern must be `[batch, heads, query, key]` in the model dtype; a
 written argument must match the shape the interface expects for it. The
 model, not nnter, reports a mismatch, from inside the forward.
 
+The scores already carry the causal mask: masked entries hold the dtype's minimum
+(`-inf` on GPT-Neo). So an edit that overwrites or multiplies them lifts the mask:
+`attn.attention_scores[:] = 0` or `attn.attention_scores * 0` lets every query attend to
+the tokens after it (and is NaN on GPT-Neo). Additive edits keep it. To set the real
+entries, keep the masked ones:
+
+```python
+with model.trace(prompt):
+    scores = attn.attention_scores
+    masked = scores <= torch.finfo(scores.dtype).min        # the causal and padding mask
+    attn.attention_scores = torch.where(masked, scores, torch.zeros_like(scores))   # uniform over the past only
+    logits = model.logits.save()
+```
+
+### Recomputing by hand
+
+The softmax scale is the module's, `attn._module.scaling`, not always `1/sqrt(head_dim)`
+(Granite-SWA's is `attention_multiplier`, 0.0078 on granite-swash-2b against 0.088), and
+under grouped-query attention query head `h` reads key/value head `h // groups`:
+`repeat_interleave`, not `repeat`. With both, the served values reproduce the scores on
+the causal entries and the head outputs:
+
+```python
+with model.trace(prompt):
+    q, k, v = attn.attention_queries.save(), attn.attention_keys.save(), attn.attention_values.save()
+    scores = attn.attention_scores.save()
+    pattern = attn.attention_probabilities.save()
+    heads = attn.attention_head_outputs.save()
+
+groups = q.shape[1] // k.shape[1]
+again = q @ k.repeat_interleave(groups, dim=1).transpose(-1, -2) * attn._module.scaling
+causal = torch.ones(again.shape[-1], again.shape[-1], dtype=torch.bool).tril()
+torch.testing.assert_close(again[..., causal], scores[..., causal])
+torch.testing.assert_close((pattern @ v.repeat_interleave(groups, dim=1)).transpose(1, 2), heads)
+```
+
+The last line fails where something sits between the mixed values and the head outputs:
+Granite-SWA's sink scales each head's output after the mix ([Attention sink](../reference/families.md#attention-sink)).
+
 The per-family suite checks every one of these on every pinned family: the
 six shapes, `softmax(scores) == pattern`, that zeroing any interior value
 moves the logits, and that an in-place edit of the scores and of the head
@@ -204,7 +244,8 @@ GPT-Neo's scores are `q @ k^T` with no `1/sqrt(head_dim)` scaling, computed and
 served in float32 whatever the model's dtype; the pattern is cast back to the
 values' dtype. Its `local` layers (every other one, by `attention_layers`)
 mask keys `window_size` or more tokens back, so their pattern is zero there
-and their scores hold float32's minimum. `self_attn` is the inner
+and their scores hold float32's minimum. The causal mask is `-inf` on every
+layer, so `scores * 0` is NaN there, not zero. `self_attn` is the inner
 `attn.attention` module, which the `attn` wrapper calls and returns unchanged.
 
 The scale sits in a different place on each of the others. CodeGen's scores are
@@ -232,6 +273,11 @@ combined = torch.cat([scores, column], dim=-1)
 combined = combined - combined.max(dim=-1, keepdim=True).values
 pattern_again = combined.softmax(-1)[..., :-1]                        # equals attention_probabilities
 ```
+
+Granite-SWA's sink is not in the pattern. Its rows sum to one and `softmax(scores)`
+reproduces them; the sink scales each head's output after the values are mixed, so
+`attention_head_outputs` carries it and forcing the pattern does not set what a head
+writes ([families.md](../reference/families.md#attention-sink)).
 
 ### DeepSeek: multi-head latent attention
 
@@ -326,6 +372,16 @@ values (and the pattern's key axis) are as long as the cache:
   value is unavailable; use `attn.status()` or `model.status(layer=i)`.
 - **A sink model's pattern rows sum to less than one**, and its
   `attention_scores` are one step before the softmax's own input.
+- **Overwriting or multiplying `attention_scores` lifts the causal mask.** Add to them,
+  or keep the masked entries with `torch.where` as above.
+- **A padded prompt's pad query rows are not attention**: uniform over every key on
+  GPT-2, all on key 0 on GPT-Neo. Mask them with `model.attention_mask` before a
+  per-row metric.
+- **`attention_probabilities` and `attention_scores` cannot be touched in two invokes
+  of one trace today**: the second invoke raises `TypeError: 'NoneType' object is not
+  subscriptable` (an nnsight bug with values read inside a nested `.source` call). Use
+  one trace per prompt, a batch in one invoke, or `attention_head_outputs`, which
+  works across invokes.
 - **On a hybrid, three blocks in four have no `self_attn`.** Decide which blocks
   have one outside the trace; see [delta-net.md](delta-net.md).
 - **Remote runs re-resolve these on the server**, against its transformers; see

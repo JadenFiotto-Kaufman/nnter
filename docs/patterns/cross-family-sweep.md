@@ -28,6 +28,7 @@ attention entropy.
 
 ```python
 import torch
+import torch.nn.functional as F
 from nnter import StandardizedTransformer
 
 REPOS = {
@@ -56,15 +57,15 @@ for name, repo in REPOS.items():
     outs = {}                                                 # containers made outside the trace
     with model.trace() as tracer:
         with tracer.invoke(prompt):
-            base = model.next_token_probs.save()
+            base = model.logits[:, -1].float().log_softmax(-1).save()     # log-probabilities
         for i in range(model.num_layers):
             with tracer.invoke(prompt):
                 mixers[i].attention_output[:] = 0
-                outs["mixer", i] = model.next_token_probs.save()
+                outs["mixer", i] = model.logits[:, -1].float().log_softmax(-1).save()
             if has_mlp:
                 with tracer.invoke(prompt):
                     model.layers[i].mlp.mlp_output[:] = 0
-                    outs["mlp", i] = model.next_token_probs.save()
+                    outs["mlp", i] = model.logits[:, -1].float().log_softmax(-1).save()
 
     norms, entropy = {}, {}
     with model.trace(prompt):
@@ -74,7 +75,7 @@ for name, repo in REPOS.items():
                 entropy[i] = (-p * (p + 1e-12).log()).sum(-1).mean().save()
             norms[i] = layer.layer_output[0, -1].norm().save()
 
-    kl = lambda probs: float((base * (base.log() - probs.log())).sum())
+    kl = lambda logprobs: float(F.kl_div(logprobs, base, log_target=True, reduction="sum"))   # KL(clean || ablated)
     table[name] = {
         "kind": ["linear" if getattr(layer, "linear_attn", None) is not None else "attn" for layer in model.layers],
         "mixer_kl": [kl(outs["mixer", i]) for i in range(model.num_layers)],
@@ -122,7 +123,7 @@ device_map="auto"` to `StandardizedTransformer` like any `TransformersModel`.
 
 ### A per-family metric on the same prompt set
 
-Replace the single prompt with a list in each invoke; `next_token_probs` is then
+Replace the single prompt with a list in each invoke; the saved log-probabilities are then
 `[prompts, vocab]` and the KL a vector. A list is left-padded, so the last position
 is every prompt's last token.
 
@@ -143,6 +144,9 @@ top-1 grid, an [activation-patching](activation-patching.md) layer sweep, a
 
 ## Gotchas
 
+- Take the KL on log-probabilities, as above. `next_token_probs` underflows to exact
+  zeros (thousands per row on Pythia's float16 checkpoint), and `p * (p.log() - q.log())`
+  is then NaN.
 - The KL and norm values from different checkpoints are not directly comparable:
   vocabularies, depths and residual scales differ. Compare shapes of curves, or
   normalize per model.

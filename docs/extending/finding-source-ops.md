@@ -129,7 +129,9 @@ separating the call from the operation inside it:
   is `self_c_proj_0`, `nn.functional.softmax(...)` is `nn_functional_softmax_0`,
   `self._attn(...)` is `self__attn_0` (the underscore in `_attn` stays), `torch.bmm(...)` is
   `torch_bmm_0`, `F.softmax(...)` is `F_softmax_0` when the module imports it as `F`. The
-  counter is per callee, in execution order.
+  counter is per callee, in the order the calls appear in the forward's source, not the
+  order they run: Falcon's attention has one `F.softmax` per branch, and on an alibi
+  checkpoint the one that runs is `F_softmax_1`, the second in the source.
 - **A binding** is an operation too, `<name>_<n>`: the n-th assignment to that name in the
   forward. `query_states_0` is the first binding of `query_states`; `attn_weights_1` is the
   second binding of `attn_weights` (after the mask). Calls and bindings share one counter

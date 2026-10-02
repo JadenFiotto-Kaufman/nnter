@@ -68,7 +68,7 @@ StandardizedTransformer(repo_id, *args, rename=None, envoys=None, tokenizer_kwar
 | `rename` | `dict[str, str \| list[str]] \| None` | Extra nnsight aliases, merged over the family's `RENAME`; a key given here wins. |
 | `envoys` | `dict \| None` | Extra `envoys=` entries, merged over the family's `ENVOYS` (and nnsight's tensor-parallel envoys on a sharded load); a key given here wins. Keys are module types or native paths, never aliases. |
 | `tokenizer_kwargs` | `dict \| None` | Attributes set on the loaded tokenizer: `{"padding_side": "left"}`, a `pad_token`. |
-| `**kwargs` | | Passed to `TransformersModel`: `dispatch=True`, `attn_implementation="eager"`, `dtype=`, `device_map=`, `revision=`, `trust_remote_code=`. `task` defaults to `"text-generation"`. |
+| `**kwargs` | | Passed to `TransformersModel`: `dispatch=True`, `attn_implementation="eager"`, `dtype=`, `device=` (one device; `device_map="cpu"` does not keep a model off the GPU), `device_map=`, `revision=`, `trust_remote_code=`. `task` defaults to `"text-generation"`. |
 
 The constructor reads the checkpoint's config first (`AutoConfig`; a multimodal config's `text_config`), looks up `config.model_type` in `nnter.families`, and raises `UnsupportedFamily` before any weights load when no family covers it. `attn_implementation` is not forced: the checkpoint's own default (`sdpa` on most) stays, and the interior attention values then report unavailable in `status()`.
 
@@ -319,7 +319,7 @@ The base of the four hosts.
 |---|---|---|
 | `lookup` | `lookup(model_type: str) -> ModuleType` | The family for `model_type`: a registered one, else `nnter.families.<model_type>`, imported on first use. Raises `UnsupportedFamily` when there is neither. |
 | `register` | `register(family: ModuleType) -> ModuleType` | Add a family (any module or object with `MODEL_TYPES`, `RENAME`, `ENVOYS`, and a function per root size it spells its own way) under its model types; consulted before the shipped modules, so it also overrides a shipped family. Returns `family`. |
-| `known` | `known() -> list[str]` | The shipped families' model types: the module names in the package (34). |
+| `known` | `known() -> list[str]` | The shipped families' model types: the module names in the package (92), alphabetical. |
 | `all_families` | `all_families() -> list[ModuleType]` | Every shipped family, imported. For tooling and tests. |
 | `REGISTRY` | `dict[str, ModuleType]` | `model_type -> family` for what `register` added. |
 | `UnsupportedFamily` | `ValueError` subclass | No module of that name and nothing registered. |

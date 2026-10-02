@@ -65,10 +65,14 @@ A key is dotted segments ending in `output`, `input` or `inputs`, walked from th
 envoy:
 
 - `"output"` is the host's own output, the same location as `.output`.
-- A leading `../` steps to the parent module, by native name, as many times as written;
-  any other segment names a child module of the current one, aliases included.
-  `"../post_attention_layernorm.output"` on an attention envoy reaches its sibling norm;
-  `"embed_tokens.output"` on the root is `token_embeddings`.
+- A leading `../` steps to the parent module, as many times as written. After it, every
+  segment is a *native* name: above the host the path is joined onto the native path as a
+  string, so an alias does not resolve there. `"../post_attention_layernorm.output"` on
+  Gemma-2's attention reaches its sibling norm (that is the native name); on GPT-2's
+  attention it names a module that does not exist and the read fails with
+  `OutOfOrderError`, while `"../ln_2.output"` works. A path that does not go up walks child
+  modules of the host, aliases included: `"embed_tokens.output"` on the root is
+  `token_embeddings`.
 - `source` drills into the current module's forward (or, after an operation, into that
   call's), instrumenting it for this run; the segment after it names an operation.
   `"source.dropout_add_0.input"` is an operation of the host's own forward,
@@ -423,9 +427,10 @@ def qk_head_dim(model: "StandardizedTransformer") -> int:
 ```
 
 DeepSeek-V3 has the same attention and imports both (`from .deepseek_v2 import head_dim,
-qk_head_dim`). The other shipped overrides are `intermediate_size` on GPT-2, GPT-J, OPT,
-MPT, BLOOM and Falcon, and `num_kv_heads` on Falcon; the full list with what each reads
-is in [../usage/root-values.md](../usage/root-values.md#sizes), and the recipe in
+qk_head_dim`), as do DeepSeek-V3.2, GLM-5, GLM-4.7-Flash and Youtu. Twenty-five shipped
+families define a size this way (`intermediate_size` on GPT-2, OPT, BLOOM, Falcon, DBRX,
+Llama 4, ...; `num_kv_heads` on Falcon, GPT-BigCode and Gemma-4); the full list with what
+each reads is in [../reference/families.md](../reference/families.md#logits-scales-and-sizes), and the recipe in
 [adding-a-family.md](adding-a-family.md#sizes). Keep the docstring in the same voice as
 the root's: what the width is, and which config key says so.
 

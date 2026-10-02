@@ -117,12 +117,20 @@ Column `j` of the grid is the prediction *after* token `j`, so the label for col
 ### Probability of a target token across layers
 
 ```python
-target = model.tokenizer.encode(" Paris")[0]
+ids = model.tokenizer(" Paris", add_special_tokens=False).input_ids
+assert len(ids) == 1, model.tokenizer.convert_ids_to_tokens(ids)   # one token, or target is not the word
+target = ids[0]
 
 with model.trace(prompt):
     probs = torch.stack([model.project_on_vocab(layer.layer_output)[0, -1].softmax(-1)[target]
                          for layer in model.layers]).save()   # [layers]
 ```
+
+`add_special_tokens=False` keeps the BOS token out of the target (`tokenizer.encode(" Paris")[0]`
+is the BOS id on Llama and Gemma, and the curve is then flat at zero). The assertion
+catches a word that is more than one token: Mistral's sentencepiece tokenizer gives
+`['▁', '▁Paris']` and Granite's `['ĠPar', 'is']`. Then try the word without the leading
+space (`"Paris"` is `['▁Paris']` on Mistral), or pick a target word that is one token.
 
 Argmax hides a close race; the probability curve shows a peak that may come before
 the final layer.

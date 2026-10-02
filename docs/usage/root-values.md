@@ -66,9 +66,13 @@ with model.trace(prompt) as tracer:
 ## `token_embeddings`
 
 The embedding module's output, `[batch, seq, hidden]`: `model.embed_tokens.output` under
-its standard name, before anything the family applies afterwards (GPT-2's positional
-`wpe`, BLOOM's `word_embeddings_layernorm`, Gemma's scaling). Assign to replace what enters
-the first block:
+its standard name. It includes whatever the embedding module does itself (Gemma's
+`sqrt(hidden_size)` scale is inside every Gemma family's `...TextScaledWordEmbedding`, XGLM's inside its
+scaled embedding) and nothing the model applies afterwards: GPT-2's positional `wpe` is
+added after it, BLOOM's `word_embeddings_layernorm` norms it, and Granite, HyperCLOVA X and
+Falcon-H1 multiply it by `embedding_multiplier`. So it is what enters the first block only
+where the model adds nothing; `layers[0].input` is that tensor on every family. Assign to
+replace the module's output:
 
 ```python
 with model.trace(prompt):
@@ -85,15 +89,23 @@ no inverse, and assigning raises
 AttributeError: next_token_probs is derived from the logits and cannot be assigned; assign model.logits instead
 ```
 
-Position `-1` is the last token of every row only under left padding. With the default
-right padding a shorter prompt's last position is a pad token:
+Position `-1` is the last token of every row only under left padding, which is what a
+causal model gets by default: nnsight sets the tokenizer's `padding_side` to `"left"` at
+load, and its pad token to the EOS where it has none. A tokenizer set to right padding
+(`tokenizer_kwargs={"padding_side": "right"}`) puts a pad token at a shorter prompt's
+last position.
 
 ```python
-model = StandardizedTransformer("openai-community/gpt2", dispatch=True,
-                                tokenizer_kwargs={"padding_side": "left", "pad_token": "<|endoftext|>"})
+model = StandardizedTransformer("openai-community/gpt2", dispatch=True)
+model.tokenizer.padding_side, model.tokenizer.pad_token   # ('left', '<|endoftext|>')
 with model.trace(["Hi", "The Eiffel Tower is in"]):
     probs = model.next_token_probs.save()         # row 0 is the distribution after "Hi"
 ```
+
+It is the softmax in the model's dtype: on a bf16 checkpoint a bf16 tensor (on
+Llama-3.2-1B, 1e-4 from a float32 softmax of the same logits), and on a float16 one thousands of
+entries underflow to exact zeros (17,583 of 50,304 on Pythia-70m). For a precise distribution or a KL, use
+`model.logits[:, -1].float().softmax(-1)` or `.log_softmax(-1)`.
 
 `nnter.nnsight_utils.compute_next_token_probs(model, prompts)` is this read over a list of
 prompts.
@@ -120,7 +132,8 @@ torch.allclose(logits, other_logits)              # True: the second trace ran o
 assigned; assign input_ids`). A `torch.Size` bound inside the block does not survive the
 trace; save `torch.tensor(model.input_size)` if you need it outside.
 
-The three print with the model:
+The six print with the model. The `token_embeddings` description says "entering the first
+block", which holds only where the model adds nothing after the embedding module (above):
 
 ```
   (logits): The model's final logits, [batch, seq, vocab], softcapping applied
@@ -166,7 +179,8 @@ model.num_kv_heads                                         # 2: the config's
 | `qk_head_dim` | `head_dim` |
 | `intermediate_size` | `config.intermediate_size` |
 
-The families whose configs say it otherwise:
+Some of the twenty-five families whose configs say it otherwise (all of them, with what each
+reads, are in [families.md](../reference/families.md#logits-scales-and-sizes)):
 
 | family | defines | what it reads |
 | --- | --- | --- |
@@ -214,7 +228,11 @@ same way: [adding-a-family](../extending/adding-a-family.md#sizes).
 - **`logits` is not `lm_head.output` on Gemma-2, Gemma-4, Cohere or Granite.** Use `logits` for the
   model's prediction and `lm_head.output` only when you want the raw projection.
 - **`next_token_probs` and `input_size` are read-only.** Assign `logits` or `input_ids`.
-- **`next_token_probs` assumes the last position is the last token.** Left-pad a batch.
+- **`next_token_probs` assumes the last position is the last token.** nnsight left-pads a
+  causal model's batch by default; keep it that way.
+- **`token_embeddings` is the embedding module's output**, not always what enters block 0
+  (GPT-2's `wpe`, Granite's `embedding_multiplier` come after it); read `layers[0].input`
+  for that.
 - **Forward order.** `input_ids` and `token_embeddings` come before any block's value in
   the same trace; `logits` and `next_token_probs` after them all.
 - **Assigning `input_ids` does not resize the mask.** Assign `attention_mask` to match when

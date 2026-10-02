@@ -101,7 +101,7 @@ out-of-order read is an `OutOfOrderError` from the server's run.
   runs is the deployment's choice. On a deployment running `sdpa` the read
   fails server-side as above.
 - **The DeltaNet per-token state is a process-wide switch.**
-  `route_delta_rule` rebinds the kernel in *your* process; the server's is not
+  `route_kernels` rebinds the kernel in *your* process; the server's is not
   routed by a request. Treat `state`, `states`, `state_after` and
   `set_state_after` as unavailable remotely; the call-level values
   (`state_output`, `decays`, `betas`, ...) are ordinary source-located values

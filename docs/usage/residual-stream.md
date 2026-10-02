@@ -118,7 +118,7 @@ Three shapes of block put the contribution somewhere other than the module's own
 and the family's `Attention` or `Mlp` subclass points the value at the right place, so the
 name means the same thing everywhere. Contrast each with the raw `.output`:
 
-**Sandwich norms (Gemma-2, Gemma-3, Gemma-4, OLMo-2, OLMo-3).** The block adds
+**Sandwich norms (Gemma-2, Gemma-3, Gemma-4, OLMo-2, OLMo-3, EXAONE-4, FlexOlmo).** The block adds
 `post_attention_layernorm(attn(...))` and `post_feedforward_layernorm(mlp(...))`. What
 reaches the residual stream is the post-norm's output, so `attention_output` is
 `post_attention_layernorm.output` and `mlp_output` is `post_feedforward_layernorm.output`
@@ -194,6 +194,19 @@ with model.trace(prompt):
 
 torch.allclose(attn, raw[0] + raw[2])                     # True
 ```
+
+**Granite and its relatives: scaled copies.** Granite, GraniteMoE(-Shared, -Hybrid),
+Granite-SWA, GraniteMoE-SWA and HyperCLOVA X add each sublayer's output times
+`residual_multiplier` (0.22 on granite-3.0-1b-a400m), so `attention_output` and
+`mlp_output` are that product: a computed copy, which an assignment or an in-place edit
+reaches the model through by dividing the whole copy back into the module's output. The
+division rounds, so a write at one position changes the others by rounding: about 1e-7
+relative in float32, one or two units in the last place in bf16. That can be a visible
+fraction of a small edit's effect: on granite-3.0-1b-a400m in bf16, a small edit at one
+position moved the logits at earlier positions, which the edit cannot reach causally,
+by 0.17, against 0.19 at the edited position. Load in float32 for fine-grained edits.
+ZAYA's contributions are computed copies the same way. `self_attn.output` and
+`mlp.output` stay the unscaled module outputs ([families](../reference/families.md#scaled-residual-adds)).
 
 **Gemma-4: a third add, and a scaled sum.** Gemma-4's block is Gemma-3's sandwich, then on
 the checkpoints with per-layer embeddings (E2B, E4B) a third add, then the whole sum times
@@ -295,8 +308,10 @@ torch.testing.assert_close(mean, out.mean(2), rtol=1e-5, atol=1e-5)
 On the pinned tiny checkpoint (`yujiepan/deepseek-v4-bf16-tiny-random`, `dtype=torch.float32`)
 the stream form is exact (difference `0.0`) on every block. The attention's output reaches
 `layer_output` mixed by `mlp_comb` as well, so what a sublayer "adds" is not one tensor in
-stream space. The plain `input + attention_output + mlp_output` is not the output; code
-written for it broadcasts without an error and is wrong.
+stream space. The plain `input + attention_output + mlp_output` is not the output: it
+adds `[batch, seq, hidden]` to `[batch, seq, streams, hidden]`, which raises a shape error
+at most prompt lengths and broadcasts silently into a wrong tensor when the prompt is one
+token or exactly `hc_mult` tokens long.
 
 ## Gotchas
 
@@ -312,8 +327,10 @@ written for it broadcasts without an error and is wrong.
   bare tensor where a tuple is expected.
 - **`mlp_output` does not exist on OPT or XGLM** (no MLP module; `layers[i].fc2.output` is what the block adds); `status()` says so
   ([availability](availability.md)).
-- **The identity is exact in float32 and within a few ulps in bf16** when the block sums in
-  another order (Falcon). Compare with a tolerance in the block's dtype.
+- **The identity is exact in float32 on a sequential block** (GPT-2: difference 0.0). A
+  parallel block sums `x + attn + mlp` in another order, so there it holds to rounding even
+  in float32 (within 2e-5 absolute on Pythia-70m and CodeGen-350M), and within a few ulps
+  in bf16 (Falcon). Compare with a tolerance in the block's dtype.
 - **`layer_output` is rank 4 on DeepSeek-V4.** `resid[:, -1]` is `[batch, streams, hidden]`
   there, and anything written for a `[batch, seq, hidden]` stream (a probe, a hand-written
   lens) runs and answers per stream. Check `out.dim()` or the family's layout where a recipe
