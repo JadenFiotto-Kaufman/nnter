@@ -395,6 +395,26 @@ envoy classes by reference, so the server needs nnter installed at the same
 version. Do not ship nnter by value (`nnsight.register`): an installed package
 is pickled by reference anyway, and an `eproperty` cannot be pickled by value.
 
+## The vLLM engine
+
+`StandardizedVLLM` is nnsight's `VLLM` under the same vocabulary, values and layouts, for the
+25 families under `nnter/families/vllm/` (Llama, Mistral, Qwen, Gemma, Phi, the MoEs, DeepSeek, GPT-2/J/NeoX, BLOOM, MPT, Falcon, ...):
+
+```python
+from nnter import StandardizedVLLM
+
+model = StandardizedVLLM("HuggingFaceTB/SmolLM2-135M-Instruct", dispatch=True)
+with model.trace("The Eiffel Tower is in the city of", temperature=0.0, max_tokens=1):
+    stream = model.layers[12].layer_output.save()     # [1, tokens, hidden]
+    logits = model.logits.save()                      # [1, 1, vocab]
+```
+
+A request is one sequence, so the batch axis is 1; values are private copies; the engine's
+defaults and sampling arguments are vLLM's; the pattern and scores are inside its attention
+kernel, so they are recomputed from the queries and keys: read-only, and on the prefill only. `docs/usage/vllm.md` has the differences and how to add a family.
+Its suite, `tests/vllm_families/`, holds every value against the transformers engine's and
+needs vLLM and a GPU (`tests/vllm_families/run.sh`).
+
 ## transformers version
 
 Developed against transformers 5.17. The operation names inside a forward are
